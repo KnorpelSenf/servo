@@ -12,6 +12,7 @@ pub mod egl {
     use std::ffi::CString;
     use std::os::raw::c_void;
 
+    use log::info;
     use servo::gl::GlesFns;
 
     pub type EGLNativeWindowType = *const libc::c_void;
@@ -73,6 +74,7 @@ pub mod gl {
         CFBundleGetBundleWithIdentifier, CFBundleGetFunctionPointerForName,
     };
     use core_foundation::string::CFString;
+    use log::info;
     use servo::gl::GlFns;
 
     pub fn init() -> Result<crate::gl_glue::ServoGl, &'static str> {
@@ -104,6 +106,7 @@ pub mod gl {
     use std::os::raw::c_void;
 
     use libloading::{Library, Symbol};
+    use log::info;
     use servo::gl::GlFns;
 
     pub fn init() -> Result<crate::gl_glue::ServoGl, &'static str> {

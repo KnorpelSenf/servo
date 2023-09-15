@@ -13,6 +13,7 @@ use std::rc::Rc;
 
 use getopts::Options;
 use ipc_channel::ipc::IpcSender;
+use log::{debug, info, warn};
 use servo::compositing::windowing::{
     AnimationState, EmbedderCoordinates, EmbedderEvent, EmbedderMethods, MouseWindowEvent,
     WindowMethods,
