@@ -791,6 +791,7 @@ impl ScriptThreadFactory for ScriptThread {
     ) -> (Sender<message::Msg>, Receiver<message::Msg>) {
         let (script_chan, script_port) = unbounded();
 
+        // denate create layout channel
         let (sender, receiver) = unbounded();
         let layout_chan = sender.clone();
         thread::Builder::new()
@@ -2506,6 +2507,7 @@ impl ScriptThread {
 
         let layout_is_busy = Arc::new(AtomicBool::new(false));
 
+        // denate
         let msg = message::Msg::CreateLayoutThread(LayoutThreadInit {
             id: new_pipeline_id,
             url: load_data.url.clone(),

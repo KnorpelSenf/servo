@@ -571,7 +571,7 @@ impl UnprivilegedPipelineContent {
             self.load_data.clone(),
             self.user_agent,
         );
-
+        // denate create layout thread
         LTF::create(
             self.id,
             self.top_level_browsing_context_id,

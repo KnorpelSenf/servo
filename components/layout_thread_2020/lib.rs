@@ -1276,6 +1276,7 @@ impl LayoutThread {
         self.paint_time_metrics
             .maybe_observe_paint_time(self, epoch, is_contentful);
 
+        // denate send
         self.webrender_api
             .send_display_list(display_list.compositor_info, display_list.wr.finalize().1);
 
