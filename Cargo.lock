@@ -1291,8 +1291,31 @@ dependencies = [
 name = "denate"
 version = "0.1.0"
 dependencies = [
+ "background_hang_monitor",
+ "compositing_traits",
+ "crossbeam-channel",
  "deno_bindgen",
+ "embedder_traits",
+ "euclid",
+ "gfx",
+ "gfx_traits",
+ "ipc-channel",
+ "layout_thread_2020",
+ "layout_traits",
+ "log",
+ "metrics",
+ "msg",
+ "net",
+ "net_traits",
+ "profile",
+ "script_layout_interface",
+ "script_traits",
  "serde",
+ "servo_config",
+ "servo_url",
+ "url",
+ "webrender_api",
+ "winit",
 ]
 
 [[package]]

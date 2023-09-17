@@ -7,5 +7,28 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
+background_hang_monitor = { path = "../components/background_hang_monitor" }
+crossbeam-channel = { workspace = true }
+compositing_traits = { path = "../components/compositing_traits" }
 deno_bindgen = "0.8.1"
+embedder_traits = { path = "../components/embedder_traits" }
+euclid = { workspace = true }
+gfx = { path = "../components/gfx" }
+gfx_traits = { path = "../components/gfx_traits" }
+ipc-channel = { workspace = true }
+layout_thread_2020 = { path = "../components/layout_thread_2020" }
+layout_traits = { path = "../components/layout_traits" }
+log = { workspace = true }
+metrics = { path = "../components/metrics" }
+msg = { path = "../components/msg" }
+net = { path = "../components/net" }
+net_traits = { path = "../components/net_traits" }
+profile = { path = "../components/profile" }
+script_traits = { path = "../components/script_traits" }
+script_layout_interface = { path = "../components/script_layout_interface" }
 serde = { version = "1", features = ["derive"] }
+servo_config = { path = "../components/config" }
+servo_url = { path = "../components/url" }
+url = { workspace = true }
+webrender_api = { workspace = true }
+winit = "0.28.6"
