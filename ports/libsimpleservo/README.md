@@ -8,4 +8,11 @@ Run the following command to generate `libsimpleservo`
 ```
 ./mach build --release --libsimpleservo
 ```
+
+The same can be achieved without mach:
+```sh
+cd servo/ports/libsimpleservo/capi
+CARGO_TARGET_DIR=./target cargo build --release
+```
+
 this will generate a shared library (`libsimpleservo.so` on linux) as well as a header file in `target/release` that you can then link to your application.
