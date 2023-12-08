@@ -9,9 +9,11 @@ use embedder_traits::Cursor;
 use euclid::{Point2D, SideOffsets2D, Size2D};
 use fnv::FnvHashMap;
 use gfx::text::glyph::GlyphStore;
+use gfx_traits::WebRenderEpochToU16;
 use msg::constellation_msg::BrowsingContextId;
 use net_traits::image_cache::UsePlaceholder;
 use script_traits::compositor::{CompositorDisplayListInfo, ScrollTreeNodeId};
+use style::color::{AbsoluteColor, ColorSpace};
 use style::computed_values::text_decoration_style::T as ComputedTextDecorationStyle;
 use style::dom::OpaqueNode;
 use style::properties::longhands::visibility::computed_value::T as Visibility;
@@ -180,7 +182,10 @@ impl<'a> DisplayListBuilder<'a> {
             Some(cursor(inherited_ui.cursor.keyword, auto_cursor)),
             self.current_scroll_node_id,
         );
-        Some((hit_test_index as u64, 0u16))
+        Some((
+            hit_test_index as u64,
+            self.display_list.compositor_info.epoch.as_u16(),
+        ))
     }
 }
 
@@ -276,7 +281,7 @@ impl Fragment {
             .to_physical(fragment.parent_style.writing_mode, containing_block)
             .translate(containing_block.origin.to_vector());
         let mut baseline_origin = rect.origin.clone();
-        baseline_origin.y += fragment.font_metrics.ascent;
+        baseline_origin.y += Length::from(fragment.font_metrics.ascent);
         let glyphs = glyphs(&fragment.glyphs, baseline_origin);
         if glyphs.is_empty() {
             return;
@@ -301,10 +306,6 @@ impl Fragment {
         let color = fragment.parent_style.clone_color();
         let font_metrics = &fragment.font_metrics;
         let dppx = builder.context.style_context.device_pixel_ratio().get();
-        let round_to_nearest_device_pixel = |value: Length| -> Length {
-            // Round to the nearest integer device pixel, ensuring at least one device pixel.
-            Length::new((value.px() * dppx).round().max(1.0) / dppx)
-        };
 
         // Underline.
         if fragment
@@ -312,9 +313,10 @@ impl Fragment {
             .contains(TextDecorationLine::UNDERLINE)
         {
             let mut rect = rect;
-            rect.origin.y = rect.origin.y + font_metrics.ascent - font_metrics.underline_offset;
-            rect.size.height = round_to_nearest_device_pixel(font_metrics.underline_size);
-            self.build_display_list_for_text_decoration(fragment, builder, &rect, color);
+            rect.origin.y =
+                rect.origin.y + Length::from(font_metrics.ascent - font_metrics.underline_offset);
+            rect.size.height = Length::new(font_metrics.underline_size.to_nearest_pixel(dppx));
+            self.build_display_list_for_text_decoration(fragment, builder, &rect, &color);
         }
 
         // Overline.
@@ -323,8 +325,8 @@ impl Fragment {
             .contains(TextDecorationLine::OVERLINE)
         {
             let mut rect = rect;
-            rect.size.height = round_to_nearest_device_pixel(font_metrics.underline_size);
-            self.build_display_list_for_text_decoration(fragment, builder, &rect, color);
+            rect.size.height = Length::new(font_metrics.underline_size.to_nearest_pixel(dppx));
+            self.build_display_list_for_text_decoration(fragment, builder, &rect, &color);
         }
 
         // Text.
@@ -344,10 +346,11 @@ impl Fragment {
             .contains(TextDecorationLine::LINE_THROUGH)
         {
             let mut rect = rect;
-            rect.origin.y = rect.origin.y + font_metrics.ascent - font_metrics.strikeout_offset;
+            rect.origin.y =
+                rect.origin.y + Length::from(font_metrics.ascent - font_metrics.strikeout_offset);
             // XXX(ferjm) This does not work on MacOS #942
-            rect.size.height = round_to_nearest_device_pixel(font_metrics.strikeout_size);
-            self.build_display_list_for_text_decoration(fragment, builder, &rect, color);
+            rect.size.height = Length::new(font_metrics.strikeout_size.to_nearest_pixel(dppx));
+            self.build_display_list_for_text_decoration(fragment, builder, &rect, &color);
         }
     }
 
@@ -356,14 +359,14 @@ impl Fragment {
         fragment: &TextFragment,
         builder: &mut DisplayListBuilder,
         rect: &PhysicalRect<Length>,
-        color: cssparser::RGBA,
+        color: &AbsoluteColor,
     ) {
         let rect = rect.to_webrender();
         let wavy_line_thickness = (0.33 * rect.size.height).ceil();
         let text_decoration_color = fragment
             .parent_style
             .clone_text_decoration_color()
-            .into_rgba(color);
+            .resolve_to_absolute(color);
         let text_decoration_style = fragment.parent_style.clone_text_decoration_style();
         if text_decoration_style == ComputedTextDecorationStyle::MozNone {
             return;
@@ -549,7 +552,7 @@ impl<'a> BuilderForBoxFragment<'a> {
         let style = &self.fragment.style;
         let b = style.get_background();
         let background_color = style.resolve_color(b.background_color.clone());
-        if background_color.alpha > 0 {
+        if background_color.alpha > 0.0 {
             // https://drafts.csswg.org/css-backgrounds/#background-color
             // “The background color is clipped according to the background-clip
             //  value associated with the bottom-most background image layer.”
@@ -681,10 +684,10 @@ impl<'a> BuilderForBoxFragment<'a> {
     fn build_border(&mut self, builder: &mut DisplayListBuilder) {
         let border = self.fragment.style.get_border();
         let widths = SideOffsets2D::new(
-            border.border_top_width.px(),
-            border.border_right_width.px(),
-            border.border_bottom_width.px(),
-            border.border_left_width.px(),
+            border.border_top_width.to_f32_px(),
+            border.border_right_width.to_f32_px(),
+            border.border_bottom_width.to_f32_px(),
+            border.border_left_width.to_f32_px(),
         );
         if widths == SideOffsets2D::zero() {
             return;
@@ -710,7 +713,7 @@ impl<'a> BuilderForBoxFragment<'a> {
 
     fn build_outline(&mut self, builder: &mut DisplayListBuilder) {
         let outline = self.fragment.style.get_outline();
-        let width = outline.outline_width.px();
+        let width = outline.outline_width.to_f32_px();
         if width == 0.0 {
             return;
         }
@@ -744,12 +747,13 @@ impl<'a> BuilderForBoxFragment<'a> {
     }
 }
 
-fn rgba(rgba: cssparser::RGBA) -> wr::ColorF {
+fn rgba(color: AbsoluteColor) -> wr::ColorF {
+    let rgba = color.to_color_space(ColorSpace::Srgb);
     wr::ColorF::new(
-        rgba.red_f32(),
-        rgba.green_f32(),
-        rgba.blue_f32(),
-        rgba.alpha_f32(),
+        rgba.components.0.clamp(0.0, 1.0),
+        rgba.components.1.clamp(0.0, 1.0),
+        rgba.components.2.clamp(0.0, 1.0),
+        rgba.alpha,
     )
 }
 

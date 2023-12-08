@@ -5,9 +5,10 @@
 //! Resolved values. These are almost always computed values, but in some cases
 //! there are used values.
 
+#[cfg(feature = "gecko")]
+use crate::media_queries::Device;
 use crate::properties::ComputedValues;
 use crate::ArcSlice;
-use cssparser;
 use servo_arc::Arc;
 use smallvec::SmallVec;
 
@@ -16,12 +17,24 @@ mod counters;
 
 use crate::values::computed;
 
+/// Element-specific information needed to resolve property values.
+#[cfg(feature = "gecko")]
+pub struct ResolvedElementInfo<'a> {
+    /// Element we're resolving line-height against.
+    pub element: crate::gecko::wrapper::GeckoElement<'a>,
+}
+
 /// Information needed to resolve a given value.
 pub struct Context<'a> {
     /// The style we're resolving for. This is useful to resolve currentColor.
     pub style: &'a ComputedValues,
-    // TODO(emilio): Add layout box information, and maybe property-specific
-    // information?
+    /// The device / document we're resolving style for. Useful to do font metrics stuff needed for
+    /// line-height.
+    #[cfg(feature = "gecko")]
+    pub device: &'a Device,
+    /// The element-specific information to resolve the value.
+    #[cfg(feature = "gecko")]
+    pub element_info: ResolvedElementInfo<'a>,
 }
 
 /// A trait to represent the conversion between resolved and resolved values.
@@ -63,16 +76,17 @@ macro_rules! trivial_to_resolved_value {
 trivial_to_resolved_value!(());
 trivial_to_resolved_value!(bool);
 trivial_to_resolved_value!(f32);
-trivial_to_resolved_value!(i32);
 trivial_to_resolved_value!(u8);
 trivial_to_resolved_value!(i8);
 trivial_to_resolved_value!(u16);
+trivial_to_resolved_value!(i16);
 trivial_to_resolved_value!(u32);
+trivial_to_resolved_value!(i32);
 trivial_to_resolved_value!(usize);
 trivial_to_resolved_value!(String);
 trivial_to_resolved_value!(Box<str>);
 trivial_to_resolved_value!(crate::OwnedStr);
-trivial_to_resolved_value!(cssparser::RGBA);
+trivial_to_resolved_value!(crate::color::AbsoluteColor);
 trivial_to_resolved_value!(crate::Atom);
 trivial_to_resolved_value!(crate::values::AtomIdent);
 trivial_to_resolved_value!(app_units::Au);
@@ -85,6 +99,7 @@ trivial_to_resolved_value!(crate::Namespace);
 trivial_to_resolved_value!(crate::Prefix);
 trivial_to_resolved_value!(computed::LengthPercentage);
 trivial_to_resolved_value!(style_traits::values::specified::AllowedNumericType);
+trivial_to_resolved_value!(computed::TimingFunction);
 
 impl<A, B> ToResolvedValue for (A, B)
 where

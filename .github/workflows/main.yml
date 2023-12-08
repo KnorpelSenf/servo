@@ -2,10 +2,10 @@ name: Main
 
 on:
   push:
-    # Run the entire pipeline for 'master' even though the merge queue already runs checks
+    # Run the entire pipeline for 'main' even though the merge queue already runs checks
     # for every change. This just offers an extra layer of testing and covers the case of
     # random force pushes.
-    branches: ["master", "try"]
+    branches: ["main", "try"]
   pull_request:
     types: ['opened', 'synchronize']
     branches: ["**"]
@@ -13,21 +13,15 @@ on:
     types: [checks_requested]
   workflow_call:
     inputs:
-      platform:
+      configuration:
         required: true
         type: string
-      layout:
-        required: true
-        type: string
-      unit-tests:
-        required: true
-        type: boolean
   workflow_dispatch:
     inputs:
       platform:
         required: false
         type: choice
-        options: ["none", "linux", "windows", "macos", "all", "sync"]
+        options: ["linux", "windows", "macos", "all"]
       layout:
         required: false
         type: choice
@@ -48,52 +42,74 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
+            // If this is a workflow call with a configuration object,
+            // then just return it immediately.
+            let configuration = ${{ inputs.configuration || '""' }};
+            if (configuration != "") {
+              console.log("Using configuration: " + JSON.stringify(configuration));
+              return configuration;
+            }
+
             // We need to pick defaults if the inputs are not provided. Unprovided inputs
             // are empty strings in this template.
             let platform = "${{ inputs.platform }}" || "linux";
             let layout = "${{ inputs.layout }}" || "none";
             let unit_tests = Boolean(${{ inputs.unit-tests }})
 
-            // Merge queue runs and pushes to master should always trigger a full build and test.
+            // Merge queue runs and pushes to `main` should always trigger a full build and test.
             if (["push", "merge_group"].includes(context.eventName)) {
               platform = "all";
               layout = "all";
               unit_tests = true;
             }
 
+            let platforms = [];
+            if (platform == "all") {
+              platforms = [ "linux", "windows", "macos" ];
+            } else {
+              platforms = [ platform ];
+            }
+
             let returnValue =  {
-              platform,
+              platforms,
               layout,
               unit_tests,
             };
+
             console.log("Using configuration: " + JSON.stringify(returnValue));
             return returnValue;
 
   build-win:
     name: Windows
     needs: ["decision"]
-    if: ${{ contains(fromJson('["windows", "all"]'), fromJson(needs.decision.outputs.configuration).platform) }}
+    if: ${{ contains(fromJson(needs.decision.outputs.configuration).platforms, 'windows') }}
     uses: ./.github/workflows/windows.yml
     with:
+      profile: "release"
       unit-tests: ${{ fromJson(needs.decision.outputs.configuration).unit_tests }}
+    secrets: inherit
 
   build-mac:
     name: Mac
     needs: ["decision"]
-    if: ${{ contains(fromJson('["macos", "all"]'), fromJson(needs.decision.outputs.configuration).platform) }}
+    if: ${{ contains(fromJson(needs.decision.outputs.configuration).platforms, 'macos') }}
     uses: ./.github/workflows/mac.yml
     with:
+      profile: "release"
       unit-tests: ${{ fromJson(needs.decision.outputs.configuration).unit_tests }}
+    secrets: inherit
 
   build-linux:
     name: Linux
     needs: ["decision"]
-    if: ${{ contains(fromJson('["linux", "all"]'), fromJson(needs.decision.outputs.configuration).platform) }}
+    if: ${{ contains(fromJson(needs.decision.outputs.configuration).platforms, 'linux') }}
     uses: ./.github/workflows/linux.yml
     with:
+      profile: "release"
       wpt: 'test'
       layout: ${{ fromJson(needs.decision.outputs.configuration).layout }}
       unit-tests: ${{ fromJson(needs.decision.outputs.configuration).unit_tests }}
+    secrets: inherit
 
   build-result:
     name: Result
@@ -108,7 +124,7 @@ jobs:
 
     steps:
       - name: Mark skipped jobs as successful
-        if: ${{ fromJson(needs.decision.outputs.configuration).platform == 'none' }}
+        if: ${{ fromJson(needs.decision.outputs.configuration).platforms[0] != null }}
         run: exit 0
       - name: Mark the job as successful
         if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}

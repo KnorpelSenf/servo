@@ -6,7 +6,7 @@ use dom_struct::dom_struct;
 use js::rust::HandleObject;
 use servo_atoms::Atom;
 
-use crate::dom::bindings::codegen::Bindings::EventBinding::EventBinding::EventMethods;
+use crate::dom::bindings::codegen::Bindings::EventBinding::Event_Binding::EventMethods;
 use crate::dom::bindings::codegen::Bindings::XRInputSourceEventBinding::{
     self, XRInputSourceEventMethods,
 };
@@ -29,7 +29,7 @@ pub struct XRInputSourceEvent {
 }
 
 impl XRInputSourceEvent {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn new_inherited(frame: &XRFrame, source: &XRInputSource) -> XRInputSourceEvent {
         XRInputSourceEvent {
             event: Event::new_inherited(),

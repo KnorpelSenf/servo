@@ -25,15 +25,16 @@ use style::attr::AttrValue;
 use style::context::SharedStyleContext;
 use style::data::ElementData;
 use style::dom::{DomChildren, LayoutIterator, TDocument, TElement, TNode, TShadowRoot};
-use style::element_state::*;
 use style::properties::PropertyDeclarationBlock;
 use style::selector_parser::{
     extended_filtering, AttrValue as SelectorAttrValue, Lang, NonTSPseudoClass, PseudoElement,
     SelectorImpl,
 };
 use style::shared_lock::Locked as StyleLocked;
+use style::values::computed::Display;
 use style::values::{AtomIdent, AtomString};
 use style::CaseSensitivityExt;
+use style_traits::dom::ElementState;
 
 use crate::dom::attr::AttrHelpersForLayout;
 use crate::dom::bindings::inheritance::{
@@ -243,11 +244,6 @@ impl<'dom, LayoutDataType: LayoutDataTrait> style::dom::TElement
     }
 
     #[inline]
-    fn has_attr(&self, namespace: &style::Namespace, attr: &style::LocalName) -> bool {
-        self.get_attr(&**namespace, &**attr).is_some()
-    }
-
-    #[inline]
     fn id(&self) -> Option<&Atom> {
         unsafe { (*self.element.id_attribute()).as_ref() }
     }
@@ -452,7 +448,10 @@ impl<'dom, LayoutDataType: LayoutDataTrait> style::dom::TElement
         self.element.namespace()
     }
 
-    fn primary_box_size(&self) -> euclid::default::Size2D<app_units::Au> {
+    fn query_container_size(
+        &self,
+        _display: &Display,
+    ) -> euclid::default::Size2D<Option<app_units::Au>> {
         todo!();
     }
 }
@@ -504,6 +503,12 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
             node = sibling;
         }
         None
+    }
+
+    fn first_element_child(&self) -> Option<Self> {
+        self.as_node()
+            .dom_children()
+            .find_map(|child| child.as_element())
     }
 
     fn attr_matches(
@@ -662,8 +667,20 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
         self.element.is_html_element() && self.as_node().owner_doc().is_html_document()
     }
 
-    fn set_selector_flags(&self, flags: ElementSelectorFlags) {
-        self.element.insert_selector_flags(flags);
+    fn apply_selector_flags(&self, flags: ElementSelectorFlags) {
+        // Handle flags that apply to the element.
+        let self_flags = flags.for_self();
+        if !self_flags.is_empty() {
+            self.element.insert_selector_flags(flags);
+        }
+
+        // Handle flags that apply to the parent.
+        let parent_flags = flags.for_parent();
+        if !parent_flags.is_empty() {
+            if let Some(p) = self.as_node().parent_element() {
+                p.element.insert_selector_flags(flags);
+            }
+        }
     }
 }
 
@@ -801,6 +818,12 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
         None
     }
 
+    // Skips non-element nodes
+    fn first_element_child(&self) -> Option<Self> {
+        warn!("ServoThreadSafeLayoutElement::first_element_child called");
+        None
+    }
+
     fn is_html_slot_element(&self) -> bool {
         self.element.is_html_slot_element()
     }
@@ -899,8 +922,20 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
         false
     }
 
-    fn set_selector_flags(&self, flags: ElementSelectorFlags) {
-        self.element.element.insert_selector_flags(flags);
+    fn apply_selector_flags(&self, flags: ElementSelectorFlags) {
+        // Handle flags that apply to the element.
+        let self_flags = flags.for_self();
+        if !self_flags.is_empty() {
+            self.element.element.insert_selector_flags(flags);
+        }
+
+        // Handle flags that apply to the parent.
+        let parent_flags = flags.for_parent();
+        if !parent_flags.is_empty() {
+            if let Some(p) = self.element.parent_element() {
+                p.element.insert_selector_flags(flags);
+            }
+        }
     }
 }
 

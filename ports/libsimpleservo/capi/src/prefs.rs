@@ -47,6 +47,7 @@ impl LocalCPrefValue {
             PrefValue::Str(v) => LocalCPrefValue::Str(CString::new(v.as_bytes()).unwrap()),
             PrefValue::Bool(v) => LocalCPrefValue::Bool(*v),
             PrefValue::Missing => LocalCPrefValue::Missing,
+            PrefValue::Array(_) => LocalCPrefValue::Missing,
         }
     }
 }

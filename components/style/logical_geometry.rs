@@ -570,6 +570,22 @@ impl<T: Add<T, Output = T>> Add for LogicalSize<T> {
     }
 }
 
+// TODO(servo#30577) remove this once underlying bugs are fixed
+impl<T: Add<T, Output = T>> LogicalSize<T> {
+    #[inline]
+    pub fn add_or_warn(self, other: LogicalSize<T>) -> LogicalSize<T> {
+        #[cfg(debug_assertions)]
+        if !(self.debug_writing_mode.mode == other.debug_writing_mode.mode) {
+            log::warn!("debug assertion failed! self.debug_writing_mode.mode == other.debug_writing_mode.mode");
+        }
+        LogicalSize {
+            debug_writing_mode: self.debug_writing_mode,
+            inline: self.inline + other.inline,
+            block: self.block + other.block,
+        }
+    }
+}
+
 impl<T: Sub<T, Output = T>> Sub for LogicalSize<T> {
     type Output = LogicalSize<T>;
 
@@ -730,6 +746,38 @@ impl<T: Copy + Sub<T, Output = T>> LogicalPoint<T> {
     #[inline]
     pub fn to_physical(&self, mode: WritingMode, container_size: Size2D<T>) -> Point2D<T> {
         self.debug_writing_mode.check(mode);
+        if mode.is_vertical() {
+            Point2D::new(
+                if mode.is_vertical_lr() {
+                    self.b
+                } else {
+                    container_size.width - self.b
+                },
+                if mode.is_inline_tb() {
+                    self.i
+                } else {
+                    container_size.height - self.i
+                },
+            )
+        } else {
+            Point2D::new(
+                if mode.is_bidi_ltr() {
+                    self.i
+                } else {
+                    container_size.width - self.i
+                },
+                self.b,
+            )
+        }
+    }
+
+    // TODO(servo#30577) remove this once underlying bugs are fixed
+    #[inline]
+    pub fn to_physical_or_warn(&self, mode: WritingMode, container_size: Size2D<T>) -> Point2D<T> {
+        #[cfg(debug_assertions)]
+        if !(self.debug_writing_mode.mode == mode) {
+            log::warn!("debug assertion failed! self.debug_writing_mode.mode == mode");
+        }
         if mode.is_vertical() {
             Point2D::new(
                 if mode.is_vertical_lr() {

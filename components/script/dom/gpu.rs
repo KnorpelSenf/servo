@@ -12,8 +12,8 @@ use script_traits::ScriptMsg;
 use webgpu::wgt::PowerPreference;
 use webgpu::{wgpu, WebGPUResponse, WebGPUResponseResult};
 
-use super::bindings::codegen::Bindings::GPUTextureBinding::GPUTextureFormat;
-use crate::dom::bindings::codegen::Bindings::GPUBinding::{
+use super::bindings::codegen::Bindings::WebGPUBinding::GPUTextureFormat;
+use crate::dom::bindings::codegen::Bindings::WebGPUBinding::{
     GPUMethods, GPUPowerPreference, GPURequestAdapterOptions,
 };
 use crate::dom::bindings::error::Error;
@@ -54,7 +54,7 @@ struct WGPUResponse<T: AsyncWGPUListener + DomObject> {
 }
 
 impl<T: AsyncWGPUListener + DomObject> WGPUResponse<T> {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn response(self, response: WebGPUResponseResult) {
         let promise = self.trusted.root();
         self.receiver.root().handle_response(response, &promise);

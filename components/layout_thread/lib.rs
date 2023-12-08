@@ -1241,7 +1241,7 @@ impl LayoutThread {
         );
 
         // Flush shadow roots stylesheets if dirty.
-        document.flush_shadow_roots_stylesheets(&mut self.stylist, guards.author.clone());
+        document.flush_shadow_roots_stylesheets(&mut self.stylist, guards.author);
 
         let restyles = std::mem::take(&mut data.pending_restyles);
         debug!("Draining restyles: {}", restyles.len());
@@ -1786,12 +1786,7 @@ fn get_root_flow_background_color(flow: &mut dyn Flow) -> ColorF {
             .background_color
             .clone(),
     );
-    ColorF::new(
-        color.red_f32(),
-        color.green_f32(),
-        color.blue_f32(),
-        color.alpha_f32(),
-    )
+    color.to_layout()
 }
 
 fn get_ua_stylesheets() -> Result<UserAgentStylesheets, &'static str> {

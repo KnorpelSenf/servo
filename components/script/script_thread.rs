@@ -442,7 +442,7 @@ impl OpaqueSender<CommonScriptMsg> for Sender<MainThreadScriptMsg> {
 
 /// The set of all documents managed by this script thread.
 #[derive(JSTraceable)]
-#[unrooted_must_root_lint::must_root]
+#[crown::unrooted_must_root_lint::must_root]
 pub struct Documents {
     map: HashMapTracedValues<PipelineId, Dom<Document>>,
 }
@@ -496,7 +496,7 @@ impl Documents {
     }
 }
 
-#[allow(unrooted_must_root)]
+#[allow(crown::unrooted_must_root)]
 pub struct DocumentsIter<'a> {
     iter: hash_map::Iter<'a, PipelineId, Dom<Document>>,
 }
@@ -522,7 +522,7 @@ unsafe_no_jsmanaged_fields!(TaskQueue<MainThreadScriptMsg>);
 
 #[derive(JSTraceable)]
 // ScriptThread instances are rooted on creation, so this is okay
-#[allow(unrooted_must_root)]
+#[allow(crown::unrooted_must_root)]
 pub struct ScriptThread {
     /// The documents for pipelines managed by this thread
     documents: DomRefCell<Documents>,
@@ -771,7 +771,7 @@ impl<'a> ScriptMemoryFailsafe<'a> {
 }
 
 impl<'a> Drop for ScriptMemoryFailsafe<'a> {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn drop(&mut self) {
         if let Some(owner) = self.owner {
             for (_, document) in owner.documents.borrow().iter() {
@@ -795,7 +795,7 @@ impl ScriptThreadFactory for ScriptThread {
         let (sender, receiver) = unbounded();
         let layout_chan = sender.clone();
         thread::Builder::new()
-            .name(format!("Script{}", state.id))
+            .name(format!("Script{:?}", state.id))
             .spawn(move || {
                 thread_state::initialize(ThreadState::SCRIPT);
                 PipelineNamespace::install(state.pipeline_namespace_id);
@@ -837,7 +837,7 @@ impl ScriptThreadFactory for ScriptThread {
                 );
                 script_thread.pre_page_load(new_load, load_data);
 
-                let reporter_name = format!("script-reporter-{}", id);
+                let reporter_name = format!("script-reporter-{:?}", id);
                 mem_profiler_chan.run_with_memory_reporting(
                     || {
                         script_thread.start();
@@ -2103,6 +2103,7 @@ impl ScriptThread {
                 result,
             } => {
                 let global = self.documents.borrow().find_global(pipeline_id).unwrap();
+                let _ac = enter_realm(&*global);
                 global.handle_wgpu_msg(device, scope_id, result);
             },
             WebGPUMsg::CleanDevice {

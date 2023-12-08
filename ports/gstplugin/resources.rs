@@ -8,82 +8,85 @@
 
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::{env, fs, io};
+use std::{env, fs};
 
-use lazy_static::lazy_static;
+use cfg_if::cfg_if;
 use servo::embedder_traits::resources::{self, Resource};
 
-lazy_static! {
-    static ref CMD_RESOURCE_DIR: Mutex<Option<String>> = Mutex::new(None);
+lazy_static::lazy_static! {
+    static ref CMD_RESOURCE_DIR: Mutex<Option<PathBuf>> = Mutex::new(None);
 }
 
 struct ResourceReader;
-
-fn filename(file: Resource) -> &'static str {
-    match file {
-        Resource::Preferences => "prefs.json",
-        Resource::BluetoothBlocklist => "gatt_blocklist.txt",
-        Resource::DomainList => "public_domains.txt",
-        Resource::HstsPreloadList => "hsts_preload.json",
-        Resource::BadCertHTML => "badcert.html",
-        Resource::NetErrorHTML => "neterror.html",
-        Resource::UserAgentCSS => "user-agent.css",
-        Resource::ServoCSS => "servo.css",
-        Resource::PresentationalHintsCSS => "presentational-hints.css",
-        Resource::QuirksModeCSS => "quirks-mode.css",
-        Resource::RippyPNG => "rippy.png",
-        Resource::MediaControlsCSS => "media-controls.css",
-        Resource::MediaControlsJS => "media-controls.js",
-        Resource::CrashHTML => "crash.html",
-    }
-}
 
 pub fn init() {
     resources::set(Box::new(ResourceReader));
 }
 
-fn resources_dir_path() -> io::Result<PathBuf> {
+fn resources_dir_path() -> PathBuf {
     // This needs to be called before the process is sandboxed
     // as we only give permission to read inside the resources directory,
     // not the permissions the "search" for the resources directory.
     let mut dir = CMD_RESOURCE_DIR.lock().unwrap();
     if let Some(ref path) = *dir {
-        return Ok(PathBuf::from(path));
+        return PathBuf::from(path);
     }
 
-    // FIXME: Find a way to not rely on the executable being
-    // under `<servo source>[/$target_triple]/target/debug`
-    // or `<servo source>[/$target_triple]/target/release`.
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Follow symlink
-    path = path.canonicalize()?;
-
+    // Try ./resources and ./Resources relative to the directory containing the
+    // canonicalised executable path, then each of its ancestors.
+    let mut path = env::current_exe().unwrap().canonicalize().unwrap();
     while path.pop() {
         path.push("resources");
         if path.is_dir() {
-            break;
+            *dir = Some(path);
+            return dir.clone().unwrap();
         }
         path.pop();
+
         // Check for Resources on mac when using a case sensitive filesystem.
         path.push("Resources");
         if path.is_dir() {
-            break;
+            *dir = Some(path);
+            return dir.clone().unwrap();
         }
         path.pop();
     }
-    *dir = Some(path.to_str().unwrap().to_owned());
-    Ok(path)
+
+    cfg_if! {
+        if #[cfg(servo_production)] {
+            panic!("Can't find resources directory")
+        } else {
+            // Static assert that this is really a non-production build, rather
+            // than a failure of the build script’s production check.
+            const _: () = assert!(cfg!(servo_do_not_use_in_production));
+
+            // Try ./resources in the current directory, then each of its ancestors.
+            // Not to be used in production builds without considering the security implications!
+            let mut path = std::env::current_dir().unwrap();
+            loop {
+                path.push("resources");
+                if path.is_dir() {
+                    *dir = Some(path);
+                    return dir.clone().unwrap();
+                }
+                path.pop();
+
+                if !path.pop() {
+                    panic!("Can't find resources directory")
+                }
+            }
+        }
+    }
 }
 
 impl resources::ResourceReaderMethods for ResourceReader {
     fn read(&self, file: Resource) -> Vec<u8> {
-        let file = filename(file);
-        let mut path = resources_dir_path().expect("Can't find resources directory");
-        path.push(file);
-        fs::read(path.clone()).expect(&format!("Can't read file {:?}", path))
+        let mut path = resources_dir_path();
+        path.push(file.filename());
+        fs::read(path).expect("Can't read file")
     }
     fn sandbox_access_files_dirs(&self) -> Vec<PathBuf> {
-        vec![resources_dir_path().expect("Can't find resources directory")]
+        vec![resources_dir_path()]
     }
     fn sandbox_access_files(&self) -> Vec<PathBuf> {
         vec![]

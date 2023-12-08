@@ -2,6 +2,10 @@ name: Linux
 on:
   workflow_call:
     inputs:
+      profile:
+        required: false
+        default: "release"
+        type: string
       wpt:
         required: false
         type: string
@@ -21,6 +25,11 @@ on:
         type: string
   workflow_dispatch:
     inputs:
+      profile:
+        required: false
+        default: "release"
+        type: choice
+        options: ["release", "debug", "production"]
       wpt:
         default: "test"
         required: false
@@ -45,47 +54,57 @@ env:
   RUST_BACKTRACE: 1
   SHELL: /bin/bash
   SCCACHE_GHA_ENABLED: "true"
-  RUSTC_WRAPPER: "sccache"
   CCACHE: "sccache"
   CARGO_INCREMENTAL: 0
 
 jobs:
   build:
     name: Linux Build
-    runs-on: ubuntu-20.04
+    # Ubuntu 22.04 has glibc 2.34 so the binaries produced
+    # won't run on systems with older glibc e.g wpt.fyi
+    # runners which still use 20.04.
+    runs-on: ubuntu-${{ inputs.upload && '20.04' || '22.04' }}
     steps:
       - uses: actions/checkout@v3
-        if: github.event_name != 'issue_comment'
+        if: github.event_name != 'pull_request_target'
         with:
           fetch-depth: 2
-      # This is necessary to checkout the pull request if this run was triggered
-      # via an `issue_comment` action on a pull request.
+      # This is necessary to checkout the pull request if this run was triggered via a
+      # `pull_request_target` event.
       - uses: actions/checkout@v3
-        if: github.event_name == 'issue_comment'
+        if: github.event_name == 'pull_request_target'
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
+          ref: refs/pull/${{ github.event.number }}/head
           fetch-depth: 2
       - name: Run sccache-cache
         uses: mozilla-actions/sccache-action@v0.0.3
-      - name: Select Python 3.9
-        uses: actions/setup-python@v4
+      - name: Set LIBCLANG_PATH env # needed for bindgen in mozangle
+        if: ${{ !inputs.upload  }} # not needed on ubuntu 20.04 used for nightly
+        run: echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> $GITHUB_ENV
+      - name: Install taplo
+        uses: baptiste0928/cargo-install@v2
         with:
-          python-version: '3.9'
+          crate: taplo-cli
+          locked: true
       - name: Bootstrap Python
-        run: python3 -m pip install --upgrade pip virtualenv
+        run: python3 -m pip install --upgrade pip
       - name: Bootstrap dependencies
         run: sudo apt update && python3 ./mach bootstrap
       - name: Tidy
         run: python3 ./mach test-tidy --no-progress --all
-      - name: Release build
-        run: python3 ./mach build --release
+      - name: Build (${{ inputs.profile }})
+        run: python3 ./mach build --${{ inputs.profile }}
       - name: Smoketest
-        run: xvfb-run python3 ./mach smoketest --release
+        run: xvfb-run python3 ./mach smoketest --${{ inputs.profile }}
       - name: Script tests
         run: ./mach test-scripts
       - name: Unit tests
         if: ${{ inputs.unit-tests || github.ref_name == 'try-linux' }}
-        run: python3 ./mach test-unit --release
+        uses: nick-fields/retry@v2
+        with:
+          timeout_minutes: 20
+          max_attempts: 2 # https://github.com/servo/servo/issues/30683
+          command: python ./mach test-unit --${{ inputs.profile }}
       - name: Rename build timing
         run: cp -r target/cargo-timings target/cargo-timings-linux
       - name: Archive build timing
@@ -96,14 +115,14 @@ jobs:
           path: target/cargo-timings-*
       - name: Lockfile check
         run: ./etc/ci/lockfile_changed.sh
-      - name: Package
-        run: python3 ./mach package --release
-      - name: Upload Package
+      - name: Build mach package
+        run: python3 ./mach package --${{ inputs.profile }}
+      - name: Upload artifact for mach package
         uses: actions/upload-artifact@v3
         with:
           name: linux
-          path: target/release/servo-tech-demo.tar.gz
-      - name: Upload
+          path: target/${{ inputs.profile }}/servo-tech-demo.tar.gz
+      - name: Upload nightly
         if: ${{ inputs.upload }}
         run: |
           python3 ./mach upload-nightly linux \
@@ -113,9 +132,9 @@ jobs:
           S3_UPLOAD_CREDENTIALS: ${{ secrets.S3_UPLOAD_CREDENTIALS }}
           NIGHTLY_REPO_TOKEN: ${{ secrets.NIGHTLY_REPO_TOKEN }}
           NIGHTLY_REPO: ${{ github.repository_owner }}/servo-nightly-builds
-      - name: Package binary
-        run: tar -czf target.tar.gz target/release/servo resources
-      - name: Archive binary
+      - name: Build package for target
+        run: tar -czf target.tar.gz target/${{ inputs.profile }}/servo resources
+      - name: Upload artifact for target
         uses: actions/upload-artifact@v3
         with:
           name: release-binary
@@ -127,8 +146,10 @@ jobs:
     needs: ["build"]
     uses: ./.github/workflows/linux-wpt.yml
     with:
+      profile: ${{ inputs.profile }}
       wpt: ${{ inputs.wpt }}
       layout: "layout-2020"
+    secrets: inherit
 
   wpt-2013:
     if: ${{ github.ref_name == 'try-wpt' || inputs.layout == '2013' || inputs.layout == 'all' }}
@@ -136,8 +157,10 @@ jobs:
     needs: ["build"]
     uses: ./.github/workflows/linux-wpt.yml
     with:
+      profile: ${{ inputs.profile }}
       wpt: ${{ inputs.wpt }}
       layout: "layout-2013"
+    secrets: inherit
 
   result:
     name: Result

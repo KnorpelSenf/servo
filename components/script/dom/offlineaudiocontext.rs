@@ -16,7 +16,7 @@ use crate::dom::audiobuffer::{AudioBuffer, MAX_SAMPLE_RATE, MIN_SAMPLE_RATE};
 use crate::dom::audionode::MAX_CHANNEL_COUNT;
 use crate::dom::baseaudiocontext::{BaseAudioContext, BaseAudioContextOptions};
 use crate::dom::bindings::cell::DomRefCell;
-use crate::dom::bindings::codegen::Bindings::BaseAudioContextBinding::BaseAudioContextBinding::BaseAudioContextMethods;
+use crate::dom::bindings::codegen::Bindings::BaseAudioContextBinding::BaseAudioContext_Binding::BaseAudioContextMethods;
 use crate::dom::bindings::codegen::Bindings::OfflineAudioContextBinding::{
     OfflineAudioContextMethods, OfflineAudioContextOptions,
 };
@@ -45,7 +45,7 @@ pub struct OfflineAudioContext {
 
 #[allow(non_snake_case)]
 impl OfflineAudioContext {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn new_inherited(
         channel_count: u32,
         length: u32,
@@ -70,7 +70,7 @@ impl OfflineAudioContext {
         }
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn new(
         window: &Window,
         proto: Option<HandleObject>,

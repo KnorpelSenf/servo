@@ -7,8 +7,6 @@
 # option. This file may not be copied, modified, or distributed
 # except according to those terms.
 
-from __future__ import print_function, unicode_literals
-
 import datetime
 import locale
 import os
@@ -62,8 +60,12 @@ class MachCommands(CommandBase):
         opts = params or []
         has_media_stack = "media-gstreamer" in self.features
 
-        if build_type == BuildType.RELEASE:
+        if build_type.is_release():
             opts += ["--release"]
+        elif build_type.is_dev():
+            pass  # there is no argument for debug
+        else:
+            opts += ["--profile", build_type.profile]
 
         if jobs is not None:
             opts += ["-j", jobs]
@@ -250,7 +252,7 @@ class MachCommands(CommandBase):
                     subprocess.call(["perl", "-i", "-pe", expr, target_path])
 
     @Command('clean',
-             description='Clean the target/ and python/_virtualenv[version]/ directories',
+             description='Clean the target/ and python/_venv[version]/ directories',
              category='build')
     @CommandArgument('--manifest-path',
                      default=None,
@@ -263,7 +265,7 @@ class MachCommands(CommandBase):
     def clean(self, manifest_path=None, params=[], verbose=False):
         self.ensure_bootstrapped()
 
-        virtualenv_fname = '_virtualenv%d.%d' % (sys.version_info[0], sys.version_info[1])
+        virtualenv_fname = '_venv%d.%d' % (sys.version_info[0], sys.version_info[1])
         virtualenv_path = path.join(self.get_top_dir(), 'python', virtualenv_fname)
         if path.exists(virtualenv_path):
             print('Removing virtualenv directory: %s' % virtualenv_path)

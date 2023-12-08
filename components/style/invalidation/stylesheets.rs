@@ -18,8 +18,8 @@ use crate::shared_lock::SharedRwLockReadGuard;
 use crate::stylesheets::{CssRule, StylesheetInDocument};
 use crate::stylesheets::{EffectiveRules, EffectiveRulesIterator};
 use crate::values::AtomIdent;
-use crate::{Atom, ShrinkIfNeeded};
 use crate::LocalName as SelectorLocalName;
+use crate::{Atom, ShrinkIfNeeded};
 use selectors::parser::{Component, LocalName, Selector};
 
 /// The kind of change that happened for a given rule.
@@ -548,14 +548,18 @@ impl StylesheetInvalidationSet {
                 // It's not clear what handling changes for this correctly would
                 // look like.
             },
+            LayerStatement(..) => {
+                // Layer statement insertions might alter styling order, so we need to always
+                // invalidate fully.
+                return self.invalidate_fully();
+            },
             CounterStyle(..) |
             Page(..) |
-            Viewport(..) |
+            Property(..) |
             FontFeatureValues(..) |
-            LayerStatement(..) |
+            FontPaletteValues(..) |
             FontFace(..) |
             Keyframes(..) |
-            ScrollTimeline(..) |
             Container(..) |
             Style(..) => {
                 if is_generic_change {
@@ -633,16 +637,12 @@ impl StylesheetInvalidationSet {
                     // existing elements.
                 }
             },
-            // TODO: Check if timeline name is referenced, though this might go away in bug 1737918.
-            ScrollTimeline(..) |
             CounterStyle(..) |
             Page(..) |
-            Viewport(..) |
-            FontFeatureValues(..) => {
-                debug!(
-                    " > Found unsupported rule, marking the whole subtree \
-                     invalid."
-                );
+            Property(..) |
+            FontFeatureValues(..) |
+            FontPaletteValues(..) => {
+                debug!(" > Found unsupported rule, marking the whole subtree invalid.");
 
                 // TODO(emilio): Can we do better here?
                 //

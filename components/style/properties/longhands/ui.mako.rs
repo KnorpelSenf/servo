@@ -108,11 +108,23 @@ ${helpers.predefined_type(
     enabled_in="chrome",
 )}
 
+// Hack to allow chrome to hide stuff only visually (without hiding it from
+// a11y).
+${helpers.predefined_type(
+    "-moz-subtree-hidden-only-visually",
+    "BoolInteger",
+    "computed::BoolInteger::zero()",
+    engines="gecko",
+    animation_value_type="discrete",
+    spec="None (Nonstandard internal property)",
+    enabled_in="chrome",
+)}
+
 // TODO(emilio): Probably also should be hidden from content.
 ${helpers.predefined_type(
     "-moz-force-broken-image-icon",
-    "MozForceBrokenImageIcon",
-    "computed::MozForceBrokenImageIcon::false_value()",
+    "BoolInteger",
+    "computed::BoolInteger::zero()",
     engines="gecko",
     animation_value_type="discrete",
     spec="None (Nonstandard Firefox-only property)",
@@ -276,6 +288,20 @@ ${helpers.single_keyword(
     rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
 )}
 
+${helpers.single_keyword(
+    "animation-composition",
+    "replace add accumulate",
+    engines="gecko servo",
+    need_index=True,
+    animation_value_type="none",
+    vector=True,
+    gecko_enum_prefix="CompositeOperation",
+    gecko_inexhaustive=True,
+    gecko_pref="layout.css.animation-composition.enabled",
+    servo_pref="layout.unimplemented",
+    spec="https://drafts.csswg.org/css-animations-2/#animation-composition",
+)}
+
 ${helpers.predefined_type(
     "animation-delay",
     "Time",
@@ -300,7 +326,72 @@ ${helpers.predefined_type(
     vector=True,
     need_index=True,
     animation_value_type="none",
-    gecko_pref="layout.css.scroll-linked-animations.enabled",
+    gecko_pref="layout.css.scroll-driven-animations.enabled",
     spec="https://drafts.csswg.org/css-animations-2/#propdef-animation-timeline",
+    rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
+)}
+
+${helpers.predefined_type(
+    "scroll-timeline-name",
+    "ScrollTimelineName",
+    "computed::ScrollTimelineName::none()",
+    vector=True,
+    need_index=True,
+    engines="gecko",
+    animation_value_type="none",
+    gecko_pref="layout.css.scroll-driven-animations.enabled",
+    spec="https://drafts.csswg.org/scroll-animations-1/#scroll-timeline-name",
+    rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
+)}
+
+${helpers.predefined_type(
+    "scroll-timeline-axis",
+    "ScrollAxis",
+    "computed::ScrollAxis::default()",
+    vector=True,
+    need_index=True,
+    engines="gecko",
+    animation_value_type="none",
+    gecko_pref="layout.css.scroll-driven-animations.enabled",
+    spec="https://drafts.csswg.org/scroll-animations-1/#scroll-timeline-axis",
+    rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
+)}
+
+${helpers.predefined_type(
+    "view-timeline-name",
+    "ScrollTimelineName",
+    "computed::ScrollTimelineName::none()",
+    vector=True,
+    need_index=True,
+    engines="gecko",
+    animation_value_type="none",
+    gecko_pref="layout.css.scroll-driven-animations.enabled",
+    spec="https://drafts.csswg.org/scroll-animations-1/#view-timeline-name",
+    rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
+)}
+
+${helpers.predefined_type(
+    "view-timeline-axis",
+    "ScrollAxis",
+    "computed::ScrollAxis::default()",
+    vector=True,
+    need_index=True,
+    engines="gecko",
+    animation_value_type="none",
+    gecko_pref="layout.css.scroll-driven-animations.enabled",
+    spec="https://drafts.csswg.org/scroll-animations-1/#view-timeline-axis",
+    rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
+)}
+
+${helpers.predefined_type(
+    "view-timeline-inset",
+    "ViewTimelineInset",
+    "computed::ViewTimelineInset::default()",
+    vector=True,
+    need_index=True,
+    engines="gecko",
+    animation_value_type="none",
+    gecko_pref="layout.css.scroll-driven-animations.enabled",
+    spec="https://drafts.csswg.org/scroll-animations-1/#view-timeline-axis",
     rule_types_allowed=DEFAULT_RULES_EXCEPT_KEYFRAME,
 )}

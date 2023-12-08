@@ -847,9 +847,9 @@ impl LayoutThread {
                                 .cloned();
                         },
                     },
-                    ReflowGoal::Full |
-                    ReflowGoal::TickAnimations |
-                    ReflowGoal::UpdateScrollNode(_) => {},
+                    ReflowGoal::Full
+                    | ReflowGoal::TickAnimations
+                    | ReflowGoal::UpdateScrollNode(_) => {},
                 }
                 return;
             },
@@ -913,7 +913,7 @@ impl LayoutThread {
         }
 
         // Flush shadow roots stylesheets if dirty.
-        document.flush_shadow_roots_stylesheets(&mut self.stylist, guards.author.clone());
+        document.flush_shadow_roots_stylesheets(&mut self.stylist, guards.author);
 
         let restyles = std::mem::take(&mut data.pending_restyles);
         debug!("Draining restyles: {}", restyles.len());
@@ -1218,7 +1218,7 @@ impl LayoutThread {
             }
         }
 
-        if !reflow_goal.needs_display() {
+        if !reflow_goal.needs_display_list() {
             // Defer the paint step until the next ForDisplay.
             //
             // We need to tell the document about this so it doesn't
@@ -1259,7 +1259,8 @@ impl LayoutThread {
         // Build the root stacking context. This turns the `FragmentTree` into a
         // tree of fragments in CSS painting order and also creates all
         // applicable spatial and clip nodes.
-        let root_stacking_context = display_list.build_stacking_context_tree(&fragment_tree);
+        let root_stacking_context =
+            display_list.build_stacking_context_tree(&fragment_tree, &self.debug);
 
         // Build the rest of the display list which inclues all of the WebRender primitives.
         let (iframe_sizes, is_contentful) =
@@ -1267,6 +1268,9 @@ impl LayoutThread {
 
         if self.debug.dump_flow_tree {
             fragment_tree.print();
+        }
+        if self.debug.dump_stacking_context_tree {
+            root_stacking_context.debug_print();
         }
         debug!("Layout done!");
 
@@ -1276,9 +1280,11 @@ impl LayoutThread {
         self.paint_time_metrics
             .maybe_observe_paint_time(self, epoch, is_contentful);
 
-        // denate send
-        self.webrender_api
-            .send_display_list(display_list.compositor_info, display_list.wr.finalize().1);
+        if reflow_goal.needs_display() {
+            // denate send
+            self.webrender_api
+                .send_display_list(display_list.compositor_info, display_list.wr.finalize().1);
+        }
 
         self.update_iframe_sizes(iframe_sizes);
 

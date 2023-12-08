@@ -85,11 +85,11 @@ use crate::dom::bindings::codegen::Bindings::DocumentBinding::{
     DocumentMethods, DocumentReadyState,
 };
 use crate::dom::bindings::codegen::Bindings::HTMLIFrameElementBinding::HTMLIFrameElementMethods;
-use crate::dom::bindings::codegen::Bindings::HistoryBinding::HistoryBinding::HistoryMethods;
+use crate::dom::bindings::codegen::Bindings::HistoryBinding::History_Binding::HistoryMethods;
 use crate::dom::bindings::codegen::Bindings::ImageBitmapBinding::{
     ImageBitmapOptions, ImageBitmapSource,
 };
-use crate::dom::bindings::codegen::Bindings::MediaQueryListBinding::MediaQueryListBinding::MediaQueryListMethods;
+use crate::dom::bindings::codegen::Bindings::MediaQueryListBinding::MediaQueryList_Binding::MediaQueryListMethods;
 use crate::dom::bindings::codegen::Bindings::RequestBinding::RequestInit;
 use crate::dom::bindings::codegen::Bindings::VoidFunctionBinding::VoidFunction;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::{
@@ -1103,11 +1103,6 @@ impl WindowMethods for Window {
     }
 
     #[allow(unsafe_code)]
-    fn Trap(&self) {
-        unsafe { ::std::intrinsics::breakpoint() }
-    }
-
-    #[allow(unsafe_code)]
     fn Js_backtrace(&self) {
         unsafe {
             capture_stack!(in(*self.get_cx()) let stack);
@@ -1338,6 +1333,7 @@ impl WindowMethods for Window {
             Some(CssRuleType::Media),
             ParsingMode::DEFAULT,
             quirks_mode,
+            /* namespaces = */ Default::default(),
             self.css_error_reporter(),
             None,
         );

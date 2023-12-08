@@ -21,23 +21,14 @@ rand = [
 # Ignored packages with duplicated versions
 packages = [
     "ahash",
-    "arrayvec",
-    "base64",
     "bitflags",
     "cfg-if",
     "cookie",
-    "core-foundation",
-    "core-foundation-sys",
     "futures",
-    "gl_generator",
-    "itoa",
     "libloading",
-    "lyon_geom",
-    "mio",
     "nix",
     "num-rational",
     "redox_syscall",
-    "ron",
     "socket2",
     "time",
     "wasi",
@@ -46,12 +37,6 @@ packages = [
     # This dependency is for "hermit os" which Servo doesn't support.
     # Theoretically, it's never fetched.
     "hermit-abi",
-
-    # Duplicated by rustls and image.
-    "spin",
-
-    # Duplicated by rustls and the version of webpki-roots required by async_tungstenite.
-    "rustls-webpki",
 
     # Duplicated by winit.
     "windows-sys",
@@ -69,7 +54,10 @@ packages = [
     "foreign-types-shared",
     "metal",
     "paste",
+
+    # Duplicated by Gecko crates that haven't been updated yet (style, shmem, derive_common, ...).
     "syn",
+    "synstructure",
 
     # style/webxr (0.62) vs. mozjs_sys (0.66)
     "bindgen",
@@ -77,9 +65,11 @@ packages = [
 # Files that are ignored for all tidy and lint checks.
 files = [
     "./components/net/tests/parsable_mime/text",
-    # Ignore style files to avoid diverging too much from upstream Gecko
+    # Ignore selectors and style files to avoid diverging too much from upstream Gecko
+    "./components/selectors/",
     "./components/style/",
     "./components/style_derive/parse.rs",
+    "./components/to_shmem/lib.rs",
     "./resources/hsts_preload.json",
     "./tests/wpt/meta/MANIFEST.json",
     "./tests/wpt/meta-legacy-layout/MANIFEST.json",
@@ -106,6 +96,8 @@ files = [
 ]
 # Directories that are ignored for the non-WPT tidy check.
 directories = [
+    # Test have expectations in them, causing tidy to fail.
+    "./support/crown/tests",
     # Upstream
     "./support/android/apk",
     "./tests/wpt/harness",
@@ -113,7 +105,7 @@ directories = [
     "./tests/wpt/mozilla/tests/mozilla/referrer-policy",
     "./tests/wpt/mozilla/tests/webgl",
     "./python/tidy/tests",
-    "./python/_virtualenv*",
+    "./python/_v*",
     "./python/mach",
     # Generated and upstream code combined with our own. Could use cleanup
     "./target",

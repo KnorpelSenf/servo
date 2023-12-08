@@ -73,6 +73,17 @@ pub fn read_prefs_map(txt: &str) -> Result<HashMap<String, PrefValue>, PrefError
                     Value::Number(n) if n.is_i64() => PrefValue::Int(n.as_i64().unwrap()),
                     Value::Number(n) if n.is_f64() => PrefValue::Float(n.as_f64().unwrap()),
                     Value::String(s) => PrefValue::Str(s.to_owned()),
+                    Value::Array(v) => {
+                        let mut array = v.iter().map(|v| PrefValue::from_json_value(v));
+                        if array.all(|v| v.is_some()) {
+                            PrefValue::Array(array.flatten().collect())
+                        } else {
+                            return Err(PrefError::InvalidValue(format!(
+                                "Invalid value: {}",
+                                pref_value
+                            )));
+                        }
+                    },
                     _ => {
                         return Err(PrefError::InvalidValue(format!(
                             "Invalid value: {}",
@@ -134,6 +145,7 @@ mod gen {
             },
             dom: {
                 webgpu: {
+                    /// Enable WebGPU APIs.
                     enabled: bool,
                 },
                 bluetooth: {
@@ -263,6 +275,7 @@ mod gen {
                     enabled: bool,
                 },
                 webgl2: {
+                    /// Enable WebGL2 APIs.
                     enabled: bool,
                 },
                 webrtc: {
@@ -444,6 +457,9 @@ mod gen {
                     enabled: bool,
                 },
                 legacy_layout: bool,
+                tables: {
+                    enabled: bool,
+                },
                 #[serde(default = "default_layout_threads")]
                 threads: i64,
                 writing_mode: {
@@ -478,9 +494,15 @@ mod gen {
                 max_length: i64,
             },
             shell: {
+                background_color: {
+                    /// The background color of shell's viewport. This will be used by OpenGL's `glClearColor`.
+                    #[serde(rename = "shell.background-color.rgba")]
+                    rgba: [f64; 4],
+                },
                 crash_reporter: {
                     enabled: bool,
                 },
+                /// URL string of the homepage.
                 homepage: String,
                 keep_screen_on: {
                     enabled: bool,
@@ -488,9 +510,11 @@ mod gen {
                 #[serde(rename = "shell.native-orientation")]
                 native_orientation: String,
                 native_titlebar: {
+                    /// Enable native window's titlebar and decorations.
                     #[serde(rename = "shell.native-titlebar.enabled")]
                     enabled: bool,
                 },
+                /// URL string of the search engine page (for example <https://google.com> or and <https://duckduckgo.com>.
                 searchpage: String,
             },
             webgl: {

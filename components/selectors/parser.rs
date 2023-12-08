@@ -3,20 +3,24 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use crate::attr::{AttrSelectorOperator, AttrSelectorWithOptionalNamespace};
-use crate::attr::{NamespaceConstraint, ParsedAttrSelectorOperation};
-use crate::attr::{ParsedCaseSensitivity, SELECTOR_WHITESPACE};
+use crate::attr::{NamespaceConstraint, ParsedAttrSelectorOperation, ParsedCaseSensitivity};
 use crate::bloom::BLOOM_HASH_MASK;
-use crate::builder::{SelectorBuilder, SelectorFlags, SpecificityAndFlags};
+use crate::builder::{
+    relative_selector_list_specificity_and_flags, selector_list_specificity_and_flags,
+    SelectorBuilder, SelectorFlags, Specificity, SpecificityAndFlags,
+};
 use crate::context::QuirksMode;
 use crate::sink::Push;
+use crate::visitor::SelectorListKind;
 pub use crate::visitor::SelectorVisitor;
 use bitflags::bitflags;
-use cssparser::{match_ignore_ascii_case, parse_nth, *};
+use cssparser::{match_ignore_ascii_case, parse_nth};
 use cssparser::{BasicParseError, BasicParseErrorKind, ParseError, ParseErrorKind};
 use cssparser::{CowRcStr, Delimiter, SourceLocation};
 use cssparser::{Parser as CssParser, ToCss, Token};
+use debug_unreachable::debug_unreachable;
 use precomputed_hash::PrecomputedHash;
-use servo_arc::ThinArc;
+use servo_arc::{HeaderWithLength, ThinArc, UniqueArc};
 use size_of_test::size_of_test;
 use smallvec::SmallVec;
 use std::borrow::{Borrow, Cow};
@@ -114,6 +118,9 @@ bitflags! {
 
         /// Whether we explicitly disallow pseudo-element-like things.
         const DISALLOW_PSEUDOS = 1 << 6;
+
+        /// Whether we explicitly disallow relative selectors (i.e. `:has()`).
+        const DISALLOW_RELATIVE_SELECTOR = 1 << 7;
     }
 }
 
@@ -202,7 +209,7 @@ macro_rules! with_all_bounds {
         /// are parameterized on SelectorImpl. See
         /// <https://github.com/rust-lang/rust/issues/26925>
         pub trait SelectorImpl: Clone + Debug + Sized + 'static {
-            type ExtraMatchingData: Sized + Default + 'static;
+            type ExtraMatchingData<'a>: Sized + Default;
             type AttrValue: $($InSelector)*;
             type Identifier: $($InSelector)*;
             type LocalName: $($InSelector)* + Borrow<Self::BorrowedLocalName>;
@@ -256,8 +263,23 @@ pub trait Parser<'i> {
         false
     }
 
+    /// Whether to parse the selector list of nth-child() or nth-last-child().
+    fn parse_nth_child_of(&self) -> bool {
+        false
+    }
+
     /// Whether to parse the `:where` pseudo-class.
     fn parse_is_and_where(&self) -> bool {
+        false
+    }
+
+    /// Whether to parse the :has pseudo-class.
+    fn parse_has(&self) -> bool {
+        false
+    }
+
+    /// Whether to parse the '&' delimiter as a parent selector.
+    fn parse_parent_selector(&self) -> bool {
         false
     }
 
@@ -269,6 +291,11 @@ pub trait Parser<'i> {
     /// Whether to parse the `:host` pseudo-class.
     fn parse_host(&self) -> bool {
         false
+    }
+
+    /// Whether to allow forgiving selector-list parsing.
+    fn allow_forgiving_selectors(&self) -> bool {
+        true
     }
 
     /// Parses non-tree-structural pseudo-classes. Tree structural pseudo-classes,
@@ -343,18 +370,32 @@ pub struct SelectorList<Impl: SelectorImpl>(
     #[cfg_attr(feature = "shmem", shmem(field_bound))] pub SmallVec<[Selector<Impl>; 1]>,
 );
 
-/// How to treat invalid selectors in a selector list.
-enum ParseErrorRecovery {
-    /// Discard the entire selector list, this is the default behavior for
-    /// almost all of CSS.
-    DiscardList,
+/// Whether or not we're using forgiving parsing mode
+enum ForgivingParsing {
+    /// Discard the entire selector list upon encountering any invalid selector.
+    /// This is the default behavior for almost all of CSS.
+    No,
     /// Ignore invalid selectors, potentially creating an empty selector list.
     ///
     /// This is the error recovery mode of :is() and :where()
-    IgnoreInvalidSelector,
+    Yes,
+}
+
+/// Flag indicating if we're parsing relative selectors.
+#[derive(Copy, Clone, PartialEq)]
+enum ParseRelative {
+    /// Expect selectors to start with a combinator, assuming descendant combinator if not present.
+    Yes,
+    /// Treat as parse error if any selector begins with a combinator.
+    No,
 }
 
 impl<Impl: SelectorImpl> SelectorList<Impl> {
+    /// Returns a selector list with a single `&`
+    pub fn ampersand() -> Self {
+        Self(smallvec::smallvec![Selector::ampersand()])
+    }
+
     /// Parse a comma-separated list of Selectors.
     /// <https://drafts.csswg.org/selectors/#grouping>
     ///
@@ -370,7 +411,8 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
             parser,
             input,
             SelectorParsingState::empty(),
-            ParseErrorRecovery::DiscardList,
+            ForgivingParsing::No,
+            ParseRelative::No,
         )
     }
 
@@ -379,23 +421,28 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
         parser: &P,
         input: &mut CssParser<'i, 't>,
         state: SelectorParsingState,
-        recovery: ParseErrorRecovery,
+        recovery: ForgivingParsing,
+        parse_relative: ParseRelative,
     ) -> Result<Self, ParseError<'i, P::Error>>
     where
         P: Parser<'i, Impl = Impl>,
     {
         let mut values = SmallVec::new();
         loop {
-            let selector = input.parse_until_before(Delimiter::Comma, |input| {
-                parse_selector(parser, input, state)
+            let selector = input.parse_until_before(Delimiter::Comma, |i| {
+                parse_selector(parser, i, state, parse_relative)
             });
 
             let was_ok = selector.is_ok();
             match selector {
                 Ok(selector) => values.push(selector),
                 Err(err) => match recovery {
-                    ParseErrorRecovery::DiscardList => return Err(err),
-                    ParseErrorRecovery::IgnoreInvalidSelector => {},
+                    ForgivingParsing::No => return Err(err),
+                    ForgivingParsing::Yes => {
+                        if !parser.allow_forgiving_selectors() {
+                            return Err(err);
+                        }
+                    },
                 },
             }
 
@@ -412,7 +459,8 @@ impl<Impl: SelectorImpl> SelectorList<Impl> {
     }
 
     /// Creates a SelectorList from a Vec of selectors. Used in tests.
-    pub fn from_vec(v: Vec<Selector<Impl>>) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn from_vec(v: Vec<Selector<Impl>>) -> Self {
         SelectorList(SmallVec::from_vec(v))
     }
 }
@@ -431,6 +479,7 @@ where
         parser,
         input,
         state | SelectorParsingState::DISALLOW_PSEUDOS | SelectorParsingState::DISALLOW_COMBINATORS,
+        ParseRelative::No,
     )
 }
 
@@ -574,6 +623,7 @@ impl AncestorHashes {
     }
 }
 
+#[inline]
 pub fn namespace_empty_string<Impl: SelectorImpl>() -> Impl::NamespaceUrl {
     // Rust type’s default, not default namespace
     Impl::NamespaceUrl::default()
@@ -602,14 +652,39 @@ pub struct Selector<Impl: SelectorImpl>(
 );
 
 impl<Impl: SelectorImpl> Selector<Impl> {
+    /// See Arc::mark_as_intentionally_leaked
+    pub fn mark_as_intentionally_leaked(&self) {
+        self.0.with_arc(|a| a.mark_as_intentionally_leaked())
+    }
+
+    fn ampersand() -> Self {
+        Self(ThinArc::from_header_and_iter(
+            SpecificityAndFlags {
+                specificity: 0,
+                flags: SelectorFlags::HAS_PARENT,
+            },
+            std::iter::once(Component::ParentSelector),
+        ))
+    }
+
     #[inline]
     pub fn specificity(&self) -> u32 {
         self.0.header.header.specificity()
     }
 
     #[inline]
+    fn flags(&self) -> SelectorFlags {
+        self.0.header.header.flags
+    }
+
+    #[inline]
     pub fn has_pseudo_element(&self) -> bool {
         self.0.header.header.has_pseudo_element()
+    }
+
+    #[inline]
+    pub fn has_parent_selector(&self) -> bool {
+        self.0.header.header.has_parent_selector()
     }
 
     #[inline]
@@ -690,6 +765,30 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         }
     }
 
+    /// Same as `iter()`, but skips `RelativeSelectorAnchor` and its associated combinator.
+    #[inline]
+    pub fn iter_skip_relative_selector_anchor(&self) -> SelectorIter<Impl> {
+        if cfg!(debug_assertions) {
+            let mut selector_iter = self.iter_raw_parse_order_from(0);
+            assert!(
+                matches!(
+                    selector_iter.next().unwrap(),
+                    Component::RelativeSelectorAnchor
+                ),
+                "Relative selector does not start with RelativeSelectorAnchor"
+            );
+            assert!(
+                selector_iter.next().unwrap().is_combinator(),
+                "Relative combinator does not exist"
+            );
+        }
+
+        SelectorIter {
+            iter: self.0.slice[..self.len() - 2].iter(),
+            next_combinator: None,
+        }
+    }
+
     /// Whether this selector is a featureless :host selector, with no
     /// combinators to the left, and optionally has a pseudo-element to the
     /// right.
@@ -766,7 +865,7 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     }
 
     /// Creates a Selector from a vec of Components, specified in parse order. Used in tests.
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub(crate) fn from_vec(
         vec: Vec<Component<Impl>>,
         specificity: u32,
@@ -782,6 +881,209 @@ impl<Impl: SelectorImpl> Selector<Impl> {
         }
         let spec = SpecificityAndFlags { specificity, flags };
         Selector(builder.build_with_specificity_and_flags(spec))
+    }
+
+    pub fn replace_parent_selector(&self, parent: &[Selector<Impl>]) -> Self {
+        // FIXME(emilio): Shouldn't allow replacing if parent has a pseudo-element selector
+        // or what not.
+        let flags = self.flags() - SelectorFlags::HAS_PARENT;
+        let mut specificity = Specificity::from(self.specificity());
+        let parent_specificity =
+            Specificity::from(selector_list_specificity_and_flags(parent.iter()).specificity());
+
+        // The specificity at this point will be wrong, we replace it by the correct one after the
+        // fact.
+        let specificity_and_flags = SpecificityAndFlags {
+            specificity: self.specificity(),
+            flags,
+        };
+
+        fn replace_parent_on_selector_list<Impl: SelectorImpl>(
+            orig: &[Selector<Impl>],
+            parent: &[Selector<Impl>],
+            specificity: &mut Specificity,
+            with_specificity: bool,
+        ) -> Vec<Selector<Impl>> {
+            let mut any = false;
+
+            let result = orig
+                .iter()
+                .map(|s| {
+                    if !s.has_parent_selector() {
+                        return s.clone();
+                    }
+                    any = true;
+                    s.replace_parent_selector(parent)
+                })
+                .collect();
+
+            if !any || !with_specificity {
+                return result;
+            }
+
+            *specificity += Specificity::from(
+                selector_list_specificity_and_flags(result.iter()).specificity -
+                    selector_list_specificity_and_flags(orig.iter()).specificity,
+            );
+            result
+        }
+
+        fn replace_parent_on_relative_selector_list<Impl: SelectorImpl>(
+            orig: &[RelativeSelector<Impl>],
+            parent: &[Selector<Impl>],
+            specificity: &mut Specificity,
+        ) -> Vec<RelativeSelector<Impl>> {
+            let mut any = false;
+
+            let result = orig
+                .iter()
+                .map(|s| {
+                    if !s.selector.has_parent_selector() {
+                        return s.clone();
+                    }
+                    any = true;
+                    RelativeSelector {
+                        match_hint: s.match_hint,
+                        selector: s.selector.replace_parent_selector(parent),
+                    }
+                })
+                .collect();
+
+            if !any {
+                return result;
+            }
+
+            *specificity += Specificity::from(
+                relative_selector_list_specificity_and_flags(&result).specificity -
+                    relative_selector_list_specificity_and_flags(orig).specificity,
+            );
+            result
+        }
+
+        fn replace_parent_on_selector<Impl: SelectorImpl>(
+            orig: &Selector<Impl>,
+            parent: &[Selector<Impl>],
+            specificity: &mut Specificity,
+        ) -> Selector<Impl> {
+            if !orig.has_parent_selector() {
+                return orig.clone();
+            }
+            let new_selector = orig.replace_parent_selector(parent);
+            *specificity += Specificity::from(new_selector.specificity() - orig.specificity());
+            new_selector
+        }
+
+        let mut items = if !self.has_parent_selector() {
+            // Implicit `&` plus descendant combinator.
+            let iter = self.iter_raw_match_order();
+            let len = iter.len() + 2;
+            specificity += parent_specificity;
+            let iter = iter
+                .cloned()
+                .chain(std::iter::once(Component::Combinator(
+                    Combinator::Descendant,
+                )))
+                .chain(std::iter::once(Component::Is(
+                    parent.to_vec().into_boxed_slice(),
+                )));
+            let header = HeaderWithLength::new(specificity_and_flags, len);
+            UniqueArc::from_header_and_iter_with_size(header, iter, len)
+        } else {
+            let iter = self.iter_raw_match_order().map(|component| {
+                use self::Component::*;
+                match *component {
+                    LocalName(..) |
+                    ID(..) |
+                    Class(..) |
+                    AttributeInNoNamespaceExists { .. } |
+                    AttributeInNoNamespace { .. } |
+                    AttributeOther(..) |
+                    ExplicitUniversalType |
+                    ExplicitAnyNamespace |
+                    ExplicitNoNamespace |
+                    DefaultNamespace(..) |
+                    Namespace(..) |
+                    Root |
+                    Empty |
+                    Scope |
+                    Nth(..) |
+                    NonTSPseudoClass(..) |
+                    PseudoElement(..) |
+                    Combinator(..) |
+                    Host(None) |
+                    Part(..) |
+                    RelativeSelectorAnchor => component.clone(),
+                    ParentSelector => {
+                        specificity += parent_specificity;
+                        Is(parent.to_vec().into_boxed_slice())
+                    },
+                    Negation(ref selectors) => {
+                        Negation(
+                            replace_parent_on_selector_list(
+                                selectors,
+                                parent,
+                                &mut specificity,
+                                /* with_specificity = */ true,
+                            )
+                            .into_boxed_slice(),
+                        )
+                    },
+                    Is(ref selectors) => {
+                        Is(replace_parent_on_selector_list(
+                            selectors,
+                            parent,
+                            &mut specificity,
+                            /* with_specificity = */ true,
+                        )
+                        .into_boxed_slice())
+                    },
+                    Where(ref selectors) => {
+                        Where(
+                            replace_parent_on_selector_list(
+                                selectors,
+                                parent,
+                                &mut specificity,
+                                /* with_specificity = */ false,
+                            )
+                            .into_boxed_slice(),
+                        )
+                    },
+                    Has(ref selectors) => Has(replace_parent_on_relative_selector_list(
+                        selectors,
+                        parent,
+                        &mut specificity,
+                    )
+                    .into_boxed_slice()),
+
+                    Host(Some(ref selector)) => Host(Some(replace_parent_on_selector(
+                        selector,
+                        parent,
+                        &mut specificity,
+                    ))),
+                    NthOf(ref data) => {
+                        let selectors = replace_parent_on_selector_list(
+                            data.selectors(),
+                            parent,
+                            &mut specificity,
+                            /* with_specificity = */ true,
+                        );
+                        NthOf(NthOfSelectorData::new(
+                            data.nth_data(),
+                            selectors.into_iter(),
+                        ))
+                    },
+                    Slotted(ref selector) => Slotted(replace_parent_on_selector(
+                        selector,
+                        parent,
+                        &mut specificity,
+                    )),
+                }
+            });
+            let header = HeaderWithLength::new(specificity_and_flags, iter.len());
+            UniqueArc::from_header_and_iter(header, iter)
+        };
+        items.header_mut().specificity = specificity.into();
+        Selector(items.shareable_thin())
     }
 
     /// Returns count of simple selectors and combinators in the Selector.
@@ -926,6 +1228,29 @@ impl<'a, Impl: SelectorImpl> fmt::Debug for SelectorIter<'a, Impl> {
     }
 }
 
+/// An iterator over all combinators in a selector. Does not traverse selectors within psuedoclasses.
+struct CombinatorIter<'a, Impl: 'a + SelectorImpl>(SelectorIter<'a, Impl>);
+impl<'a, Impl: 'a + SelectorImpl> CombinatorIter<'a, Impl> {
+    fn new(inner: SelectorIter<'a, Impl>) -> Self {
+        let mut result = CombinatorIter(inner);
+        result.consume_non_combinators();
+        result
+    }
+
+    fn consume_non_combinators(&mut self) {
+        while self.0.next().is_some() {}
+    }
+}
+
+impl<'a, Impl: SelectorImpl> Iterator for CombinatorIter<'a, Impl> {
+    type Item = Combinator;
+    fn next(&mut self) -> Option<Self::Item> {
+        let result = self.0.next_sequence();
+        self.consume_non_combinators();
+        result
+    }
+}
+
 /// An iterator over all simple selectors belonging to ancestors.
 struct AncestorIter<'a, Impl: 'a + SelectorImpl>(SelectorIter<'a, Impl>);
 impl<'a, Impl: 'a + SelectorImpl> AncestorIter<'a, Impl> {
@@ -1022,6 +1347,292 @@ impl Combinator {
     }
 }
 
+/// An enum for the different types of :nth- pseudoclasses
+#[derive(Copy, Clone, Eq, PartialEq, ToShmem)]
+#[shmem(no_bounds)]
+pub enum NthType {
+    Child,
+    LastChild,
+    OnlyChild,
+    OfType,
+    LastOfType,
+    OnlyOfType,
+}
+
+impl NthType {
+    pub fn is_only(self) -> bool {
+        self == Self::OnlyChild || self == Self::OnlyOfType
+    }
+
+    pub fn is_of_type(self) -> bool {
+        self == Self::OfType || self == Self::LastOfType || self == Self::OnlyOfType
+    }
+
+    pub fn is_from_end(self) -> bool {
+        self == Self::LastChild || self == Self::LastOfType
+    }
+}
+
+/// The properties that comprise an :nth- pseudoclass as of Selectors 3 (e.g.,
+/// nth-child(An+B)).
+/// https://www.w3.org/TR/selectors-3/#nth-child-pseudo
+#[derive(Copy, Clone, Eq, PartialEq, ToShmem)]
+#[shmem(no_bounds)]
+pub struct NthSelectorData {
+    pub ty: NthType,
+    pub is_function: bool,
+    pub a: i32,
+    pub b: i32,
+}
+
+impl NthSelectorData {
+    /// Returns selector data for :only-{child,of-type}
+    #[inline]
+    pub const fn only(of_type: bool) -> Self {
+        Self {
+            ty: if of_type {
+                NthType::OnlyOfType
+            } else {
+                NthType::OnlyChild
+            },
+            is_function: false,
+            a: 0,
+            b: 1,
+        }
+    }
+
+    /// Returns selector data for :first-{child,of-type}
+    #[inline]
+    pub const fn first(of_type: bool) -> Self {
+        Self {
+            ty: if of_type {
+                NthType::OfType
+            } else {
+                NthType::Child
+            },
+            is_function: false,
+            a: 0,
+            b: 1,
+        }
+    }
+
+    /// Returns selector data for :last-{child,of-type}
+    #[inline]
+    pub const fn last(of_type: bool) -> Self {
+        Self {
+            ty: if of_type {
+                NthType::LastOfType
+            } else {
+                NthType::LastChild
+            },
+            is_function: false,
+            a: 0,
+            b: 1,
+        }
+    }
+
+    /// Writes the beginning of the selector.
+    #[inline]
+    fn write_start<W: fmt::Write>(&self, dest: &mut W) -> fmt::Result {
+        dest.write_str(match self.ty {
+            NthType::Child if self.is_function => ":nth-child(",
+            NthType::Child => ":first-child",
+            NthType::LastChild if self.is_function => ":nth-last-child(",
+            NthType::LastChild => ":last-child",
+            NthType::OfType if self.is_function => ":nth-of-type(",
+            NthType::OfType => ":first-of-type",
+            NthType::LastOfType if self.is_function => ":nth-last-of-type(",
+            NthType::LastOfType => ":last-of-type",
+            NthType::OnlyChild => ":only-child",
+            NthType::OnlyOfType => ":only-of-type",
+        })
+    }
+
+    /// Serialize <an+b> (part of the CSS Syntax spec, but currently only used here).
+    /// <https://drafts.csswg.org/css-syntax-3/#serialize-an-anb-value>
+    #[inline]
+    fn write_affine<W: fmt::Write>(&self, dest: &mut W) -> fmt::Result {
+        match (self.a, self.b) {
+            (0, 0) => dest.write_char('0'),
+
+            (1, 0) => dest.write_char('n'),
+            (-1, 0) => dest.write_str("-n"),
+            (_, 0) => write!(dest, "{}n", self.a),
+
+            (0, _) => write!(dest, "{}", self.b),
+            (1, _) => write!(dest, "n{:+}", self.b),
+            (-1, _) => write!(dest, "-n{:+}", self.b),
+            (_, _) => write!(dest, "{}n{:+}", self.a, self.b),
+        }
+    }
+}
+
+/// The properties that comprise an :nth- pseudoclass as of Selectors 4 (e.g.,
+/// nth-child(An+B [of S]?)).
+/// https://www.w3.org/TR/selectors-4/#nth-child-pseudo
+#[derive(Clone, Eq, PartialEq, ToShmem)]
+#[shmem(no_bounds)]
+pub struct NthOfSelectorData<Impl: SelectorImpl>(
+    #[shmem(field_bound)] ThinArc<NthSelectorData, Selector<Impl>>,
+);
+
+impl<Impl: SelectorImpl> NthOfSelectorData<Impl> {
+    /// Returns selector data for :nth-{,last-}{child,of-type}(An+B [of S])
+    #[inline]
+    pub fn new<I>(nth_data: &NthSelectorData, selectors: I) -> Self
+    where
+        I: Iterator<Item = Selector<Impl>> + ExactSizeIterator,
+    {
+        Self(ThinArc::from_header_and_iter(*nth_data, selectors))
+    }
+
+    /// Returns the An+B part of the selector
+    #[inline]
+    pub fn nth_data(&self) -> &NthSelectorData {
+        &self.0.header.header
+    }
+
+    /// Returns the selector list part of the selector
+    #[inline]
+    pub fn selectors(&self) -> &[Selector<Impl>] {
+        &self.0.slice
+    }
+}
+
+/// Flag indicating where a given relative selector's match would be contained.
+#[derive(Clone, Copy, Eq, PartialEq, ToShmem)]
+pub enum RelativeSelectorMatchHint {
+    /// Within this element's subtree.
+    InSubtree,
+    /// Within this element's direct children.
+    InChild,
+    /// This element's next sibling.
+    InNextSibling,
+    /// Within this element's next sibling's subtree.
+    InNextSiblingSubtree,
+    /// Within this element's subsequent siblings.
+    InSibling,
+    /// Across this element's subsequent siblings and their subtrees.
+    InSiblingSubtree,
+}
+
+/// Storage for a relative selector.
+#[derive(Clone, Eq, PartialEq, ToShmem)]
+#[shmem(no_bounds)]
+pub struct RelativeSelector<Impl: SelectorImpl> {
+    /// Match space constraining hint.
+    pub match_hint: RelativeSelectorMatchHint,
+    /// The selector. Guaranteed to contain `RelativeSelectorAnchor` and the relative combinator in parse order.
+    #[shmem(field_bound)]
+    pub selector: Selector<Impl>,
+}
+
+bitflags! {
+    /// Composition of combinators in a given selector, not traversing selectors of pseudoclasses.
+    struct CombinatorComposition: u8 {
+        const DESCENDANTS = 1 << 0;
+        const SIBLINGS = 1 << 1;
+    }
+}
+
+impl CombinatorComposition {
+    fn for_relative_selector<Impl: SelectorImpl>(inner_selector: &Selector<Impl>) -> Self {
+        let mut result = CombinatorComposition::empty();
+        for combinator in CombinatorIter::new(inner_selector.iter_skip_relative_selector_anchor()) {
+            match combinator {
+                Combinator::Descendant | Combinator::Child => {
+                    result.insert(CombinatorComposition::DESCENDANTS);
+                },
+                Combinator::NextSibling | Combinator::LaterSibling => {
+                    result.insert(CombinatorComposition::SIBLINGS);
+                },
+                Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
+                    continue
+                },
+            };
+            if result.is_all() {
+                break;
+            }
+        }
+        return result;
+    }
+}
+
+impl<Impl: SelectorImpl> RelativeSelector<Impl> {
+    fn from_selector_list(selector_list: SelectorList<Impl>) -> Box<[Self]> {
+        let vec: Vec<Self> = selector_list
+            .0
+            .into_iter()
+            .map(|selector| {
+                // It's more efficient to keep track of all this during the parse time, but that seems like a lot of special
+                // case handling for what it's worth.
+                if cfg!(debug_assertions) {
+                    let relative_selector_anchor = selector.iter_raw_parse_order_from(0).next();
+                    debug_assert!(
+                        relative_selector_anchor.is_some(),
+                        "Relative selector is empty"
+                    );
+                    debug_assert!(
+                        matches!(
+                            relative_selector_anchor.unwrap(),
+                            Component::RelativeSelectorAnchor
+                        ),
+                        "Relative selector anchor is missing"
+                    );
+                }
+                // Leave a hint for narrowing down the search space when we're matching.
+                let match_hint = match selector.combinator_at_parse_order(1) {
+                    Combinator::Descendant => RelativeSelectorMatchHint::InSubtree,
+                    Combinator::Child => {
+                        let composition = CombinatorComposition::for_relative_selector(&selector);
+                        if composition.is_empty() || composition == CombinatorComposition::SIBLINGS
+                        {
+                            RelativeSelectorMatchHint::InChild
+                        } else {
+                            // Technically, for any composition that consists of child combinators only,
+                            // the search space is depth-constrained, but it's probably not worth optimizing for.
+                            RelativeSelectorMatchHint::InSubtree
+                        }
+                    },
+                    Combinator::NextSibling => {
+                        let composition = CombinatorComposition::for_relative_selector(&selector);
+                        if composition.is_empty() {
+                            RelativeSelectorMatchHint::InNextSibling
+                        } else if composition == CombinatorComposition::SIBLINGS {
+                            RelativeSelectorMatchHint::InSibling
+                        } else if composition == CombinatorComposition::DESCENDANTS {
+                            // Match won't cross multiple siblings.
+                            RelativeSelectorMatchHint::InNextSiblingSubtree
+                        } else {
+                            RelativeSelectorMatchHint::InSiblingSubtree
+                        }
+                    },
+                    Combinator::LaterSibling => {
+                        let composition = CombinatorComposition::for_relative_selector(&selector);
+                        if composition.is_empty() || composition == CombinatorComposition::SIBLINGS
+                        {
+                            RelativeSelectorMatchHint::InSibling
+                        } else {
+                            // Even if the match may not cross multiple siblings, we have to look until
+                            // we find a match anyway.
+                            RelativeSelectorMatchHint::InSiblingSubtree
+                        }
+                    },
+                    Combinator::Part | Combinator::PseudoElement | Combinator::SlotAssignment => {
+                        debug_assert!(false, "Unexpected relative combinator");
+                        RelativeSelectorMatchHint::InSubtree
+                    },
+                };
+                RelativeSelector {
+                    match_hint,
+                    selector,
+                }
+            })
+            .collect();
+        vec.into_boxed_slice()
+    }
+}
+
 /// A CSS simple selector or combinator. We store both in the same enum for
 /// optimal packing and cache performance, see [1].
 ///
@@ -1030,17 +1641,6 @@ impl Combinator {
 #[cfg_attr(feature = "shmem", derive(ToShmem))]
 #[cfg_attr(feature = "shmem", shmem(no_bounds))]
 pub enum Component<Impl: SelectorImpl> {
-    Combinator(Combinator),
-
-    ExplicitAnyNamespace,
-    ExplicitNoNamespace,
-    DefaultNamespace(#[cfg_attr(feature = "shmem", shmem(field_bound))] Impl::NamespaceUrl),
-    Namespace(
-        #[cfg_attr(feature = "shmem", shmem(field_bound))] Impl::NamespacePrefix,
-        #[cfg_attr(feature = "shmem", shmem(field_bound))] Impl::NamespaceUrl,
-    ),
-
-    ExplicitUniversalType,
     LocalName(LocalName<Impl>),
 
     ID(#[cfg_attr(feature = "shmem", shmem(field_bound))] Impl::Identifier),
@@ -1058,26 +1658,28 @@ pub enum Component<Impl: SelectorImpl> {
         #[cfg_attr(feature = "shmem", shmem(field_bound))]
         value: Impl::AttrValue,
         case_sensitivity: ParsedCaseSensitivity,
-        never_matches: bool,
     },
     // Use a Box in the less common cases with more data to keep size_of::<Component>() small.
     AttributeOther(Box<AttrSelectorWithOptionalNamespace<Impl>>),
 
+    ExplicitUniversalType,
+    ExplicitAnyNamespace,
+
+    ExplicitNoNamespace,
+    DefaultNamespace(#[shmem(field_bound)] Impl::NamespaceUrl),
+    Namespace(
+        #[shmem(field_bound)] Impl::NamespacePrefix,
+        #[shmem(field_bound)] Impl::NamespaceUrl,
+    ),
+
     /// Pseudo-classes
     Negation(Box<[Selector<Impl>]>),
-    FirstChild,
-    LastChild,
-    OnlyChild,
     Root,
     Empty,
     Scope,
-    NthChild(i32, i32),
-    NthLastChild(i32, i32),
-    NthOfType(i32, i32),
-    NthLastOfType(i32, i32),
-    FirstOfType,
-    LastOfType,
-    OnlyOfType,
+    ParentSelector,
+    Nth(NthSelectorData),
+    NthOf(NthOfSelectorData<Impl>),
     NonTSPseudoClass(#[cfg_attr(feature = "shmem", shmem(field_bound))] Impl::NonTSPseudoClass),
     /// The ::slotted() pseudo-element:
     ///
@@ -1117,8 +1719,22 @@ pub enum Component<Impl: SelectorImpl> {
     ///
     /// Same comment as above re. the argument.
     Is(Box<[Selector<Impl>]>),
+    /// The `:has` pseudo-class.
+    ///
+    /// https://drafts.csswg.org/selectors/#has-pseudo
+    ///
+    /// Same comment as above re. the argument.
+    Has(Box<[RelativeSelector<Impl>]>),
     /// An implementation-dependent pseudo-element selector.
     PseudoElement(#[cfg_attr(feature = "shmem", shmem(field_bound))] Impl::PseudoElement),
+
+    Combinator(Combinator),
+
+    /// Used only for relative selectors, which starts with a combinator
+    /// (With an implied descendant combinator if not specified).
+    ///
+    /// https://drafts.csswg.org/selectors-4/#typedef-relative-selector
+    RelativeSelectorAnchor,
 }
 
 impl<Impl: SelectorImpl> Component<Impl> {
@@ -1219,11 +1835,7 @@ impl<Impl: SelectorImpl> Component<Impl> {
                     return false;
                 }
             },
-            AttributeInNoNamespace {
-                ref local_name,
-                never_matches,
-                ..
-            } if !never_matches => {
+            AttributeInNoNamespace { ref local_name, .. } => {
                 if !visitor.visit_attribute_selector(
                     &NamespaceConstraint::Specific(&namespace_empty_string::<Impl>()),
                     local_name,
@@ -1232,7 +1844,7 @@ impl<Impl: SelectorImpl> Component<Impl> {
                     return false;
                 }
             },
-            AttributeOther(ref attr_selector) if !attr_selector.never_matches => {
+            AttributeOther(ref attr_selector) => {
                 let empty_string;
                 let namespace = match attr_selector.namespace() {
                     Some(ns) => ns,
@@ -1255,9 +1867,15 @@ impl<Impl: SelectorImpl> Component<Impl> {
                     return false;
                 }
             },
-
             Negation(ref list) | Is(ref list) | Where(ref list) => {
-                if !visitor.visit_selector_list(&list) {
+                let list_kind = SelectorListKind::from_component(self);
+                debug_assert!(!list_kind.is_empty());
+                if !visitor.visit_selector_list(list_kind, &list) {
+                    return false;
+                }
+            },
+            NthOf(ref nth_of_data) => {
+                if !visitor.visit_selector_list(SelectorListKind::NTH_OF, nth_of_data.selectors()) {
                     return false;
                 }
             },
@@ -1281,7 +1899,12 @@ impl<Impl: SelectorImpl> Debug for Selector<Impl> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("Selector(")?;
         self.to_css(f)?;
-        write!(f, ", specificity = 0x{:x})", self.specificity())
+        write!(
+            f,
+            ", specificity = {:#x}, flags = {:?})",
+            self.specificity(),
+            self.flags()
+        )
     }
 }
 
@@ -1360,6 +1983,14 @@ impl<Impl: SelectorImpl> ToCss for Selector<Impl> {
 
             // https://drafts.csswg.org/cssom/#serializing-selectors
             if compound.is_empty() {
+                continue;
+            }
+            if let Component::RelativeSelectorAnchor = compound.first().unwrap() {
+                debug_assert!(
+                    compound.len() == 1,
+                    "RelativeLeft should only be a simple selector"
+                );
+                combinators.next().unwrap().to_css_relative(dest)?;
                 continue;
             }
 
@@ -1451,18 +2082,45 @@ impl<Impl: SelectorImpl> ToCss for Selector<Impl> {
     }
 }
 
+impl Combinator {
+    fn to_css_internal<W>(&self, dest: &mut W, prefix_space: bool) -> fmt::Result
+    where
+        W: fmt::Write,
+    {
+        if matches!(
+            *self,
+            Combinator::PseudoElement | Combinator::Part | Combinator::SlotAssignment
+        ) {
+            return Ok(());
+        }
+        if prefix_space {
+            dest.write_char(' ')?;
+        }
+        match *self {
+            Combinator::Child => dest.write_str("> "),
+            Combinator::Descendant => Ok(()),
+            Combinator::NextSibling => dest.write_str("+ "),
+            Combinator::LaterSibling => dest.write_str("~ "),
+            Combinator::PseudoElement | Combinator::Part | Combinator::SlotAssignment => unsafe {
+                debug_unreachable!("Already handled")
+            },
+        }
+    }
+
+    fn to_css_relative<W>(&self, dest: &mut W) -> fmt::Result
+    where
+        W: fmt::Write,
+    {
+        self.to_css_internal(dest, false)
+    }
+}
+
 impl ToCss for Combinator {
     fn to_css<W>(&self, dest: &mut W) -> fmt::Result
     where
         W: fmt::Write,
     {
-        match *self {
-            Combinator::Child => dest.write_str(" > "),
-            Combinator::Descendant => dest.write_str(" "),
-            Combinator::NextSibling => dest.write_str(" + "),
-            Combinator::LaterSibling => dest.write_str(" ~ "),
-            Combinator::PseudoElement | Combinator::Part | Combinator::SlotAssignment => Ok(()),
-        }
+        self.to_css_internal(dest, true)
     }
 }
 
@@ -1472,26 +2130,6 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
         W: fmt::Write,
     {
         use self::Component::*;
-
-        /// Serialize <an+b> values (part of the CSS Syntax spec, but currently only used here).
-        /// <https://drafts.csswg.org/css-syntax-3/#serialize-an-anb-value>
-        fn write_affine<W>(dest: &mut W, a: i32, b: i32) -> fmt::Result
-        where
-            W: fmt::Write,
-        {
-            match (a, b) {
-                (0, 0) => dest.write_char('0'),
-
-                (1, 0) => dest.write_char('n'),
-                (-1, 0) => dest.write_str("-n"),
-                (_, 0) => write!(dest, "{}n", a),
-
-                (0, _) => write!(dest, "{}", b),
-                (1, _) => write!(dest, "n{:+}", b),
-                (-1, _) => write!(dest, "-n{:+}", b),
-                (_, _) => write!(dest, "{}n{:+}", a, b),
-            }
-        }
 
         match *self {
             Combinator(ref c) => c.to_css(dest),
@@ -1559,12 +2197,10 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
             AttributeOther(ref attr_selector) => attr_selector.to_css(dest),
 
             // Pseudo-classes
-            FirstChild => dest.write_str(":first-child"),
-            LastChild => dest.write_str(":last-child"),
-            OnlyChild => dest.write_str(":only-child"),
             Root => dest.write_str(":root"),
             Empty => dest.write_str(":empty"),
             Scope => dest.write_str(":scope"),
+            ParentSelector => dest.write_char('&'),
             Host(ref selector) => {
                 dest.write_str(":host")?;
                 if let Some(ref selector) = *selector {
@@ -1574,18 +2210,32 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
                 }
                 Ok(())
             },
-            FirstOfType => dest.write_str(":first-of-type"),
-            LastOfType => dest.write_str(":last-of-type"),
-            OnlyOfType => dest.write_str(":only-of-type"),
-            NthChild(a, b) | NthLastChild(a, b) | NthOfType(a, b) | NthLastOfType(a, b) => {
-                match *self {
-                    NthChild(_, _) => dest.write_str(":nth-child(")?,
-                    NthLastChild(_, _) => dest.write_str(":nth-last-child(")?,
-                    NthOfType(_, _) => dest.write_str(":nth-of-type(")?,
-                    NthLastOfType(_, _) => dest.write_str(":nth-last-of-type(")?,
-                    _ => unreachable!(),
+            Nth(ref nth_data) => {
+                nth_data.write_start(dest)?;
+                if nth_data.is_function {
+                    nth_data.write_affine(dest)?;
+                    dest.write_char(')')?;
                 }
-                write_affine(dest, a, b)?;
+                Ok(())
+            },
+            NthOf(ref nth_of_data) => {
+                let nth_data = nth_of_data.nth_data();
+                nth_data.write_start(dest)?;
+                debug_assert!(
+                    nth_data.is_function,
+                    "A selector must be a function to hold An+B notation"
+                );
+                nth_data.write_affine(dest)?;
+                debug_assert!(
+                    matches!(nth_data.ty, NthType::Child | NthType::LastChild),
+                    "Only :nth-child or :nth-last-child can be of a selector list"
+                );
+                debug_assert!(
+                    !nth_of_data.selectors().is_empty(),
+                    "The selector list should not be empty"
+                );
+                dest.write_str(" of ")?;
+                serialize_selector_list(nth_of_data.selectors().iter(), dest)?;
                 dest.write_char(')')
             },
             Is(ref list) | Where(ref list) | Negation(ref list) => {
@@ -1598,7 +2248,20 @@ impl<Impl: SelectorImpl> ToCss for Component<Impl> {
                 serialize_selector_list(list.iter(), dest)?;
                 dest.write_str(")")
             },
+            Has(ref list) => {
+                dest.write_str(":has(")?;
+                let mut first = true;
+                for RelativeSelector { ref selector, .. } in list.iter() {
+                    if !first {
+                        dest.write_str(", ")?;
+                    }
+                    first = false;
+                    selector.to_css(dest)?;
+                }
+                dest.write_str(")")
+            },
             NonTSPseudoClass(ref pseudo) => pseudo.to_css(dest),
+            RelativeSelectorAnchor => Ok(()),
         }
     }
 }
@@ -1623,11 +2286,11 @@ impl<Impl: SelectorImpl> ToCss for AttrSelectorWithOptionalNamespace<Impl> {
             ParsedAttrSelectorOperation::WithValue {
                 operator,
                 case_sensitivity,
-                ref expected_value,
+                ref value,
             } => {
                 operator.to_css(dest)?;
                 dest.write_char('"')?;
-                expected_value.to_css(dest)?;
+                value.to_css(dest)?;
                 dest.write_char('"')?;
                 match case_sensitivity {
                     ParsedCaseSensitivity::CaseSensitive |
@@ -1658,16 +2321,19 @@ fn parse_selector<'i, 't, P, Impl>(
     parser: &P,
     input: &mut CssParser<'i, 't>,
     mut state: SelectorParsingState,
+    parse_relative: ParseRelative,
 ) -> Result<Selector<Impl>, ParseError<'i, P::Error>>
 where
     P: Parser<'i, Impl = Impl>,
     Impl: SelectorImpl,
 {
     let mut builder = SelectorBuilder::default();
-
-    let mut has_pseudo_element = false;
-    let mut slotted = false;
-    let mut part = false;
+    if parse_relative == ParseRelative::Yes {
+        builder.push_simple_selector(Component::RelativeSelectorAnchor);
+        // Do we see a combinator? If so, push that. Otherwise, push a descendant combinator.
+        builder
+            .push_combinator(parse_combinator::<P, Impl>(input).unwrap_or(Combinator::Descendant));
+    }
     'outer_loop: loop {
         // Parse a sequence of simple selectors.
         let empty = parse_compound_selector(parser, &mut state, input, &mut builder)?;
@@ -1680,44 +2346,19 @@ where
         }
 
         if state.intersects(SelectorParsingState::AFTER_PSEUDO) {
-            has_pseudo_element = state.intersects(SelectorParsingState::AFTER_PSEUDO_ELEMENT);
-            slotted = state.intersects(SelectorParsingState::AFTER_SLOTTED);
-            part = state.intersects(SelectorParsingState::AFTER_PART);
-            debug_assert!(has_pseudo_element || slotted || part);
+            debug_assert!(state.intersects(
+                SelectorParsingState::AFTER_PSEUDO_ELEMENT |
+                    SelectorParsingState::AFTER_SLOTTED |
+                    SelectorParsingState::AFTER_PART
+            ));
             break;
         }
 
-        // Parse a combinator.
-        let combinator;
-        let mut any_whitespace = false;
-        loop {
-            let before_this_token = input.state();
-            match input.next_including_whitespace() {
-                Err(_e) => break 'outer_loop,
-                Ok(&Token::WhiteSpace(_)) => any_whitespace = true,
-                Ok(&Token::Delim('>')) => {
-                    combinator = Combinator::Child;
-                    break;
-                },
-                Ok(&Token::Delim('+')) => {
-                    combinator = Combinator::NextSibling;
-                    break;
-                },
-                Ok(&Token::Delim('~')) => {
-                    combinator = Combinator::LaterSibling;
-                    break;
-                },
-                Ok(_) => {
-                    input.reset(&before_this_token);
-                    if any_whitespace {
-                        combinator = Combinator::Descendant;
-                        break;
-                    } else {
-                        break 'outer_loop;
-                    }
-                },
-            }
-        }
+        let combinator = if let Ok(c) = parse_combinator::<P, Impl>(input) {
+            c
+        } else {
+            break 'outer_loop;
+        };
 
         if !state.allows_combinators() {
             return Err(input.new_custom_error(SelectorParseErrorKind::InvalidState));
@@ -1725,8 +2366,35 @@ where
 
         builder.push_combinator(combinator);
     }
+    return Ok(Selector(builder.build()));
+}
 
-    Ok(Selector(builder.build(has_pseudo_element, slotted, part)))
+fn parse_combinator<'i, 't, P, Impl>(input: &mut CssParser<'i, 't>) -> Result<Combinator, ()> {
+    let mut any_whitespace = false;
+    loop {
+        let before_this_token = input.state();
+        match input.next_including_whitespace() {
+            Err(_e) => return Err(()),
+            Ok(&Token::WhiteSpace(_)) => any_whitespace = true,
+            Ok(&Token::Delim('>')) => {
+                return Ok(Combinator::Child);
+            },
+            Ok(&Token::Delim('+')) => {
+                return Ok(Combinator::NextSibling);
+            },
+            Ok(&Token::Delim('~')) => {
+                return Ok(Combinator::LaterSibling);
+            },
+            Ok(_) => {
+                input.reset(&before_this_token);
+                if any_whitespace {
+                    return Ok(Combinator::Descendant);
+                } else {
+                    return Err(());
+                }
+            },
+        }
+    }
 }
 
 impl<Impl: SelectorImpl> Selector<Impl> {
@@ -1739,7 +2407,12 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     where
         P: Parser<'i, Impl = Impl>,
     {
-        parse_selector(parser, input, SelectorParsingState::empty())
+        parse_selector(
+            parser,
+            input,
+            SelectorParsingState::empty(),
+            ParseRelative::No,
+        )
     }
 }
 
@@ -1878,9 +2551,9 @@ where
     };
 
     let start = input.state();
-    // FIXME: remove clone() when lifetimes are non-lexical
-    match input.next_including_whitespace().map(|t| t.clone()) {
+    match input.next_including_whitespace() {
         Ok(Token::Ident(value)) => {
+            let value = value.clone();
             let after_ident = input.state();
             match input.next_including_whitespace() {
                 Ok(&Token::Delim('|')) => {
@@ -1908,28 +2581,25 @@ where
         },
         Ok(Token::Delim('*')) => {
             let after_star = input.state();
-            // FIXME: remove clone() when lifetimes are non-lexical
-            match input.next_including_whitespace().map(|t| t.clone()) {
-                Ok(Token::Delim('|')) => {
+            match input.next_including_whitespace() {
+                Ok(&Token::Delim('|')) => {
                     explicit_namespace(input, QNamePrefix::ExplicitAnyNamespace)
                 },
-                result => {
+                _ if !in_attr_selector => {
                     input.reset(&after_star);
-                    if in_attr_selector {
-                        match result {
-                            Ok(t) => Err(after_star
-                                .source_location()
-                                .new_custom_error(SelectorParseErrorKind::ExpectedBarInAttr(t))),
-                            Err(e) => Err(e.into()),
-                        }
-                    } else {
-                        default_namespace(None)
-                    }
+                    default_namespace(None)
+                },
+                result => {
+                    let t = result?;
+                    Err(after_star
+                        .source_location()
+                        .new_custom_error(SelectorParseErrorKind::ExpectedBarInAttr(t.clone())))
                 },
             }
         },
         Ok(Token::Delim('|')) => explicit_namespace(input, QNamePrefix::ExplicitNoNamespace),
         Ok(t) => {
+            let t = t.clone();
             input.reset(&start);
             Ok(OptionalQName::None(t))
         },
@@ -1988,7 +2658,6 @@ where
                         local_name,
                         local_name_lower,
                         operation: ParsedAttrSelectorOperation::Exists,
-                        never_matches: false,
                     },
                 )));
             } else {
@@ -2026,18 +2695,8 @@ where
         }) => return Err(location.new_custom_error(SelectorParseErrorKind::BadValueInAttr(t))),
         Err(e) => return Err(e.into()),
     };
-    let never_matches = match operator {
-        AttrSelectorOperator::Equal | AttrSelectorOperator::DashMatch => false,
-
-        AttrSelectorOperator::Includes => value.is_empty() || value.contains(SELECTOR_WHITESPACE),
-
-        AttrSelectorOperator::Prefix |
-        AttrSelectorOperator::Substring |
-        AttrSelectorOperator::Suffix => value.is_empty(),
-    };
 
     let attribute_flags = parse_attribute_flags(input)?;
-
     let value = value.as_ref().into();
     let local_name_lower;
     let local_name_is_ascii_lowercase;
@@ -2056,11 +2715,10 @@ where
                 namespace,
                 local_name,
                 local_name_lower,
-                never_matches,
                 operation: ParsedAttrSelectorOperation::WithValue {
                     operator,
                     case_sensitivity,
-                    expected_value: value,
+                    value,
                 },
             },
         )))
@@ -2070,7 +2728,6 @@ where
             operator,
             value,
             case_sensitivity,
-            never_matches,
         })
     }
 }
@@ -2150,7 +2807,8 @@ where
         state |
             SelectorParsingState::SKIP_DEFAULT_NAMESPACE |
             SelectorParsingState::DISALLOW_PSEUDOS,
-        ParseErrorRecovery::DiscardList,
+        ForgivingParsing::No,
+        ParseRelative::No,
     )?;
 
     Ok(Component::Negation(list.0.into_vec().into_boxed_slice()))
@@ -2255,7 +2913,7 @@ where
     Ok(empty)
 }
 
-fn parse_is_or_where<'i, 't, P, Impl>(
+fn parse_is_where<'i, 't, P, Impl>(
     parser: &P,
     input: &mut CssParser<'i, 't>,
     state: SelectorParsingState,
@@ -2277,9 +2935,40 @@ where
         state |
             SelectorParsingState::SKIP_DEFAULT_NAMESPACE |
             SelectorParsingState::DISALLOW_PSEUDOS,
-        ParseErrorRecovery::IgnoreInvalidSelector,
+        ForgivingParsing::Yes,
+        ParseRelative::No,
     )?;
     Ok(component(inner.0.into_vec().into_boxed_slice()))
+}
+
+fn parse_has<'i, 't, P, Impl>(
+    parser: &P,
+    input: &mut CssParser<'i, 't>,
+    state: SelectorParsingState,
+) -> Result<Component<Impl>, ParseError<'i, P::Error>>
+where
+    P: Parser<'i, Impl = Impl>,
+    Impl: SelectorImpl,
+{
+    debug_assert!(parser.parse_has());
+    if state.intersects(SelectorParsingState::DISALLOW_RELATIVE_SELECTOR) {
+        return Err(input.new_custom_error(SelectorParseErrorKind::InvalidState));
+    }
+    // Nested `:has()` is disallowed, mark it as such.
+    // Note: The spec defines ":has-allowed pseudo-element," but there's no
+    // pseudo-element defined as such at the moment.
+    // https://w3c.github.io/csswg-drafts/selectors-4/#has-allowed-pseudo-element
+    let inner = SelectorList::parse_with_state(
+        parser,
+        input,
+        state |
+            SelectorParsingState::SKIP_DEFAULT_NAMESPACE |
+            SelectorParsingState::DISALLOW_PSEUDOS |
+            SelectorParsingState::DISALLOW_RELATIVE_SELECTOR,
+        ForgivingParsing::No,
+        ParseRelative::Yes,
+    )?;
+    Ok(Component::Has(RelativeSelector::from_selector_list(inner)))
 }
 
 fn parse_functional_pseudo_class<'i, 't, P, Impl>(
@@ -2293,12 +2982,13 @@ where
     Impl: SelectorImpl,
 {
     match_ignore_ascii_case! { &name,
-        "nth-child" => return parse_nth_pseudo_class(parser, input, state, Component::NthChild),
-        "nth-of-type" => return parse_nth_pseudo_class(parser, input, state, Component::NthOfType),
-        "nth-last-child" => return parse_nth_pseudo_class(parser, input, state, Component::NthLastChild),
-        "nth-last-of-type" => return parse_nth_pseudo_class(parser, input, state, Component::NthLastOfType),
-        "is" if parser.parse_is_and_where() => return parse_is_or_where(parser, input, state, Component::Is),
-        "where" if parser.parse_is_and_where() => return parse_is_or_where(parser, input, state, Component::Where),
+        "nth-child" => return parse_nth_pseudo_class(parser, input, state, NthType::Child),
+        "nth-of-type" => return parse_nth_pseudo_class(parser, input, state, NthType::OfType),
+        "nth-last-child" => return parse_nth_pseudo_class(parser, input, state, NthType::LastChild),
+        "nth-last-of-type" => return parse_nth_pseudo_class(parser, input, state, NthType::LastOfType),
+        "is" if parser.parse_is_and_where() => return parse_is_where(parser, input, state, Component::Is),
+        "where" if parser.parse_is_and_where() => return parse_is_where(parser, input, state, Component::Where),
+        "has" if parser.parse_has() => return parse_has(parser, input, state),
         "host" => {
             if !state.allows_tree_structural_pseudo_classes() {
                 return Err(input.new_custom_error(SelectorParseErrorKind::InvalidState));
@@ -2312,7 +3002,7 @@ where
     }
 
     if parser.parse_is_and_where() && parser.is_is_alias(&name) {
-        return parse_is_or_where(parser, input, state, Component::Is);
+        return parse_is_where(parser, input, state, Component::Is);
     }
 
     if !state.allows_custom_functional_pseudo_classes() {
@@ -2322,22 +3012,49 @@ where
     P::parse_non_ts_functional_pseudo_class(parser, name, input).map(Component::NonTSPseudoClass)
 }
 
-fn parse_nth_pseudo_class<'i, 't, P, Impl, F>(
-    _: &P,
+fn parse_nth_pseudo_class<'i, 't, P, Impl>(
+    parser: &P,
     input: &mut CssParser<'i, 't>,
     state: SelectorParsingState,
-    selector: F,
+    ty: NthType,
 ) -> Result<Component<Impl>, ParseError<'i, P::Error>>
 where
     P: Parser<'i, Impl = Impl>,
     Impl: SelectorImpl,
-    F: FnOnce(i32, i32) -> Component<Impl>,
 {
     if !state.allows_tree_structural_pseudo_classes() {
         return Err(input.new_custom_error(SelectorParseErrorKind::InvalidState));
     }
     let (a, b) = parse_nth(input)?;
-    Ok(selector(a, b))
+    let nth_data = NthSelectorData {
+        ty,
+        is_function: true,
+        a,
+        b,
+    };
+    if !parser.parse_nth_child_of() || ty.is_of_type() {
+        return Ok(Component::Nth(nth_data));
+    }
+
+    // Try to parse "of <selector-list>".
+    if input.try_parse(|i| i.expect_ident_matching("of")).is_err() {
+        return Ok(Component::Nth(nth_data));
+    }
+    // Whitespace between "of" and the selector list is optional
+    // https://github.com/w3c/csswg-drafts/issues/8285
+    let mut selectors = SelectorList::parse_with_state(
+        parser,
+        input,
+        state |
+            SelectorParsingState::SKIP_DEFAULT_NAMESPACE |
+            SelectorParsingState::DISALLOW_PSEUDOS,
+        ForgivingParsing::No,
+        ParseRelative::No,
+    )?;
+    Ok(Component::NthOf(NthOfSelectorData::new(
+        &nth_data,
+        selectors.0.drain(..),
+    )))
 }
 
 /// Returns whether the name corresponds to a CSS2 pseudo-element that
@@ -2382,20 +3099,23 @@ where
             let id = Component::ID(id.as_ref().into());
             SimpleSelectorParseResult::SimpleSelector(id)
         },
-        Token::Delim('.') => {
+        Token::Delim(delim) if delim == '.' || (delim == '&' && parser.parse_parent_selector()) => {
             if state.intersects(SelectorParsingState::AFTER_PSEUDO) {
                 return Err(input.new_custom_error(SelectorParseErrorKind::InvalidState));
             }
             let location = input.current_source_location();
-            let class = match *input.next_including_whitespace()? {
-                Token::Ident(ref class) => class,
-                ref t => {
-                    let e = SelectorParseErrorKind::ClassNeedsIdent(t.clone());
-                    return Err(location.new_custom_error(e));
-                },
-            };
-            let class = Component::Class(class.as_ref().into());
-            SimpleSelectorParseResult::SimpleSelector(class)
+            SimpleSelectorParseResult::SimpleSelector(if delim == '&' {
+                Component::ParentSelector
+            } else {
+                let class = match *input.next_including_whitespace()? {
+                    Token::Ident(ref class) => class,
+                    ref t => {
+                        let e = SelectorParseErrorKind::ClassNeedsIdent(t.clone());
+                        return Err(location.new_custom_error(e));
+                    },
+                };
+                Component::Class(class.as_ref().into())
+            })
         },
         Token::SquareBracketBlock => {
             if state.intersects(SelectorParsingState::AFTER_PSEUDO) {
@@ -2498,16 +3218,16 @@ where
 
     if state.allows_tree_structural_pseudo_classes() {
         match_ignore_ascii_case! { &name,
-            "first-child" => return Ok(Component::FirstChild),
-            "last-child" => return Ok(Component::LastChild),
-            "only-child" => return Ok(Component::OnlyChild),
+            "first-child" => return Ok(Component::Nth(NthSelectorData::first(/* of_type = */ false))),
+            "last-child" => return Ok(Component::Nth(NthSelectorData::last(/* of_type = */ false))),
+            "only-child" => return Ok(Component::Nth(NthSelectorData::only(/* of_type = */ false))),
             "root" => return Ok(Component::Root),
             "empty" => return Ok(Component::Empty),
             "scope" => return Ok(Component::Scope),
             "host" if P::parse_host(parser) => return Ok(Component::Host(None)),
-            "first-of-type" => return Ok(Component::FirstOfType),
-            "last-of-type" => return Ok(Component::LastOfType),
-            "only-of-type" => return Ok(Component::OnlyOfType),
+            "first-of-type" => return Ok(Component::Nth(NthSelectorData::first(/* of_type = */ true))),
+            "last-of-type" => return Ok(Component::Nth(NthSelectorData::last(/* of_type = */ true))),
+            "only-of-type" => return Ok(Component::Nth(NthSelectorData::only(/* of_type = */ true))),
             _ => {},
         }
     }
@@ -2542,6 +3262,7 @@ pub mod tests {
     pub enum PseudoElement {
         Before,
         After,
+        Highlight(String),
     }
 
     impl parser::PseudoElement for PseudoElement {
@@ -2595,6 +3316,11 @@ pub mod tests {
             match *self {
                 PseudoElement::Before => dest.write_str("::before"),
                 PseudoElement::After => dest.write_str("::after"),
+                PseudoElement::Highlight(ref name) => {
+                    dest.write_str("::highlight(")?;
+                    serialize_identifier(&name, dest)?;
+                    dest.write_char(')')
+                },
             }
         }
     }
@@ -2618,7 +3344,7 @@ pub mod tests {
     }
 
     impl SelectorImpl for DummySelectorImpl {
-        type ExtraMatchingData = ();
+        type ExtraMatchingData<'a> = std::marker::PhantomData<&'a ()>;
         type AttrValue = DummyAttrValue;
         type Identifier = DummyAtom;
         type LocalName = DummyAtom;
@@ -2682,7 +3408,19 @@ pub mod tests {
             true
         }
 
+        fn parse_nth_child_of(&self) -> bool {
+            true
+        }
+
         fn parse_is_and_where(&self) -> bool {
+            true
+        }
+
+        fn parse_has(&self) -> bool {
+            true
+        }
+
+        fn parse_parent_selector(&self) -> bool {
             true
         }
 
@@ -2743,6 +3481,22 @@ pub mod tests {
             )
         }
 
+        fn parse_functional_pseudo_element<'t>(
+            &self,
+            name: CowRcStr<'i>,
+            parser: &mut CssParser<'i, 't>,
+        ) -> Result<PseudoElement, SelectorParseError<'i>> {
+            match_ignore_ascii_case! {&name,
+                "highlight" => return Ok(PseudoElement::Highlight(parser.expect_ident()?.as_ref().to_owned())),
+                _ => {}
+            }
+            Err(
+                parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+                    name,
+                )),
+            )
+        }
+
         fn default_namespace(&self) -> Option<DummyAtom> {
             self.default_ns.clone()
         }
@@ -2780,12 +3534,11 @@ pub mod tests {
         let mut parser_input = ParserInput::new(input);
         let result = SelectorList::parse(parser, &mut CssParser::new(&mut parser_input));
         if let Ok(ref selectors) = result {
-            assert_eq!(selectors.0.len(), 1);
             // We can't assume that the serialized parsed selector will equal
             // the input; for example, if there is no default namespace, '*|foo'
             // should serialize to 'foo'.
             assert_eq!(
-                selectors.0[0].to_css_string(),
+                selectors.to_css_string(),
                 match expected {
                     Some(x) => x,
                     None => input,
@@ -3135,7 +3888,6 @@ pub mod tests {
                     local_name: DummyAtom::from("attr"),
                     operator: AttrSelectorOperator::DashMatch,
                     value: DummyAttrValue::from("foo"),
-                    never_matches: false,
                     case_sensitivity: ParsedCaseSensitivity::CaseSensitive,
                 }],
                 specificity(0, 1, 0),
@@ -3271,6 +4023,8 @@ pub mod tests {
             )]))
         );
 
+        assert!(parse("::highlight(foo)").is_ok());
+
         assert!(parse("::slotted()").is_err());
         assert!(parse("::slotted(div)").is_ok());
         assert!(parse("::slotted(div).foo").is_err());
@@ -3293,6 +4047,43 @@ pub mod tests {
         assert!(parse("foo:where()").is_ok());
         assert!(parse("foo:where(div, foo, .bar baz)").is_ok());
         assert!(parse_expected("foo:where(::before)", Some("foo:where()")).is_ok());
+    }
+
+    #[test]
+    fn parent_selector() {
+        assert!(parse("foo &").is_ok());
+        assert_eq!(
+            parse("#foo &.bar"),
+            Ok(SelectorList::from_vec(vec![Selector::from_vec(
+                vec![
+                    Component::ID(DummyAtom::from("foo")),
+                    Component::Combinator(Combinator::Descendant),
+                    Component::ParentSelector,
+                    Component::Class(DummyAtom::from("bar")),
+                ],
+                (1 << 20) + (1 << 10) + (0 << 0),
+                SelectorFlags::HAS_PARENT
+            )]))
+        );
+
+        let parent = parse(".bar, div .baz").unwrap();
+        let child = parse("#foo &.bar").unwrap();
+        assert_eq!(
+            SelectorList::from_vec(vec![child.0[0].replace_parent_selector(&parent.0)]),
+            parse("#foo :is(.bar, div .baz).bar").unwrap()
+        );
+
+        let has_child = parse("#foo:has(&.bar)").unwrap();
+        assert_eq!(
+            SelectorList::from_vec(vec![has_child.0[0].replace_parent_selector(&parent.0)]),
+            parse("#foo:has(:is(.bar, div .baz).bar)").unwrap()
+        );
+
+        let child = parse("#foo").unwrap();
+        assert_eq!(
+            SelectorList::from_vec(vec![child.0[0].replace_parent_selector(&parent.0)]),
+            parse(":is(.bar, div .baz) #foo").unwrap()
+        );
     }
 
     #[test]

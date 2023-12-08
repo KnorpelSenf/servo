@@ -103,13 +103,13 @@ def update_tests(**kwargs) -> int:
         if key not in args or args[key] is None:
             args[key] = value
 
-    set_if_none(kwargs, "product", "servo")
     set_if_none(kwargs, "config", os.path.join(WPT_PATH, "config.ini"))
+    kwargs["product"] = "servo"
     kwargs["store_state"] = False
 
     wptcommandline.set_from_config(kwargs)
     if hasattr(wptcommandline, 'check_paths'):
-        wptcommandline.check_paths(kwargs)
+        wptcommandline.check_paths(kwargs["test_paths"])
 
     if kwargs.pop("legacy_layout"):
         update_args_for_legacy_layout(kwargs)

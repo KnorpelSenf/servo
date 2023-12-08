@@ -51,10 +51,10 @@ use crate::dom::bindings::codegen::Bindings::HTMLMediaElementBinding::{
 use crate::dom::bindings::codegen::Bindings::HTMLSourceElementBinding::HTMLSourceElementMethods;
 use crate::dom::bindings::codegen::Bindings::MediaErrorBinding::MediaErrorConstants::*;
 use crate::dom::bindings::codegen::Bindings::MediaErrorBinding::MediaErrorMethods;
-use crate::dom::bindings::codegen::Bindings::NavigatorBinding::NavigatorBinding::NavigatorMethods;
-use crate::dom::bindings::codegen::Bindings::NodeBinding::NodeBinding::NodeMethods;
+use crate::dom::bindings::codegen::Bindings::NavigatorBinding::Navigator_Binding::NavigatorMethods;
+use crate::dom::bindings::codegen::Bindings::NodeBinding::Node_Binding::NodeMethods;
 use crate::dom::bindings::codegen::Bindings::TextTrackBinding::{TextTrackKind, TextTrackMode};
-use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowBinding::WindowMethods;
+use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
 use crate::dom::bindings::codegen::InheritTypes::{
     ElementTypeId, HTMLElementTypeId, HTMLMediaElementTypeId, NodeTypeId,
 };
@@ -282,7 +282,7 @@ impl VideoFrameRenderer for MediaFrameRenderer {
     }
 }
 
-#[unrooted_must_root_lint::must_root]
+#[crown::unrooted_must_root_lint::must_root]
 #[derive(JSTraceable, MallocSizeOf)]
 enum SrcObject {
     MediaStream(Dom<MediaStream>),
@@ -290,7 +290,7 @@ enum SrcObject {
 }
 
 impl From<MediaStreamOrBlob> for SrcObject {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn from(src_object: MediaStreamOrBlob) -> SrcObject {
         match src_object {
             MediaStreamOrBlob::Blob(blob) => SrcObject::Blob(Dom::from_ref(&*blob)),
@@ -1207,9 +1207,9 @@ impl HTMLMediaElement {
     /// does not take a list of promises to fulfill. Callers cannot just pop
     /// the front list off of `in_flight_play_promises_queue` and later fulfill
     /// the promises because that would mean putting
-    /// `#[allow(unrooted_must_root)]` on even more functions, potentially
+    /// `#[allow(crown::unrooted_must_root)]` on even more functions, potentially
     /// hiding actual safety bugs.
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn fulfill_in_flight_play_promises<F>(&self, f: F)
     where
         F: FnOnce(),

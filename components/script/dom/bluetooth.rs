@@ -13,7 +13,7 @@ use crate::dom::bindings::codegen::Bindings::BluetoothBinding::BluetoothDataFilt
 use crate::dom::bindings::codegen::Bindings::BluetoothBinding::{BluetoothMethods, RequestDeviceOptions};
 use crate::dom::bindings::codegen::Bindings::BluetoothBinding::BluetoothLEScanFilterInit;
 use crate::dom::bindings::codegen::Bindings::BluetoothPermissionResultBinding::BluetoothPermissionDescriptor;
-use crate::dom::bindings::codegen::Bindings::BluetoothRemoteGATTServerBinding::BluetoothRemoteGATTServerBinding::
+use crate::dom::bindings::codegen::Bindings::BluetoothRemoteGATTServerBinding::BluetoothRemoteGATTServer_Binding::
 BluetoothRemoteGATTServerMethods;
 use crate::dom::bindings::codegen::Bindings::PermissionStatusBinding::{PermissionName, PermissionState};
 use crate::dom::bindings::codegen::UnionTypes::{ArrayBufferViewOrArrayBuffer, StringOrUnsignedLong};
@@ -113,7 +113,7 @@ impl<T> BluetoothContext<T>
 where
     T: AsyncBluetoothListener + DomObject,
 {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn response(&mut self, response: BluetoothResponseResult) {
         let promise = self.promise.take().expect("bt promise is missing").root();
 
@@ -737,7 +737,7 @@ impl PermissionAlgorithm for Bluetooth {
         // NOTE: Step 3. is in BluetoothPermissionResult's `handle_response` function.
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     // https://webbluetoothcg.github.io/web-bluetooth/#revoke-bluetooth-access
     fn permission_revoke(
         _descriptor: &BluetoothPermissionDescriptor,

@@ -13,9 +13,10 @@ use webgpu::wgt;
 
 use super::bindings::like::Setlike;
 use crate::dom::bindings::cell::DomRefCell;
-use crate::dom::bindings::codegen::Bindings::GPUAdapterBinding::GPUFeatureName;
-use crate::dom::bindings::codegen::Bindings::GPUAdapterBinding::GPUFeatureNameValues::pairs;
-use crate::dom::bindings::codegen::Bindings::GPUSupportedFeaturesBinding::GPUSupportedFeaturesMethods;
+use crate::dom::bindings::codegen::Bindings::WebGPUBinding::GPUFeatureNameValues::pairs;
+use crate::dom::bindings::codegen::Bindings::WebGPUBinding::{
+    GPUFeatureName, GPUSupportedFeaturesMethods,
+};
 use crate::dom::bindings::error::Fallible;
 use crate::dom::bindings::reflector::{reflect_dom_object_with_proto, Reflector};
 use crate::dom::bindings::root::DomRoot;
@@ -125,7 +126,7 @@ impl FromStr for GPUFeatureName {
 }
 
 // this error is wrong because if we inline Self::Key and Self::Value all errors are gone
-#[allow(unrooted_must_root)]
+#[allow(crown::unrooted_must_root)]
 impl Setlike for GPUSupportedFeatures {
     type Key = DOMString;
 

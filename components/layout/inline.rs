@@ -1760,7 +1760,10 @@ impl Flow for InlineFlow {
                         first_fragment.style.logical_border_width())
                     .start;
                     containing_block_positions.push(
-                        padding_box_origin.to_physical(self.base.writing_mode, container_size),
+                        // TODO(servo#30577) revert once underlying bug is fixed
+                        // padding_box_origin.to_physical(self.base.writing_mode, container_size),
+                        padding_box_origin
+                            .to_physical_or_warn(self.base.writing_mode, container_size),
                     );
                 },
                 SpecificFragmentInfo::InlineBlock(_) if fragment.is_positioned() => {
@@ -1879,7 +1882,7 @@ impl Flow for InlineFlow {
         for fragment in self.fragments.fragments.iter_mut() {
             // If a particular fragment would establish a stacking context but has a transform
             // applied that causes it to take up no space, we can skip it entirely.
-            if fragment.has_non_invertible_transform() {
+            if fragment.has_non_invertible_transform_or_zero_scale() {
                 continue;
             }
             state.containing_block_clipping_and_scrolling = previous_cb_clipping_and_scrolling;

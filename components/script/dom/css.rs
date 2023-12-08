@@ -10,7 +10,7 @@ use style::stylesheets::supports_rule::{parse_condition_or_declaration, Declarat
 use style::stylesheets::{CssRuleType, Origin};
 use style_traits::ParsingMode;
 
-use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowBinding::WindowMethods;
+use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
 use crate::dom::bindings::error::Fallible;
 use crate::dom::bindings::reflector::Reflector;
 use crate::dom::bindings::root::DomRoot;
@@ -46,6 +46,7 @@ impl CSS {
             Some(CssRuleType::Style),
             ParsingMode::DEFAULT,
             QuirksMode::NoQuirks,
+            /* namespaces = */ Default::default(),
             None,
             None,
         );
@@ -68,10 +69,11 @@ impl CSS {
             Some(CssRuleType::Style),
             ParsingMode::DEFAULT,
             QuirksMode::NoQuirks,
+            /* namespaces = */ Default::default(),
             None,
             None,
         );
-        cond.eval(&context, &Default::default())
+        cond.eval(&context)
     }
 
     /// <https://drafts.css-houdini.org/css-paint-api-1/#paint-worklet>

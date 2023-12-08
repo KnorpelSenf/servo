@@ -21,7 +21,7 @@
 android = false
 
 # Enable `debug_assert!` macros in release mode
-debug-assertions = false
+debug-assertions = true
 
 # Set "debug-mozjs" or use `mach build --debug-mozjs` to build a debug spidermonkey.
 debug-mozjs = false
@@ -53,9 +53,6 @@ media-stack = "auto"
 # incremental compilation.
 #incremental = false
 #incremental = true
-
-# Whether to use ThinLTO or not
-#thinlto = false
 
 # Android information
 [android]

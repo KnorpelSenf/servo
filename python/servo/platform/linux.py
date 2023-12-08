@@ -16,16 +16,31 @@ import distro
 from .. import util
 from .base import Base
 
-# Please keep these in sync with the packages in README.md
-APT_PKGS = ['git', 'curl', 'libx11-dev', 'libfreetype6-dev',
-            'libgl1-mesa-dri', 'libglib2.0-dev', 'xorg-dev', 'gperf', 'g++',
-            'build-essential', 'cmake', 'liblzma-dev', 'libxmu6', 'libxmu-dev',
-            "libxcb-render0-dev", "libxcb-shape0-dev", "libxcb-xfixes0-dev",
-            'libgles2-mesa-dev', 'libegl1-mesa-dev', 'libdbus-1-dev',
-            'libharfbuzz-dev', 'ccache', 'clang', 'libunwind-dev',
-            'libgstreamer1.0-dev', 'libgstreamer-plugins-base1.0-dev',
-            'libgstreamer-plugins-bad1.0-dev',
-            'libunwind-dev', 'llvm-dev']
+# Please keep these in sync with the packages on the wiki, using the instructions below
+# https://github.com/servo/servo/wiki/Building
+
+# https://packages.debian.org
+# https://packages.ubuntu.com
+# 1. open devtools
+# 2. paste in the whole APT_PKGS = [...]
+# 3. copy(`sudo apt install ${APT_PKGS.join(" ")}`)
+# 4. paste into https://github.com/servo/servo/wiki/Building#debian-based-distributions
+APT_PKGS = [
+    'build-essential', 'ccache', 'clang', 'cmake', 'curl', 'g++', 'git',
+    'gperf', 'libdbus-1-dev', 'libfreetype6-dev', 'libgl1-mesa-dri',
+    'libgles2-mesa-dev', 'libglib2.0-dev', 'libgstreamer-plugins-bad1.0-dev',
+    'libgstreamer-plugins-base1.0-dev', 'libgstreamer1.0-dev',
+    'libharfbuzz-dev', 'liblzma-dev', 'libunwind-dev', 'libunwind-dev',
+    'libvulkan1', 'libx11-dev', 'libxcb-render0-dev', 'libxcb-shape0-dev',
+    'libxcb-xfixes0-dev', 'libxmu-dev', 'libxmu6', 'libegl1-mesa-dev',
+    'llvm-dev', 'm4', 'xorg-dev',
+]
+
+# https://packages.fedoraproject.org
+# 1. open devtools
+# 2. paste in the whole DNF_PKGS = [...]
+# 3. copy(`sudo dnf install ${DNF_PKGS.join(" ")}`)
+# 4. paste into https://github.com/servo/servo/wiki/Building#fedora
 DNF_PKGS = ['libtool', 'gcc-c++', 'libXi-devel', 'freetype-devel',
             'libunwind-devel', 'mesa-libGL-devel', 'mesa-libEGL-devel',
             'glib2-devel', 'libX11-devel', 'libXrandr-devel', 'gperf',
@@ -35,7 +50,13 @@ DNF_PKGS = ['libtool', 'gcc-c++', 'libXi-devel', 'freetype-devel',
             'clang', 'clang-libs', 'llvm', 'python3-devel',
             'gstreamer1-devel', 'gstreamer1-plugins-base-devel',
             'gstreamer1-plugins-bad-free-devel', 'libjpeg-turbo-devel',
-            'zlib', 'libjpeg']
+            'zlib', 'libjpeg', 'vulkan-loader']
+
+# https://voidlinux.org/packages/
+# 1. open devtools
+# 2. paste in the whole XBPS_PKGS = [...]
+# 3. copy(`sudo xbps-install ${XBPS_PKGS.join(" ")}`)
+# 4. paste into https://github.com/servo/servo/wiki/Building#void-linux
 XBPS_PKGS = ['libtool', 'gcc', 'libXi-devel', 'freetype-devel',
              'libunwind-devel', 'MesaLib-devel', 'glib-devel', 'pkg-config',
              'libX11-devel', 'libXrandr-devel', 'gperf', 'bzip2-devel',
@@ -43,7 +64,7 @@ XBPS_PKGS = ['libtool', 'gcc', 'libXi-devel', 'freetype-devel',
              'cmake', 'libXcursor-devel', 'libXmu-devel', 'dbus-devel',
              'ncurses-devel', 'harfbuzz-devel', 'ccache', 'glu-devel',
              'clang', 'gstreamer1-devel',
-             'gst-plugins-base1-devel', 'gst-plugins-bad1-devel']
+             'gst-plugins-base1-devel', 'gst-plugins-bad1-devel', 'vulkan-loader']
 
 GSTREAMER_URL = \
     "https://github.com/servo/servo-build-deps/releases/download/linux/gstreamer-1.16-x86_64-linux-gnu.20190515.tar.gz"
@@ -111,6 +132,7 @@ class Linux(Base):
             'arch linux',
             'arch',
             'artix',
+            'endeavouros',
             'centos linux',
             'centos',
             'debian gnu/linux',
@@ -127,17 +149,6 @@ class Linux(Base):
         installed_something = self.install_non_gstreamer_dependencies(force)
         installed_something |= self._platform_bootstrap_gstreamer(force)
         return installed_something
-
-    def linker_flag(self) -> str:
-        # the rust-lld binary downloaded by rustup
-        # doesn't respect NIX_LDFLAGS and also needs
-        # other patches to work correctly. Use system
-        # version of lld for now. See
-        # https://github.com/NixOS/nixpkgs/issues/220717
-        if self.distro.lower() == 'nixos':
-            return '-C link-arg=-fuse-ld=lld'
-        else:
-            return '-Zgcc-ld=lld'
 
     def install_non_gstreamer_dependencies(self, force: bool) -> bool:
         install = False

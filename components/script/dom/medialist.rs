@@ -12,7 +12,7 @@ use style::stylesheets::{CssRuleType, Origin};
 use style_traits::{ParsingMode, ToCss};
 
 use crate::dom::bindings::codegen::Bindings::MediaListBinding::MediaListMethods;
-use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowBinding::WindowMethods;
+use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
 use crate::dom::bindings::reflector::{reflect_dom_object, DomObject, Reflector};
 use crate::dom::bindings::root::{Dom, DomRoot};
 use crate::dom::bindings::str::DOMString;
@@ -29,7 +29,7 @@ pub struct MediaList {
 }
 
 impl MediaList {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     pub fn new_inherited(
         parent_stylesheet: &CSSStyleSheet,
         media_queries: Arc<Locked<StyleMediaList>>,
@@ -41,7 +41,7 @@ impl MediaList {
         }
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     pub fn new(
         window: &Window,
         parent_stylesheet: &CSSStyleSheet,
@@ -88,6 +88,7 @@ impl MediaListMethods for MediaList {
             Some(CssRuleType::Media),
             ParsingMode::DEFAULT,
             quirks_mode,
+            /* namespaces = */ Default::default(),
             window.css_error_reporter(),
             None,
         );
@@ -130,6 +131,7 @@ impl MediaListMethods for MediaList {
             Some(CssRuleType::Media),
             ParsingMode::DEFAULT,
             quirks_mode,
+            /* namespaces = */ Default::default(),
             win.css_error_reporter(),
             None,
         );
@@ -168,6 +170,7 @@ impl MediaListMethods for MediaList {
             Some(CssRuleType::Media),
             ParsingMode::DEFAULT,
             quirks_mode,
+            /* namespaces = */ Default::default(),
             win.css_error_reporter(),
             None,
         );

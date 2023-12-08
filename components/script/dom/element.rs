@@ -12,7 +12,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt, mem};
 
-use cssparser::{_cssparser_internal_to_lowercase, match_ignore_ascii_case};
+use cssparser::match_ignore_ascii_case;
 use devtools_traits::AttrInfo;
 use dom_struct::dom_struct;
 use euclid::default::{Rect, Size2D};
@@ -38,7 +38,6 @@ use servo_atoms::Atom;
 use style::applicable_declarations::ApplicableDeclarationBlock;
 use style::attr::{AttrValue, LengthOrPercentageOrAuto};
 use style::context::QuirksMode;
-use style::element_state::ElementState;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::properties::longhands::{
     self, background_image, border_spacing, font_family, font_size,
@@ -58,6 +57,7 @@ use style::stylesheets::CssRuleType;
 use style::values::generics::NonNegative;
 use style::values::{computed, specified, AtomIdent, AtomString, CSSFloat};
 use style::{dom_apis, thread_state, CaseSensitivityExt};
+use style_traits::dom::ElementState;
 use xml5ever::serialize as xmlSerialize;
 use xml5ever::serialize::TraversalScope::{
     ChildrenOnly as XmlChildrenOnly, IncludeNode as XmlIncludeNode,
@@ -73,7 +73,7 @@ use crate::dom::bindings::codegen::Bindings::ElementBinding::ElementMethods;
 use crate::dom::bindings::codegen::Bindings::FunctionBinding::Function;
 use crate::dom::bindings::codegen::Bindings::HTMLTemplateElementBinding::HTMLTemplateElementMethods;
 use crate::dom::bindings::codegen::Bindings::NodeBinding::NodeMethods;
-use crate::dom::bindings::codegen::Bindings::ShadowRootBinding::ShadowRootBinding::ShadowRootMethods;
+use crate::dom::bindings::codegen::Bindings::ShadowRootBinding::ShadowRoot_Binding::ShadowRootMethods;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::{
     ScrollBehavior, ScrollToOptions, WindowMethods,
 };
@@ -351,7 +351,7 @@ impl Element {
             CustomElementState::Uncustomized | CustomElementState::Custom => true,
             _ => false,
         };
-        self.set_state(ElementState::IN_DEFINED_STATE, in_defined_state)
+        self.set_state(ElementState::DEFINED, in_defined_state)
     }
 
     pub fn get_custom_element_state(&self) -> CustomElementState {
@@ -558,10 +558,9 @@ impl Element {
 
     // https://html.spec.whatwg.org/multipage/#translation-mode
     pub fn is_translate_enabled(&self) -> bool {
-        // TODO change this to local_name! when html5ever updates
-        let name = &LocalName::from("translate");
+        let name = &html5ever::local_name!("translate");
         if self.has_attribute(name) {
-            match &*self.get_string_attribute(name) {
+            match_ignore_ascii_case! { &*self.get_string_attribute(name),
                 "yes" | "" => return true,
                 "no" => return false,
                 _ => {},
@@ -572,7 +571,7 @@ impl Element {
                 return elem.is_translate_enabled();
             }
         }
-        true // whatwg/html#5239
+        true
     }
 
     // https://html.spec.whatwg.org/multipage/#the-directionality
@@ -638,12 +637,7 @@ pub trait LayoutElementHelpers<'dom> {
 impl<'dom> LayoutDom<'dom, Element> {
     #[allow(unsafe_code)]
     pub(super) fn focus_state(self) -> bool {
-        unsafe {
-            self.unsafe_get()
-                .state
-                .get()
-                .contains(ElementState::IN_FOCUS_STATE)
-        }
+        unsafe { self.unsafe_get().state.get().contains(ElementState::FOCUS) }
     }
 }
 
@@ -708,9 +702,13 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
         };
 
         if let Some(color) = bgcolor {
+            use cssparser::FromParsedColor;
             hints.push(from_declaration(
                 shared_lock,
-                PropertyDeclaration::BackgroundColor(color.into()),
+                PropertyDeclaration::BackgroundColor(
+                    specified::Color::from_rgba(color.red, color.green, color.blue, color.alpha)
+                        .into(),
+                ),
             ));
         }
 
@@ -742,9 +740,13 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
         };
 
         if let Some(color) = color {
+            use cssparser::FromParsedColor;
             hints.push(from_declaration(
                 shared_lock,
-                PropertyDeclaration::Color(longhands::color::SpecifiedValue(color.into())),
+                PropertyDeclaration::Color(longhands::color::SpecifiedValue(
+                    specified::Color::from_rgba(color.red, color.green, color.blue, color.alpha)
+                        .into(),
+                )),
             ));
         }
 
@@ -969,9 +971,7 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
         };
 
         if let Some(border) = border {
-            let width_value = specified::BorderSideWidth::Length(NonNegative(
-                specified::Length::from_px(border as f32),
-            ));
+            let width_value = specified::BorderSideWidth::from_px(border as f32);
             hints.push(from_declaration(
                 shared_lock,
                 PropertyDeclaration::BorderTopWidth(width_value.clone()),
@@ -3184,6 +3184,10 @@ impl<'a> SelectorsElement for DomRoot<Element> {
             .next()
     }
 
+    fn first_element_child(&self) -> Option<DomRoot<Element>> {
+        self.GetFirstElementChild()
+    }
+
     fn attr_matches(
         &self,
         ns: &NamespaceConstraint<&style::Namespace>,
@@ -3313,12 +3317,29 @@ impl<'a> SelectorsElement for DomRoot<Element> {
         self.is_html_element() && self.local_name() == &local_name!("slot")
     }
 
-    fn set_selector_flags(&self, flags: ElementSelectorFlags) {
-        #[allow(unsafe_code)]
-        unsafe {
-            Dom::from_ref(self.deref())
-                .to_layout()
-                .insert_selector_flags(flags);
+    fn apply_selector_flags(&self, flags: ElementSelectorFlags) {
+        // Handle flags that apply to the element.
+        let self_flags = flags.for_self();
+        if !self_flags.is_empty() {
+            #[allow(unsafe_code)]
+            unsafe {
+                Dom::from_ref(self.deref())
+                    .to_layout()
+                    .insert_selector_flags(self_flags);
+            }
+        }
+
+        // Handle flags that apply to the parent.
+        let parent_flags = flags.for_parent();
+        if !parent_flags.is_empty() {
+            if let Some(p) = self.parent_element() {
+                #[allow(unsafe_code)]
+                unsafe {
+                    Dom::from_ref(p.deref())
+                        .to_layout()
+                        .insert_selector_flags(parent_flags);
+                }
+            }
         }
     }
 }
@@ -3524,7 +3545,7 @@ impl Element {
 
     /// <https://html.spec.whatwg.org/multipage/#concept-selector-active>
     pub fn set_active_state(&self, value: bool) {
-        self.set_state(ElementState::IN_ACTIVE_STATE, value);
+        self.set_state(ElementState::ACTIVE, value);
 
         if let Some(parent) = self.upcast::<Node>().GetParentElement() {
             parent.set_active_state(value);
@@ -3532,65 +3553,63 @@ impl Element {
     }
 
     pub fn focus_state(&self) -> bool {
-        self.state.get().contains(ElementState::IN_FOCUS_STATE)
+        self.state.get().contains(ElementState::FOCUS)
     }
 
     pub fn set_focus_state(&self, value: bool) {
-        self.set_state(ElementState::IN_FOCUS_STATE, value);
+        self.set_state(ElementState::FOCUS, value);
         self.upcast::<Node>().dirty(NodeDamage::OtherNodeDamage);
     }
 
     pub fn hover_state(&self) -> bool {
-        self.state.get().contains(ElementState::IN_HOVER_STATE)
+        self.state.get().contains(ElementState::HOVER)
     }
 
     pub fn set_hover_state(&self, value: bool) {
-        self.set_state(ElementState::IN_HOVER_STATE, value)
+        self.set_state(ElementState::HOVER, value)
     }
 
     pub fn enabled_state(&self) -> bool {
-        self.state.get().contains(ElementState::IN_ENABLED_STATE)
+        self.state.get().contains(ElementState::ENABLED)
     }
 
     pub fn set_enabled_state(&self, value: bool) {
-        self.set_state(ElementState::IN_ENABLED_STATE, value)
+        self.set_state(ElementState::ENABLED, value)
     }
 
     pub fn disabled_state(&self) -> bool {
-        self.state.get().contains(ElementState::IN_DISABLED_STATE)
+        self.state.get().contains(ElementState::DISABLED)
     }
 
     pub fn set_disabled_state(&self, value: bool) {
-        self.set_state(ElementState::IN_DISABLED_STATE, value)
+        self.set_state(ElementState::DISABLED, value)
     }
 
     pub fn read_write_state(&self) -> bool {
-        self.state.get().contains(ElementState::IN_READWRITE_STATE)
+        self.state.get().contains(ElementState::READWRITE)
     }
 
     pub fn set_read_write_state(&self, value: bool) {
-        self.set_state(ElementState::IN_READWRITE_STATE, value)
+        self.set_state(ElementState::READWRITE, value)
     }
 
     pub fn placeholder_shown_state(&self) -> bool {
-        self.state
-            .get()
-            .contains(ElementState::IN_PLACEHOLDER_SHOWN_STATE)
+        self.state.get().contains(ElementState::PLACEHOLDER_SHOWN)
     }
 
     pub fn set_placeholder_shown_state(&self, value: bool) {
         if self.placeholder_shown_state() != value {
-            self.set_state(ElementState::IN_PLACEHOLDER_SHOWN_STATE, value);
+            self.set_state(ElementState::PLACEHOLDER_SHOWN, value);
             self.upcast::<Node>().dirty(NodeDamage::OtherNodeDamage);
         }
     }
 
     pub fn set_target_state(&self, value: bool) {
-        self.set_state(ElementState::IN_TARGET_STATE, value)
+        self.set_state(ElementState::URLTARGET, value)
     }
 
     pub fn set_fullscreen_state(&self, value: bool) {
-        self.set_state(ElementState::IN_FULLSCREEN_STATE, value)
+        self.set_state(ElementState::FULLSCREEN, value)
     }
 
     /// <https://dom.spec.whatwg.org/#connected>
@@ -3750,7 +3769,7 @@ impl ElementPerformFullscreenEnter {
 }
 
 impl TaskOnce for ElementPerformFullscreenEnter {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn run_once(self) {
         let element = self.element.root();
         let promise = self.promise.root();
@@ -3801,7 +3820,7 @@ impl ElementPerformFullscreenExit {
 }
 
 impl TaskOnce for ElementPerformFullscreenExit {
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn run_once(self) {
         let element = self.element.root();
         let document = document_from_node(&*element);

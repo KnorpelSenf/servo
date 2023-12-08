@@ -32,8 +32,8 @@ use canvas_traits::webgl::WebGLThreads;
 use compositing::windowing::{EmbedderEvent, EmbedderMethods, WindowMethods};
 use compositing::{IOCompositor, InitialCompositorState, ShutdownState};
 use compositing_traits::{
-    CompositingReason, CompositorMsg, CompositorProxy, CompositorReceiver, ConstellationMsg,
-    WebrenderCanvasMsg, WebrenderFontMsg, WebrenderMsg,
+    CanvasToCompositorMsg, CompositingReason, CompositorMsg, CompositorProxy, CompositorReceiver,
+    ConstellationMsg, FontToCompositorMsg, ForwardedToCompositorMsg,
 };
 #[cfg(all(
     not(target_os = "windows"),
@@ -112,24 +112,25 @@ mod media_platform {
 
     #[cfg(any(windows, target_os = "macos"))]
     pub fn init() {
-        let mut plugin_dir = std::env::current_exe().unwrap();
-        plugin_dir.pop();
+        ServoMedia::init_with_backend(|| {
+            let mut plugin_dir = std::env::current_exe().unwrap();
+            plugin_dir.pop();
 
-        if cfg!(target_os = "macos") {
-            plugin_dir.push("lib");
-        }
+            if cfg!(target_os = "macos") {
+                plugin_dir.push("lib");
+            }
 
-        let backend = match GStreamerBackend::init_with_plugins(
-            plugin_dir,
-            &gstreamer_plugins::GSTREAMER_PLUGINS,
-        ) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("Error initializing GStreamer: {:?}", e);
-                std::process::exit(1);
-            },
-        };
-        ServoMedia::init_with_backend(backend);
+            match GStreamerBackend::init_with_plugins(
+                plugin_dir,
+                &gstreamer_plugins::GSTREAMER_PLUGINS,
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error initializing GStreamer: {:?}", e);
+                    std::process::exit(1);
+                },
+            }
+        });
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -280,7 +281,7 @@ where
 
         // Reserving a namespace to create TopLevelBrowsingContextId.
         PipelineNamespace::install(PipelineNamespaceId(0));
-        let browser_id = BrowserId::new();
+        let top_level_browsing_context_id = BrowserId::new();
 
         // Get both endpoints of a special channel for communication between
         // the client window and the compositor. This channel is unique because
@@ -467,7 +468,7 @@ where
             opts.is_running_problem_test,
             opts.exit_after_load,
             opts.debug.convert_mouse_to_touch,
-            browser_id,
+            top_level_browsing_context_id,
         );
 
         let servo = Servo {
@@ -478,7 +479,10 @@ where
             profiler_enabled: false,
             _js_engine_setup: js_engine_setup,
         };
-        InitializedServo { servo, browser_id }
+        InitializedServo {
+            servo,
+            browser_id: top_level_browsing_context_id,
+        }
     }
 
     fn handle_window_event(&mut self, event: EmbedderEvent) -> bool {
@@ -548,8 +552,8 @@ where
                 self.compositor.on_zoom_reset_window_event();
             },
 
-            EmbedderEvent::PinchZoom(magnification) => {
-                self.compositor.on_pinch_zoom_window_event(magnification);
+            EmbedderEvent::PinchZoom(zoom) => {
+                self.compositor.on_pinch_zoom_window_event(zoom);
             },
 
             EmbedderEvent::Navigation(top_level_browsing_context_id, direction) => {
@@ -615,8 +619,8 @@ where
                 self.compositor.capture_webrender();
             },
 
-            EmbedderEvent::NewBrowser(url, browser_id) => {
-                let msg = ConstellationMsg::NewBrowser(url, browser_id);
+            EmbedderEvent::NewBrowser(url, top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::NewBrowser(url, top_level_browsing_context_id);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
                         "Sending NewBrowser message to constellation failed ({:?}).",
@@ -625,8 +629,8 @@ where
                 }
             },
 
-            EmbedderEvent::SelectBrowser(ctx) => {
-                let msg = ConstellationMsg::SelectBrowser(ctx);
+            EmbedderEvent::SelectBrowser(top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::SelectBrowser(top_level_browsing_context_id);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
                         "Sending SelectBrowser message to constellation failed ({:?}).",
@@ -635,8 +639,8 @@ where
                 }
             },
 
-            EmbedderEvent::CloseBrowser(ctx) => {
-                let msg = ConstellationMsg::CloseBrowser(ctx);
+            EmbedderEvent::CloseBrowser(top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::CloseBrowser(top_level_browsing_context_id);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
                         "Sending CloseBrowser message to constellation failed ({:?}).",
@@ -645,8 +649,8 @@ where
                 }
             },
 
-            EmbedderEvent::SendError(ctx, e) => {
-                let msg = ConstellationMsg::SendError(ctx, e);
+            EmbedderEvent::SendError(top_level_browsing_context_id, e) => {
+                let msg = ConstellationMsg::SendError(top_level_browsing_context_id, e);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
                         "Sending SendError message to constellation failed ({:?}).",
@@ -711,7 +715,7 @@ where
         ::std::mem::replace(&mut self.messages_for_embedder, Vec::new())
     }
 
-    pub fn handle_events(&mut self, events: Vec<EmbedderEvent>) -> bool {
+    pub fn handle_events(&mut self, events: impl IntoIterator<Item = EmbedderEvent>) -> bool {
         if self.compositor.receive_messages() {
             self.receive_messages();
         }
@@ -756,10 +760,6 @@ where
 
     pub fn deinit(self) {
         self.compositor.deinit();
-    }
-
-    pub fn set_external_present(&mut self, value: bool) {
-        self.compositor.set_external_present(value)
     }
 
     pub fn present(&mut self) {
@@ -897,16 +897,20 @@ struct FontCacheWR(CompositorProxy);
 impl gfx_traits::WebrenderApi for FontCacheWR {
     fn add_font_instance(&self, font_key: FontKey, size: f32) -> FontInstanceKey {
         let (sender, receiver) = unbounded();
-        let _ = self.0.send(CompositorMsg::Webrender(WebrenderMsg::Font(
-            WebrenderFontMsg::AddFontInstance(font_key, size, sender),
-        )));
+        let _ = self
+            .0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddFontInstance(font_key, size, sender),
+            )));
         receiver.recv().unwrap()
     }
     fn add_font(&self, data: gfx_traits::FontData) -> FontKey {
         let (sender, receiver) = unbounded();
-        let _ = self.0.send(CompositorMsg::Webrender(WebrenderMsg::Font(
-            WebrenderFontMsg::AddFont(data, sender),
-        )));
+        let _ = self
+            .0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddFont(data, sender),
+            )));
         receiver.recv().unwrap()
     }
 }
@@ -917,15 +921,19 @@ struct CanvasWebrenderApi(CompositorProxy);
 impl canvas_paint_thread::WebrenderApi for CanvasWebrenderApi {
     fn generate_key(&self) -> Result<ImageKey, ()> {
         let (sender, receiver) = unbounded();
-        let _ = self.0.send(CompositorMsg::Webrender(WebrenderMsg::Canvas(
-            WebrenderCanvasMsg::GenerateKey(sender),
-        )));
+        let _ = self
+            .0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Canvas(
+                CanvasToCompositorMsg::GenerateKey(sender),
+            )));
         receiver.recv().map_err(|_| ())
     }
     fn update_images(&self, updates: Vec<canvas_paint_thread::ImageUpdate>) {
-        let _ = self.0.send(CompositorMsg::Webrender(WebrenderMsg::Canvas(
-            WebrenderCanvasMsg::UpdateImages(updates),
-        )));
+        let _ = self
+            .0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Canvas(
+                CanvasToCompositorMsg::UpdateImages(updates),
+            )));
     }
     fn clone(&self) -> Box<dyn canvas_paint_thread::WebrenderApi> {
         Box::new(<Self as Clone>::clone(self))

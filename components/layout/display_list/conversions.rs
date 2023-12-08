@@ -4,17 +4,22 @@
 
 use app_units::Au;
 use euclid::default::{Point2D, Rect, SideOffsets2D, Size2D, Vector2D};
+use style::color::{AbsoluteColor, ColorSpace};
 use style::computed_values::image_rendering::T as ImageRendering;
 use style::computed_values::mix_blend_mode::T as MixBlendMode;
 use style::computed_values::transform_style::T as TransformStyle;
 use style::values::computed::{BorderStyle, Filter};
 use style::values::specified::border::BorderImageRepeatKeyword;
-use style::values::RGBA;
 use webrender_api as wr;
 
 pub trait ToLayout {
     type Type;
     fn to_layout(&self) -> Self::Type;
+}
+
+pub trait FilterToLayout {
+    type Type;
+    fn to_layout(&self, current_color: &AbsoluteColor) -> Self::Type;
 }
 
 impl ToLayout for BorderStyle {
@@ -35,9 +40,9 @@ impl ToLayout for BorderStyle {
     }
 }
 
-impl ToLayout for Filter {
+impl FilterToLayout for Filter {
     type Type = wr::FilterOp;
-    fn to_layout(&self) -> Self::Type {
+    fn to_layout(&self, current_color: &AbsoluteColor) -> Self::Type {
         match *self {
             Filter::Blur(radius) => wr::FilterOp::Blur(radius.px(), radius.px()),
             Filter::Brightness(amount) => wr::FilterOp::Brightness(amount.0),
@@ -48,8 +53,18 @@ impl ToLayout for Filter {
             Filter::Opacity(amount) => wr::FilterOp::Opacity(amount.0.into(), amount.0),
             Filter::Saturate(amount) => wr::FilterOp::Saturate(amount.0),
             Filter::Sepia(amount) => wr::FilterOp::Sepia(amount.0),
-            // Statically check that DropShadow is impossible.
-            Filter::DropShadow(ref shadow) => match *shadow {},
+            Filter::DropShadow(ref shadow) => wr::FilterOp::DropShadow(wr::Shadow {
+                blur_radius: shadow.blur.px(),
+                offset: wr::units::LayoutVector2D::new(
+                    shadow.horizontal.px(),
+                    shadow.vertical.px(),
+                ),
+                color: shadow
+                    .color
+                    .clone()
+                    .resolve_to_absolute(current_color)
+                    .to_layout(),
+            }),
             // Statically check that Url is impossible.
             Filter::Url(ref url) => match *url {},
         }
@@ -101,14 +116,15 @@ impl ToLayout for TransformStyle {
     }
 }
 
-impl ToLayout for RGBA {
+impl ToLayout for AbsoluteColor {
     type Type = wr::ColorF;
     fn to_layout(&self) -> Self::Type {
+        let rgba = self.to_color_space(ColorSpace::Srgb);
         wr::ColorF::new(
-            self.red_f32(),
-            self.green_f32(),
-            self.blue_f32(),
-            self.alpha_f32(),
+            rgba.components.0.clamp(0.0, 1.0),
+            rgba.components.1.clamp(0.0, 1.0),
+            rgba.components.2.clamp(0.0, 1.0),
+            rgba.alpha,
         )
     }
 }

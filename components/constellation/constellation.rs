@@ -104,8 +104,8 @@ use canvas_traits::canvas::{CanvasId, CanvasMsg};
 use canvas_traits::webgl::WebGLThreads;
 use canvas_traits::ConstellationCanvasMsg;
 use compositing_traits::{
-    CompositorMsg, CompositorProxy, ConstellationMsg as FromCompositorMsg, SendableFrameTree,
-    WebrenderMsg,
+    CompositorMsg, CompositorProxy, ConstellationMsg as FromCompositorMsg,
+    ForwardedToCompositorMsg, SendableFrameTree,
 };
 use crossbeam_channel::{after, never, select, unbounded, Receiver, Sender};
 use devtools_traits::{
@@ -125,7 +125,7 @@ use ipc_channel::Error as IpcError;
 use keyboard_types::webdriver::Event as WebDriverInputEvent;
 use keyboard_types::KeyboardEvent;
 use layout_traits::LayoutThreadFactory;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use media::{GLPlayerThreads, WindowGLContext};
 use msg::constellation_msg::{
     BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, BroadcastChannelRouterId,
@@ -716,8 +716,10 @@ where
                 ROUTER.add_route(
                     webrender_ipc_receiver.to_opaque(),
                     Box::new(move |message| {
-                        let _ = compositor_proxy.send(CompositorMsg::Webrender(
-                            WebrenderMsg::Layout(message.to().expect("conversion failure")),
+                        let _ = compositor_proxy.send(CompositorMsg::Forwarded(
+                            ForwardedToCompositorMsg::Layout(
+                                message.to().expect("conversion failure"),
+                            ),
                         ));
                     }),
                 );
@@ -726,9 +728,11 @@ where
                 ROUTER.add_route(
                     webrender_image_ipc_receiver.to_opaque(),
                     Box::new(move |message| {
-                        let _ = compositor_proxy.send(CompositorMsg::Webrender(WebrenderMsg::Net(
-                            message.to().expect("conversion failure"),
-                        )));
+                        let _ = compositor_proxy.send(CompositorMsg::Forwarded(
+                            ForwardedToCompositorMsg::Net(
+                                message.to().expect("conversion failure"),
+                            ),
+                        ));
                     }),
                 );
 
@@ -863,7 +867,7 @@ where
                     .ok_or("Opener was closed before the openee started")?;
                 self.browsing_context_group_set
                     .get(&opener.bc_group_id)
-                    .ok_or("Opener belongs to an unknow BC group")?
+                    .ok_or("Opener belongs to an unknown browsing context group")?
             },
             None => self
                 .browsing_context_group_set
@@ -880,13 +884,13 @@ where
                 })
                 .last()
                 .ok_or(
-                    "Trying to get an event-loop for a top-level belonging to an unknown BC group",
+                    "Trying to get an event-loop for a top-level belonging to an unknown browsing context group",
                 )?,
         };
         bc_group
             .event_loops
             .get(host)
-            .ok_or("Trying to get an event-loop from an unknown BC group")
+            .ok_or("Trying to get an event-loop from an unknown browsing context group")
             .map(|event_loop| event_loop.clone())
     }
 
@@ -925,7 +929,7 @@ where
         let bc_group_id = match maybe_bc_group_id {
             Some(id) => id,
             None => {
-                warn!("Trying to add an event-loop to an unknown BC group");
+                warn!("Trying to add an event-loop to an unknown browsing context group");
                 return;
             },
         };
@@ -965,7 +969,7 @@ where
             return;
         }
         debug!(
-            "Creating new pipeline {} in browsing context {}.",
+            "{}: Creating new pipeline in {}",
             pipeline_id, browsing_context_id
         );
 
@@ -1078,8 +1082,8 @@ where
 
         if let Some(host) = host {
             debug!(
-                "Adding new host entry {} for top-level browsing context {}.",
-                host, top_level_browsing_context_id
+                "{}: Adding new host entry {}",
+                top_level_browsing_context_id, host,
             );
             self.set_event_loop(
                 Rc::downgrade(&pipeline.pipeline.event_loop),
@@ -1139,7 +1143,7 @@ where
         inherited_secure_context: Option<bool>,
         is_visible: bool,
     ) {
-        debug!("Creating new browsing context {}", browsing_context_id);
+        debug!("{}: Creating new browsing context", browsing_context_id);
         let bc_group_id = match self
             .browsing_context_group_set
             .iter_mut()
@@ -1157,9 +1161,7 @@ where
         {
             Some(id) => id.clone(),
             None => {
-                warn!(
-                    "Top-level was unpexpectedly removed from its top_level_browsing_context_set."
-                );
+                warn!("Top-level was unexpectedly removed from its top_level_browsing_context_set");
                 return;
             },
         };
@@ -1320,7 +1322,7 @@ where
                 pipeline.event_loop.send(msg)
             },
             None => {
-                return warn!("Pipeline {:?} got fetch data after closure!", id);
+                return warn!("{}: Got fetch data after closure!", id);
             },
         };
         if let Err(e) = result {
@@ -1338,7 +1340,7 @@ where
     }
 
     fn handle_request_from_compositor(&mut self, message: FromCompositorMsg) {
-        debug!("constellation got {:?} message", message);
+        trace!("Got compositor message: {:?}", message);
         match message {
             FromCompositorMsg::Exit => {
                 self.handle_exit();
@@ -1368,7 +1370,7 @@ where
 
                 let top_level_browsing_context_id = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.top_level_browsing_context_id,
-                    None => return warn!("Attempted to navigate {} after closure.", pipeline_id),
+                    None => return warn!("{}: Attempted to navigate after closure", pipeline_id),
                 };
 
                 match pending {
@@ -1397,7 +1399,7 @@ where
                                     Some(pipeline) => pipeline.event_loop.send(msg),
                                     None => {
                                         return warn!(
-                                            "Attempted to navigate {} after closure.",
+                                            "{}: Attempted to navigate after closure",
                                             pipeline_id
                                         );
                                     },
@@ -1410,7 +1412,7 @@ where
                     },
                     None => {
                         return warn!(
-                            "AllowNavigationReqsponse for unknow request: {:?}",
+                            "{}: AllowNavigationResponse for unknown request",
                             pipeline_id
                         );
                     },
@@ -1437,7 +1439,7 @@ where
                     Some(ctx) => ctx.pipeline_id,
                     None => {
                         return warn!(
-                            "LoadUrl for unknown browsing context: {:?}",
+                            "{}: LoadUrl for unknown browsing context",
                             top_level_browsing_context_id
                         );
                     },
@@ -1547,8 +1549,8 @@ where
     fn handle_request_from_script(&mut self, message: (PipelineId, FromScriptMsg)) {
         let (source_pipeline_id, content) = message;
         debug!(
-            "constellation got {:?} message from pipeline {}",
-            content, source_pipeline_id
+            "{}: Message from pipeline: {:?}",
+            source_pipeline_id, content,
         );
 
         let source_top_ctx_id = match self
@@ -1556,7 +1558,7 @@ where
             .get(&source_pipeline_id)
             .map(|pipeline| pipeline.top_level_browsing_context_id)
         {
-            None => return warn!("ScriptMsg from closed pipeline {:?}.", source_pipeline_id),
+            None => return warn!("{}: ScriptMsg from closed pipeline", source_pipeline_id),
             Some(ctx) => ctx,
         };
 
@@ -1933,7 +1935,7 @@ where
                 routers.is_empty()
             } else {
                 return warn!(
-                    "Multiple attemps to remove name for broadcast-channel {:?} at {:?}",
+                    "Multiple attempts to remove name for broadcast-channel {:?} at {:?}",
                     channel_name, origin
                 );
             };
@@ -2025,7 +2027,7 @@ where
         };
         let source_pipeline = match self.pipelines.get(&source_pipeline_id) {
             Some(pipeline) => pipeline,
-            None => return warn!("ScriptMsg from closed pipeline {:?}.", source_pipeline_id),
+            None => return warn!("{}: ScriptMsg from closed pipeline", source_pipeline_id),
         };
         let host = match reg_host(&source_pipeline.url) {
             Some(host) => host,
@@ -2052,7 +2054,7 @@ where
                             let msg = ConstellationControlMsg::SetWebGPUPort(webgpu.1);
                             if let Err(e) = source_pipeline.event_loop.send(msg) {
                                 warn!(
-                                    "Failed to send SetWebGPUPort to pipeline {} ({:?})",
+                                    "{}: Failed to send SetWebGPUPort to pipeline ({:?})",
                                     source_pipeline_id, e
                                 );
                             }
@@ -2080,7 +2082,7 @@ where
             FromScriptMsg::GetWebGPUChan(response_sender) => {
                 if response_sender.send(webgpu_chan).is_err() {
                     return warn!(
-                        "Failed to send WebGPU channel to Pipeline {:?}",
+                        "{}: Failed to send WebGPU channel to pipeline",
                         source_pipeline_id
                     );
                 }
@@ -2090,7 +2092,7 @@ where
     }
 
     fn handle_request_from_layout(&mut self, message: FromLayoutMsg) {
-        debug!("Constellation got {:?} message", message);
+        debug!("Got layout message: {:?}", message);
         match message {
             // Layout sends new sizes for all subframes. This needs to be reflected by all
             // frame trees in the navigation context containing the subframe.
@@ -2458,7 +2460,7 @@ where
             info.entangled_with = Some(port2);
         } else {
             warn!(
-                "Constellation asked to entangle unknow messageport: {:?}",
+                "Constellation asked to entangle unknown messageport: {:?}",
                 port1
             );
         }
@@ -2466,7 +2468,7 @@ where
             info.entangled_with = Some(port1);
         } else {
             warn!(
-                "Constellation asked to entangle unknow messageport: {:?}",
+                "Constellation asked to entangle unknown messageport: {:?}",
                 port2
             );
         }
@@ -2539,7 +2541,7 @@ where
                 );
                 if let Err(err) = pipeline.event_loop.send(msg) {
                     warn!(
-                        "Failed to broadcast storage event to pipeline {} ({:?}).",
+                        "{}: Failed to broadcast storage event to pipeline ({:?}).",
                         pipeline.id, err
                     );
                 }
@@ -2581,7 +2583,7 @@ where
             .collect();
         for browsing_context_id in browsing_context_ids {
             debug!(
-                "Removing top-level browsing context {}.",
+                "{}: Removing top-level browsing context",
                 browsing_context_id
             );
             self.close_browsing_context(browsing_context_id, ExitPipelineMode::Normal);
@@ -2590,11 +2592,11 @@ where
         // Close any pending changes and pipelines
         while let Some(pending) = self.pending_changes.pop() {
             debug!(
-                "Removing pending browsing context {}.",
+                "{}: Removing pending browsing context",
                 pending.browsing_context_id
             );
             self.close_browsing_context(pending.browsing_context_id, ExitPipelineMode::Normal);
-            debug!("Removing pending pipeline {}.", pending.new_pipeline_id);
+            debug!("{}: Removing pending pipeline", pending.new_pipeline_id);
             self.close_pipeline(
                 pending.new_pipeline_id,
                 DiscardBrowsingContext::Yes,
@@ -2607,7 +2609,7 @@ where
             self.browsing_contexts.keys().cloned().collect();
         for browsing_context_id in browsing_context_ids {
             debug!(
-                "Removing detached browsing context {}.",
+                "{}: Removing detached browsing context",
                 browsing_context_id
             );
             self.close_browsing_context(browsing_context_id, ExitPipelineMode::Normal);
@@ -2616,7 +2618,7 @@ where
         // In case there are pipelines which weren't attached to the pipeline tree, we close them.
         let pipeline_ids: Vec<PipelineId> = self.pipelines.keys().cloned().collect();
         for pipeline_id in pipeline_ids {
-            debug!("Removing detached pipeline {}.", pipeline_id);
+            debug!("{}: Removing detached pipeline", pipeline_id);
             self.close_pipeline(
                 pipeline_id,
                 DiscardBrowsingContext::Yes,
@@ -2732,13 +2734,13 @@ where
     }
 
     fn handle_pipeline_exited(&mut self, pipeline_id: PipelineId) {
-        debug!("Pipeline {:?} exited.", pipeline_id);
+        debug!("{}: Exited", pipeline_id);
         self.pipelines.remove(&pipeline_id);
     }
 
     fn handle_send_error(&mut self, pipeline_id: PipelineId, err: IpcError) {
         // Treat send error the same as receiving a panic message
-        error!("Pipeline {} send error ({}).", pipeline_id, err);
+        error!("{}: Send error ({})", pipeline_id, err);
         let top_level_browsing_context_id = self
             .pipelines
             .get(&pipeline_id)
@@ -2766,7 +2768,7 @@ where
         };
 
         debug!(
-            "Panic handler for top-level browsing context {}: {}.",
+            "{}: Panic handler for top-level browsing context: {}",
             top_level_browsing_context_id, reason
         );
 
@@ -2850,7 +2852,6 @@ where
         thread_name: Option<String>,
         entry: LogEntry,
     ) {
-        debug!("Received log entry {:?}.", entry);
         if let LogEntry::Panic(ref reason, ref backtrace) = entry {
             self.handle_panic(
                 top_level_browsing_context_id,
@@ -2906,10 +2907,7 @@ where
         let msg = ConstellationControlMsg::SendEvent(destination_pipeline_id, event);
         let result = match self.pipelines.get(&destination_pipeline_id) {
             None => {
-                debug!(
-                    "Pipeline {:?} got event after closure.",
-                    destination_pipeline_id
-                );
+                debug!("{}: Got event after closure", destination_pipeline_id);
                 return;
             },
             Some(pipeline) => pipeline.event_loop.send(msg),
@@ -3003,7 +3001,7 @@ where
         let browsing_context = match self.browsing_contexts.get(&browsing_context_id) {
             Some(bc) => bc,
             None => {
-                warn!("BC has closed before it has started");
+                warn!("Browsing context closed before it started");
                 return;
             },
         };
@@ -3031,20 +3029,20 @@ where
     fn handle_subframe_loaded(&mut self, pipeline_id: PipelineId) {
         let browsing_context_id = match self.pipelines.get(&pipeline_id) {
             Some(pipeline) => pipeline.browsing_context_id,
-            None => return warn!("Subframe {} loaded after closure.", pipeline_id),
+            None => return warn!("{}: Subframe loaded after closure", pipeline_id),
         };
         let parent_pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
             Some(browsing_context) => browsing_context.parent_pipeline_id,
             None => {
                 return warn!(
-                    "Subframe {} loaded in closed browsing context {}.",
+                    "{}: Subframe loaded in closed {}",
                     pipeline_id, browsing_context_id,
                 );
             },
         };
         let parent_pipeline_id = match parent_pipeline_id {
             Some(parent_pipeline_id) => parent_pipeline_id,
-            None => return warn!("Subframe {} has no parent.", pipeline_id),
+            None => return warn!("{}: Subframe has no parent", pipeline_id),
         };
         // https://html.spec.whatwg.org/multipage/#the-iframe-element:completely-loaded
         // When a Document in an iframe is marked as completely loaded,
@@ -3058,7 +3056,7 @@ where
             Some(parent) => parent.event_loop.send(msg),
             None => {
                 return warn!(
-                    "Parent {} browsing context loaded after closure.",
+                    "{}: Parent pipeline browsing context loaded after closure",
                     parent_pipeline_id
                 );
             },
@@ -3106,13 +3104,13 @@ where
 
         // Replacement enabled also takes into account whether the document is "completely loaded",
         // see https://html.spec.whatwg.org/multipage/#the-iframe-element:completely-loaded
-        debug!("checking old pipeline? {:?}", load_info.old_pipeline_id);
         if let Some(old_pipeline) = old_pipeline {
             if !old_pipeline.completely_loaded {
                 replace = HistoryEntryReplacement::Enabled;
             }
             debug!(
-                "old pipeline is {}completely loaded",
+                "{:?}: Old pipeline is {}completely loaded",
+                load_info.old_pipeline_id,
                 if old_pipeline.completely_loaded {
                     ""
                 } else {
@@ -3126,8 +3124,8 @@ where
                 Some(pipeline) => pipeline.browsing_context_id,
                 None => {
                     return warn!(
-                        "Script loaded url in iframe {} in closed parent pipeline {}.",
-                        browsing_context_id, parent_pipeline_id,
+                        "{}: Script loaded url in iframe {} in closed parent pipeline",
+                        parent_pipeline_id, browsing_context_id,
                     );
                 },
             };
@@ -3135,8 +3133,8 @@ where
                 Some(ctx) => ctx.is_private,
                 None => {
                     return warn!(
-                        "Script loaded url in iframe {} in closed parent browsing context {}.",
-                        browsing_context_id, parent_browsing_context_id,
+                        "{}: Script loaded url in iframe {} in closed parent browsing context",
+                        parent_browsing_context_id, browsing_context_id,
                     );
                 },
             };
@@ -3148,7 +3146,7 @@ where
             Some(ctx) => ctx,
             None => {
                 return warn!(
-                    "Script loaded url in iframe with closed browsing context {}.",
+                    "{}: Script loaded url in iframe with closed browsing context",
                     browsing_context_id,
                 );
             },
@@ -3164,10 +3162,11 @@ where
         // https://github.com/rust-lang/rust/issues/59159
         let browsing_context_size = browsing_context.size;
         let browsing_context_is_visible = browsing_context.is_visible;
-        debug_assert_eq!(
-            browsing_context_size,
-            load_info.window_size.initial_viewport
-        );
+        // TODO(servo#30571) revert to debug_assert_eq!() once underlying bug is fixed
+        #[cfg(debug_assertions)]
+        if !(browsing_context_size == load_info.window_size.initial_viewport) {
+            log::warn!("debug assertion failed! browsing_context_size == load_info.window_size.initial_viewport");
+        }
 
         // Create the new pipeline, attached to the parent and push to pending changes
         self.new_pipeline(
@@ -3210,15 +3209,20 @@ where
         let (script_sender, parent_browsing_context_id) =
             match self.pipelines.get(&parent_pipeline_id) {
                 Some(pipeline) => (pipeline.event_loop.clone(), pipeline.browsing_context_id),
-                None => return warn!("Script loaded url in closed iframe {}.", parent_pipeline_id),
+                None => {
+                    return warn!(
+                        "{}: Script loaded url in closed iframe pipeline",
+                        parent_pipeline_id
+                    )
+                },
             };
         let (is_parent_private, is_parent_visible, is_parent_secure) =
             match self.browsing_contexts.get(&parent_browsing_context_id) {
                 Some(ctx) => (ctx.is_private, ctx.is_visible, ctx.inherited_secure_context),
                 None => {
                     return warn!(
-                        "New iframe {} loaded in closed parent browsing context {}.",
-                        browsing_context_id, parent_browsing_context_id,
+                        "{}: New iframe {} loaded in closed parent browsing context",
+                        parent_browsing_context_id, browsing_context_id,
                     );
                 },
             };
@@ -3271,7 +3275,7 @@ where
                 Some(pipeline) => (pipeline.event_loop.clone(), pipeline.browsing_context_id),
                 None => {
                     return warn!(
-                        "Auxiliary loaded url in closed iframe {}.",
+                        "{}: Auxiliary loaded url in closed iframe pipeline",
                         opener_pipeline_id
                     );
                 },
@@ -3281,8 +3285,8 @@ where
                 Some(ctx) => (ctx.is_private, ctx.is_visible, ctx.inherited_secure_context),
                 None => {
                     return warn!(
-                        "New auxiliary {} loaded in closed opener browsing context {}.",
-                        new_browsing_context_id, opener_browsing_context_id,
+                        "{}: New auxiliary {} loaded in closed opener browsing context",
+                        opener_browsing_context_id, new_browsing_context_id,
                     );
                 },
             };
@@ -3312,7 +3316,7 @@ where
         let opener = match self.browsing_contexts.get(&opener_browsing_context_id) {
             Some(id) => id,
             None => {
-                warn!("Trying to append an unknow auxiliary to a BC group");
+                warn!("Trying to append an unknown auxiliary to a browsing context group");
                 return;
             },
         };
@@ -3373,7 +3377,7 @@ where
     fn handle_tick_animation(&mut self, pipeline_id: PipelineId, tick_type: AnimationTickType) {
         let pipeline = match self.pipelines.get(&pipeline_id) {
             Some(pipeline) => pipeline,
-            None => return warn!("Pipeline {:?} got script tick after closure.", pipeline_id),
+            None => return warn!("{}: Got script tick after closure", pipeline_id),
         };
 
         let message = ConstellationControlMsg::TickAllAnimations(pipeline_id, tick_type);
@@ -3395,7 +3399,7 @@ where
         match self.pending_approval_navigations.entry(source_id) {
             Entry::Occupied(_) => {
                 return warn!(
-                    "Pipeline {:?} tried to schedule a navigation while one is already pending.",
+                    "{}: Tried to schedule a navigation while one is already pending",
                     source_id
                 );
             },
@@ -3418,13 +3422,14 @@ where
         load_data: LoadData,
         replace: HistoryEntryReplacement,
     ) -> Option<PipelineId> {
-        let replace_debug = match replace {
-            HistoryEntryReplacement::Enabled => "",
-            HistoryEntryReplacement::Disabled => "not",
-        };
         debug!(
-            "Loading {} in pipeline {}, {}replacing.",
-            load_data.url, source_id, replace_debug
+            "{}: Loading ({}replacing): {}",
+            source_id,
+            match replace {
+                HistoryEntryReplacement::Enabled => "",
+                HistoryEntryReplacement::Disabled => "not ",
+            },
+            load_data.url,
         );
         // If this load targets an iframe, its framing element may exist
         // in a separate script thread than the framed document that initiated
@@ -3435,7 +3440,7 @@ where
         let (browsing_context_id, opener) = match self.pipelines.get(&source_id) {
             Some(pipeline) => (pipeline.browsing_context_id, pipeline.opener),
             None => {
-                warn!("Pipeline {} loaded after closure.", source_id);
+                warn!("{}: Loaded after closure", source_id);
                 return None;
             },
         };
@@ -3454,7 +3459,7 @@ where
                     // avoid `expect`s or `unwrap`s in `Constellation` to ward
                     // against future changes that might break things.
                     warn!(
-                        "Pipeline {} loaded url in closed browsing context {}.",
+                        "{}: Loaded url in closed {}",
                         source_id, browsing_context_id,
                     );
                     return None;
@@ -3474,10 +3479,7 @@ where
                 let result = match self.pipelines.get(&parent_pipeline_id) {
                     Some(parent_pipeline) => parent_pipeline.event_loop.send(msg),
                     None => {
-                        warn!(
-                            "Pipeline {:?} child loaded after closure",
-                            parent_pipeline_id
-                        );
+                        warn!("{}: Child loaded after closure", parent_pipeline_id);
                         return None;
                     },
                 };
@@ -3576,7 +3578,7 @@ where
         }
 
         if let Some(pipeline) = self.pipelines.get_mut(&pipeline_id) {
-            debug!("marking pipeline {:?} as loaded", pipeline_id);
+            debug!("{}: Marking as loaded", pipeline_id);
             pipeline.completely_loaded = true;
         }
 
@@ -3618,10 +3620,7 @@ where
                 (pipeline.top_level_browsing_context_id, old_url)
             },
             None => {
-                return warn!(
-                    "Pipeline {} navigated to fragment after closure",
-                    pipeline_id
-                );
+                return warn!("{}: Navigated to fragment after closure", pipeline_id);
             },
         };
 
@@ -3790,8 +3789,8 @@ where
             NeedsToReload::No(pipeline_id) => pipeline_id,
             NeedsToReload::Yes(pipeline_id, load_data) => {
                 debug!(
-                    "Reloading document {} in browsing context {}.",
-                    pipeline_id, browsing_context_id
+                    "{}: Reloading document {}",
+                    browsing_context_id, pipeline_id,
                 );
 
                 // TODO: Save the sandbox state so it can be restored here.
@@ -3856,10 +3855,7 @@ where
                     )
                 },
                 None => {
-                    return warn!(
-                        "Browsing context {} was closed during traversal",
-                        browsing_context_id
-                    );
+                    return warn!("{}: Closed during traversal", browsing_context_id);
                 },
             };
 
@@ -3898,10 +3894,7 @@ where
             );
             let result = match self.pipelines.get(&parent_pipeline_id) {
                 None => {
-                    return warn!(
-                        "Pipeline {} child traversed after closure",
-                        parent_pipeline_id
-                    );
+                    return warn!("{}: Child traversed after closure", parent_pipeline_id);
                 },
                 Some(pipeline) => pipeline.event_loop.send(msg),
             };
@@ -3919,10 +3912,7 @@ where
     ) {
         let result = match self.pipelines.get_mut(&pipeline_id) {
             None => {
-                return warn!(
-                    "Pipeline {} history state updated after closure",
-                    pipeline_id
-                );
+                return warn!("{}: History state updated after closure", pipeline_id);
             },
             Some(pipeline) => {
                 let msg = ConstellationControlMsg::UpdateHistoryState(
@@ -3974,8 +3964,8 @@ where
                 },
                 None => {
                     return warn!(
-                        "Push history state {} for closed pipeline {}",
-                        history_state_id, pipeline_id
+                        "{}: Push history state {} for closed pipeline",
+                        pipeline_id, history_state_id,
                     );
                 },
             };
@@ -4006,7 +3996,7 @@ where
             },
             None => {
                 return warn!(
-                    "Replace history state {} for closed pipeline {}",
+                    "{}: Replace history state {} for closed pipeline",
                     history_state_id, pipeline_id
                 );
             },
@@ -4027,7 +4017,7 @@ where
                 Some(ctx) => ctx.pipeline_id,
                 None => {
                     return warn!(
-                        "Got IME dismissed event for nonexistent browsing context {}.",
+                        "{}: Got IME dismissed event for nonexistent browsing context",
                         browsing_context_id,
                     );
                 },
@@ -4037,10 +4027,7 @@ where
             let result = match self.pipelines.get(&pipeline_id) {
                 Some(pipeline) => pipeline.event_loop.send(msg),
                 None => {
-                    return debug!(
-                        "Pipeline {:?} got IME dismissed event after closure.",
-                        pipeline_id
-                    );
+                    return debug!("{}: Got IME dismissed event after closure", pipeline_id);
                 },
             };
             if let Err(e) = result {
@@ -4063,7 +4050,7 @@ where
                     Some(ctx) => ctx.pipeline_id,
                     None => {
                         return warn!(
-                            "Got key event for nonexistent browsing context {}.",
+                            "{}: Got key event for nonexistent browsing context",
                             browsing_context_id,
                         );
                     },
@@ -4072,7 +4059,7 @@ where
                 let result = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.event_loop.send(msg),
                     None => {
-                        return debug!("Pipeline {:?} got key event after closure.", pipeline_id);
+                        return debug!("{}: Got key event after closure", pipeline_id);
                     },
                 };
                 if let Err(e) = result {
@@ -4091,15 +4078,12 @@ where
         let pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
             Some(browsing_context) => browsing_context.pipeline_id,
             None => {
-                return warn!(
-                    "Browsing context {} got reload event after closure.",
-                    browsing_context_id
-                );
+                return warn!("{}: Got reload event after closure", browsing_context_id);
             },
         };
         let msg = ConstellationControlMsg::Reload(pipeline_id);
         let result = match self.pipelines.get(&pipeline_id) {
-            None => return warn!("Pipeline {} got reload event after closure.", pipeline_id),
+            None => return warn!("{}: Got reload event after closure", pipeline_id),
             Some(pipeline) => pipeline.event_loop.send(msg),
         };
         if let Err(e) = result {
@@ -4118,7 +4102,7 @@ where
         let pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
             None => {
                 return warn!(
-                    "PostMessage to closed browsing_context {}.",
+                    "{}: PostMessage to closed browsing context",
                     browsing_context_id
                 );
             },
@@ -4126,7 +4110,7 @@ where
         };
         let source_browsing_context = match self.pipelines.get(&source_pipeline) {
             Some(pipeline) => pipeline.top_level_browsing_context_id,
-            None => return warn!("PostMessage from closed pipeline {:?}", source_pipeline),
+            None => return warn!("{}: PostMessage from closed pipeline", source_pipeline),
         };
         let msg = ConstellationControlMsg::PostMessage {
             target: pipeline_id,
@@ -4138,7 +4122,7 @@ where
         };
         let result = match self.pipelines.get(&pipeline_id) {
             Some(pipeline) => pipeline.event_loop.send(msg),
-            None => return warn!("postMessage to closed pipeline {}.", pipeline_id),
+            None => return warn!("{}: PostMessage to closed pipeline", pipeline_id),
         };
         if let Err(e) = result {
             self.handle_send_error(pipeline_id, e);
@@ -4187,7 +4171,7 @@ where
                     pipeline.browsing_context_id,
                     pipeline.top_level_browsing_context_id,
                 ),
-                None => return warn!("Pipeline {:?} focus parent after closure.", pipeline_id),
+                None => return warn!("{}: Focus parent after closure", pipeline_id),
             };
 
         // Update the focused browsing context in its browser in `browsers`.
@@ -4197,7 +4181,7 @@ where
             },
             None => {
                 return warn!(
-                    "Browser {} for focus msg does not exist",
+                    "{}: Browsing context for focus msg does not exist",
                     top_level_browsing_context_id
                 );
             },
@@ -4211,19 +4195,13 @@ where
         let parent_pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
             Some(ctx) => ctx.parent_pipeline_id,
             None => {
-                return warn!(
-                    "Browsing context {:?} focus parent after closure.",
-                    browsing_context_id
-                );
+                return warn!("{}: Focus parent after closure", browsing_context_id);
             },
         };
         let parent_pipeline_id = match parent_pipeline_id {
             Some(parent_id) => parent_id,
             None => {
-                return debug!(
-                    "Browsing context {:?} focus has no parent.",
-                    browsing_context_id
-                );
+                return debug!("{}: Focus has no parent", browsing_context_id);
             },
         };
 
@@ -4235,7 +4213,7 @@ where
                 let result = pipeline.event_loop.send(msg);
                 (result, pipeline.browsing_context_id)
             },
-            None => return warn!("Pipeline {:?} focus after closure.", parent_pipeline_id),
+            None => return warn!("{}: Focus after closure", parent_pipeline_id),
         };
         if let Err(e) = result {
             self.handle_send_error(parent_pipeline_id, e);
@@ -4258,15 +4236,17 @@ where
     fn handle_visibility_change_complete(&mut self, pipeline_id: PipelineId, visibility: bool) {
         let browsing_context_id = match self.pipelines.get(&pipeline_id) {
             Some(pipeline) => pipeline.browsing_context_id,
-            None => return warn!("Visibity change for closed pipeline {:?}.", pipeline_id),
+            None => {
+                return warn!(
+                    "{}: Visibility change for closed browsing context",
+                    pipeline_id
+                )
+            },
         };
         let parent_pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
             Some(ctx) => ctx.parent_pipeline_id,
             None => {
-                return warn!(
-                    "Visibility change for closed browsing context {:?}.",
-                    pipeline_id
-                );
+                return warn!("{}: Visibility change for closed pipeline", pipeline_id);
             },
         };
 
@@ -4277,7 +4257,7 @@ where
                 visibility,
             );
             let result = match self.pipelines.get(&parent_pipeline_id) {
-                None => return warn!("Parent pipeline {:?} closed", parent_pipeline_id),
+                None => return warn!("{}: Parent pipeline closed", parent_pipeline_id),
                 Some(parent_pipeline) => parent_pipeline.event_loop.send(visibility_msg),
             };
 
@@ -4345,15 +4325,12 @@ where
                 let pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
                     Some(browsing_context) => browsing_context.pipeline_id,
                     None => {
-                        return warn!(
-                            "Browsing context {} Refresh after closure.",
-                            browsing_context_id
-                        );
+                        return warn!("{}: Refresh after closure", browsing_context_id);
                     },
                 };
                 let load_data = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.load_data.clone(),
-                    None => return warn!("Pipeline {} refresh after closure.", pipeline_id),
+                    None => return warn!("{}: Refresh after closure", pipeline_id),
                 };
                 self.load_url_for_webdriver(
                     top_level_browsing_context_id,
@@ -4366,18 +4343,13 @@ where
                 let pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
                     Some(browsing_context) => browsing_context.pipeline_id,
                     None => {
-                        return warn!(
-                            "Browsing context {} ScriptCommand after closure.",
-                            browsing_context_id
-                        );
+                        return warn!("{}: ScriptCommand after closure", browsing_context_id);
                     },
                 };
                 let control_msg = ConstellationControlMsg::WebDriverScriptCommand(pipeline_id, cmd);
                 let result = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.event_loop.send(control_msg),
-                    None => {
-                        return warn!("Pipeline {:?} ScriptCommand after closure.", pipeline_id)
-                    },
+                    None => return warn!("{}: ScriptCommand after closure", pipeline_id),
                 };
                 if let Err(e) = result {
                     self.handle_send_error(pipeline_id, e);
@@ -4387,15 +4359,12 @@ where
                 let pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
                     Some(browsing_context) => browsing_context.pipeline_id,
                     None => {
-                        return warn!(
-                            "Browsing context {} SendKeys after closure.",
-                            browsing_context_id
-                        );
+                        return warn!("{}: SendKeys after closure", browsing_context_id);
                     },
                 };
                 let event_loop = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.event_loop.clone(),
-                    None => return warn!("Pipeline {} SendKeys after closure.", pipeline_id),
+                    None => return warn!("{}: SendKeys after closure", pipeline_id),
                 };
                 for event in cmd {
                     let event = match event {
@@ -4416,15 +4385,12 @@ where
                 let pipeline_id = match self.browsing_contexts.get(&browsing_context_id) {
                     Some(browsing_context) => browsing_context.pipeline_id,
                     None => {
-                        return warn!(
-                            "Browsing context {} KeyboardAction after closure.",
-                            browsing_context_id
-                        );
+                        return warn!("{}: KeyboardAction after closure", browsing_context_id);
                     },
                 };
                 let event_loop = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.event_loop.clone(),
-                    None => return warn!("Pipeline {} KeyboardAction after closure.", pipeline_id),
+                    None => return warn!("{}: KeyboardAction after closure", pipeline_id),
                 };
                 let control_msg = ConstellationControlMsg::SendEvent(
                     pipeline_id,
@@ -4464,18 +4430,13 @@ where
             Some(browsing_context) => browsing_context.pipeline_id,
             None => {
                 return warn!(
-                    "Browsing context {} got visibility change event after closure.",
+                    "{}: Got visibility change event after closure",
                     browsing_context_id
                 );
             },
         };
         match self.pipelines.get(&pipeline_id) {
-            None => {
-                return warn!(
-                    "Pipeline {} got visibility change event after closure.",
-                    pipeline_id
-                )
-            },
+            None => return warn!("{}: Got visibility change event after closure", pipeline_id),
             Some(pipeline) => pipeline.notify_visibility(visible),
         };
     }
@@ -4491,7 +4452,7 @@ where
             Some(browser) => &browser.session_history,
             None => {
                 return warn!(
-                    "Session history does not exist for {}",
+                    "{}: Session history does not exist for browsing context",
                     top_level_browsing_context_id
                 );
             },
@@ -4510,10 +4471,7 @@ where
         let current_load_data = match self.pipelines.get(&browsing_context.pipeline_id) {
             Some(pipeline) => pipeline.load_data.clone(),
             None => {
-                return warn!(
-                    "Pipeline {} refresh after closure.",
-                    browsing_context.pipeline_id
-                );
+                return warn!("{}: Refresh after closure", browsing_context.pipeline_id);
             },
         };
 
@@ -4611,7 +4569,7 @@ where
             Some(browsing_context) => browsing_context.pipeline_id,
             None => {
                 return warn!(
-                    "Webdriver load for closed browsing context {}.",
+                    "{}: Webdriver load for closed browsing context",
                     browsing_context_id
                 );
             },
@@ -4628,7 +4586,7 @@ where
 
     fn change_session_history(&mut self, change: SessionHistoryChange) {
         debug!(
-            "Setting browsing context {} to be pipeline {}.",
+            "{}: Setting to {}",
             change.browsing_context_id, change.new_pipeline_id
         );
 
@@ -4664,7 +4622,7 @@ where
                     Some(info) => info,
                     None => {
                         return warn!(
-                            "No NewBrowsingContextInfo for browsing context {}",
+                            "{}: No NewBrowsingContextInfo for browsing context",
                             change.browsing_context_id,
                         );
                     },
@@ -4750,7 +4708,7 @@ where
                         let result = match self.pipelines.get(&pipeline_id) {
                             None => {
                                 return warn!(
-                                    "Pipeline {} removed history states after closure",
+                                    "{}: Removed history states after closure",
                                     pipeline_id
                                 );
                             },
@@ -4857,7 +4815,7 @@ where
     }
 
     fn handle_activate_document_msg(&mut self, pipeline_id: PipelineId) {
-        debug!("Document ready to activate {}", pipeline_id);
+        debug!("{}: Document ready to activate", pipeline_id);
 
         // Find the pending change whose new pipeline id is pipeline_id.
         let pending_index = self
@@ -4878,7 +4836,7 @@ where
                     Some(ctx) => ctx.parent_pipeline_id,
                     None => {
                         return warn!(
-                            "Activated document {} after browsing context {} closure.",
+                            "{}: Activated document after closure of {}",
                             change.new_pipeline_id, change.browsing_context_id,
                         );
                     },
@@ -4969,14 +4927,15 @@ where
             self.fully_active_browsing_contexts_iter(top_level_browsing_context_id)
         {
             let pipeline_id = browsing_context.pipeline_id;
-            debug!(
-                "Checking readiness of browsing context {}, pipeline {}.",
-                browsing_context.id, pipeline_id
+            trace!(
+                "{}: Checking readiness of {}",
+                browsing_context.id,
+                pipeline_id
             );
 
             let pipeline = match self.pipelines.get(&pipeline_id) {
                 None => {
-                    warn!("Pipeline {} screenshot while closing.", pipeline_id);
+                    warn!("{}: Screenshot while closing", pipeline_id);
                     continue;
                 },
                 Some(pipeline) => pipeline,
@@ -5077,7 +5036,7 @@ where
 
     /// Set the current activity of a pipeline.
     fn set_activity(&self, pipeline_id: PipelineId, activity: DocumentActivity) {
-        debug!("Setting activity of {} to be {:?}.", pipeline_id, activity);
+        debug!("{}: Setting activity to {:?}", pipeline_id, activity);
         if let Some(pipeline) = self.pipelines.get(&pipeline_id) {
             pipeline.set_activity(activity);
             let child_activity = if activity == DocumentActivity::Inactive {
@@ -5111,7 +5070,7 @@ where
             // Send Resize (or ResizeInactive) messages to each pipeline in the frame tree.
             let pipeline_id = browsing_context.pipeline_id;
             let pipeline = match self.pipelines.get(&pipeline_id) {
-                None => return warn!("Pipeline {:?} resized after closing.", pipeline_id),
+                None => return warn!("{}: Resized after closing", pipeline_id),
                 Some(pipeline) => pipeline,
             };
             let _ = pipeline.event_loop.send(ConstellationControlMsg::Resize(
@@ -5140,7 +5099,7 @@ where
             let pipeline_id = change.new_pipeline_id;
             let pipeline = match self.pipelines.get(&pipeline_id) {
                 None => {
-                    warn!("Pending pipeline {:?} is closed", pipeline_id);
+                    warn!("{}: Pending pipeline is closed", pipeline_id);
                     continue;
                 },
                 Some(pipeline) => pipeline,
@@ -5162,7 +5121,7 @@ where
             let pipeline = match self.pipelines.get(&pipeline_id) {
                 None => {
                     return warn!(
-                        "Pipeline {:?} switched from fullscreen mode after closing.",
+                        "{}: Switched from fullscreen mode after closing",
                         pipeline_id
                     )
                 },
@@ -5180,7 +5139,7 @@ where
         browsing_context_id: BrowsingContextId,
         exit_mode: ExitPipelineMode,
     ) {
-        debug!("Closing browsing context {}.", browsing_context_id);
+        debug!("{}: Closing", browsing_context_id);
 
         self.close_browsing_context_children(
             browsing_context_id,
@@ -5190,7 +5149,7 @@ where
 
         let browsing_context = match self.browsing_contexts.remove(&browsing_context_id) {
             Some(ctx) => ctx,
-            None => return warn!("Closing browsing context {:?} twice.", browsing_context_id),
+            None => return warn!("{}: Closing twice", browsing_context_id),
         };
 
         {
@@ -5201,15 +5160,12 @@ where
         if let Some(parent_pipeline_id) = browsing_context.parent_pipeline_id {
             match self.pipelines.get_mut(&parent_pipeline_id) {
                 None => {
-                    return warn!(
-                        "Pipeline {:?} child closed after parent.",
-                        parent_pipeline_id
-                    );
+                    return warn!("{}: Child closed after parent", parent_pipeline_id);
                 },
                 Some(parent_pipeline) => parent_pipeline.remove_child(browsing_context_id),
             };
         }
-        debug!("Closed browsing context {:?}.", browsing_context_id);
+        debug!("{}: Closed", browsing_context_id);
     }
 
     // Close the children of a browsing context
@@ -5219,7 +5175,7 @@ where
         dbc: DiscardBrowsingContext,
         exit_mode: ExitPipelineMode,
     ) {
-        debug!("Closing browsing context children {}.", browsing_context_id);
+        debug!("{}: Closing browsing context children", browsing_context_id);
         // Store information about the pipelines to be closed. Then close the
         // pipelines, before removing ourself from the browsing_contexts hash map. This
         // ordering is vital - so that if close_pipeline() ends up closing
@@ -5239,7 +5195,7 @@ where
             self.close_pipeline(pipeline_id, dbc, exit_mode);
         }
 
-        debug!("Closed browsing context children {}.", browsing_context_id);
+        debug!("{}: Closed browsing context children", browsing_context_id);
     }
 
     // Discard the pipeline for a given document, udpdate the joint session history.
@@ -5252,7 +5208,7 @@ where
             Some(browser) => {
                 let load_data = match self.pipelines.get(&pipeline_id) {
                     Some(pipeline) => pipeline.load_data.clone(),
-                    None => return warn!("Discarding closed pipeline {}", pipeline_id),
+                    None => return warn!("{}: Discarding closed pipeline", pipeline_id),
                 };
                 browser.session_history.replace_reloader(
                     NeedsToReload::No(pipeline_id),
@@ -5261,7 +5217,7 @@ where
             },
             None => {
                 return warn!(
-                    "Discarding pipeline {} after browser {} closure",
+                    "{}: Discarding after closure of {}",
                     pipeline_id, top_level_browsing_context_id,
                 );
             },
@@ -5288,7 +5244,7 @@ where
         dbc: DiscardBrowsingContext,
         exit_mode: ExitPipelineMode,
     ) {
-        debug!("Closing pipeline {:?}.", pipeline_id);
+        debug!("{}: Closing", pipeline_id);
 
         // Sever connection to browsing context
         let browsing_context_id = self
@@ -5324,7 +5280,7 @@ where
         // the pipeline.
         let pipeline = match self.pipelines.get(&pipeline_id) {
             Some(pipeline) => pipeline,
-            None => return warn!("Closing pipeline {:?} twice.", pipeline_id),
+            None => return warn!("{}: Closing twice", pipeline_id),
         };
 
         // Remove this pipeline from pending changes if it hasn't loaded yet.
@@ -5341,7 +5297,7 @@ where
             ExitPipelineMode::Normal => pipeline.exit(dbc),
             ExitPipelineMode::Force => pipeline.force_exit(dbc),
         }
-        debug!("Closed pipeline {:?}.", pipeline_id);
+        debug!("{}: Closed", pipeline_id);
     }
 
     // Randomly close a pipeline -if --random-pipeline-closure-probability is set
@@ -5370,11 +5326,11 @@ where
                         // results in pipelines being closed early in their lifecycle,
                         // and not stressing the constellation as much.
                         // https://github.com/servo/servo/issues/18852
-                        info!("Not closing pending pipeline {}.", pipeline_id);
+                        info!("{}: Not closing pending pipeline", pipeline_id);
                     } else {
                         // Note that we deliberately do not do any of the tidying up
                         // associated with closing a pipeline. The constellation should cope!
-                        warn!("Randomly closing pipeline {}.", pipeline_id);
+                        warn!("{}: Randomly closing pipeline", pipeline_id);
                         pipeline.force_exit(DiscardBrowsingContext::No);
                     }
                 }
@@ -5449,10 +5405,7 @@ where
         // with low-resource scenarios.
         let browsing_context_id = BrowsingContextId::from(top_level_browsing_context_id);
         if let Some(frame_tree) = self.browsing_context_to_sendable(browsing_context_id) {
-            debug!(
-                "Sending frame tree for browsing context {}.",
-                browsing_context_id
-            );
+            debug!("{}: Sending frame tree", browsing_context_id);
             self.active_browser_id = Some(top_level_browsing_context_id);
             self.compositor_proxy
                 .send(CompositorMsg::SetFrameTree(frame_tree));
@@ -5464,7 +5417,7 @@ where
             let result = match self.pipelines.get(&media_session_pipeline_id) {
                 None => {
                     return warn!(
-                        "Pipeline {} got media session action request after closure.",
+                        "{}: Got media session action request after closure",
                         media_session_pipeline_id,
                     )
                 },

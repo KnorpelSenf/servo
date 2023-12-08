@@ -19,17 +19,16 @@ use ipc_channel::ipc;
 use ipc_channel::router::ROUTER;
 use js::jsapi::{
     CompileModule1, ExceptionStackBehavior, FinishDynamicModuleImport, GetModuleRequestSpecifier,
-    GetModuleResolveHook, GetRequestedModules, Handle as RawHandle, HandleObject,
-    HandleValue as RawHandleValue, Heap, JSAutoRealm, JSContext, JSObject, JSRuntime, JSString,
-    JS_ClearPendingException, JS_DefineProperty4, JS_IsExceptionPending, JS_NewStringCopyN,
-    ModuleErrorBehaviour, ModuleEvaluate, ModuleLink, MutableHandleValue,
-    SetModuleDynamicImportHook, SetModuleMetadataHook, SetModulePrivate, SetModuleResolveHook,
-    SetScriptPrivateReferenceHooks, ThrowOnModuleEvaluationFailure, Value, JSPROP_ENUMERATE,
+    GetModuleResolveHook, GetRequestedModuleSpecifier, GetRequestedModulesCount,
+    Handle as RawHandle, HandleObject, HandleValue as RawHandleValue, Heap, JSAutoRealm, JSContext,
+    JSObject, JSRuntime, JSString, JS_ClearPendingException, JS_DefineProperty4,
+    JS_IsExceptionPending, JS_NewStringCopyN, ModuleErrorBehaviour, ModuleEvaluate, ModuleLink,
+    MutableHandleValue, SetModuleDynamicImportHook, SetModuleMetadataHook, SetModulePrivate,
+    SetModuleResolveHook, SetScriptPrivateReferenceHooks, ThrowOnModuleEvaluationFailure, Value,
+    JSPROP_ENUMERATE,
 };
 use js::jsval::{JSVal, PrivateValue, UndefinedValue};
-use js::rust::jsapi_wrapped::{
-    GetArrayLength, GetRequestedModuleSpecifier, JS_GetElement, JS_GetPendingException,
-};
+use js::rust::jsapi_wrapped::JS_GetPendingException;
 use js::rust::wrappers::JS_SetPendingException;
 use js::rust::{
     transform_str_to_source_text, CompileOptionsWrapper, Handle, HandleValue, IntoHandle,
@@ -48,7 +47,7 @@ use uuid::Uuid;
 
 use crate::document_loader::LoadType;
 use crate::dom::bindings::cell::DomRefCell;
-use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowBinding::WindowMethods;
+use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
 use crate::dom::bindings::conversions::jsstring_to_str;
 use crate::dom::bindings::error::{report_pending_exception, Error};
 use crate::dom::bindings::inheritance::Castable;
@@ -568,34 +567,11 @@ impl ModuleTree {
         let mut specifier_urls = IndexSet::new();
 
         unsafe {
-            rooted!(in(*cx) let requested_modules = GetRequestedModules(*cx, module_object));
-
-            let mut length = 0;
-
-            if !GetArrayLength(*cx, requested_modules.handle(), &mut length) {
-                let module_length_error =
-                    gen_type_error(&global, "Wrong length of requested modules".to_owned());
-
-                return Err(module_length_error);
-            }
+            let length = GetRequestedModulesCount(*cx, module_object);
 
             for index in 0..length {
-                rooted!(in(*cx) let mut element = UndefinedValue());
-
-                if !JS_GetElement(
-                    *cx,
-                    requested_modules.handle(),
-                    index,
-                    &mut element.handle_mut(),
-                ) {
-                    let get_element_error =
-                        gen_type_error(&global, "Failed to get requested module".to_owned());
-
-                    return Err(get_element_error);
-                }
-
                 rooted!(in(*cx) let specifier = GetRequestedModuleSpecifier(
-                    *cx, element.handle()
+                    *cx, module_object, index
                 ));
 
                 let url = ModuleTree::resolve_module_specifier(
@@ -1522,7 +1498,7 @@ pub(crate) fn fetch_external_module_script(
 }
 
 #[derive(JSTraceable, MallocSizeOf)]
-#[unrooted_must_root_lint::must_root]
+#[crown::unrooted_must_root_lint::must_root]
 pub(crate) struct DynamicModuleList {
     requests: Vec<RootedTraceableBox<DynamicModule>>,
 
@@ -1556,7 +1532,7 @@ impl DynamicModuleList {
     }
 }
 
-#[unrooted_must_root_lint::must_root]
+#[crown::unrooted_must_root_lint::must_root]
 #[derive(JSTraceable, MallocSizeOf)]
 struct DynamicModule {
     #[ignore_malloc_size_of = "Rc is hard"]

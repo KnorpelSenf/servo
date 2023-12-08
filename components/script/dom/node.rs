@@ -57,7 +57,7 @@ use crate::dom::bindings::codegen::Bindings::NodeBinding::{
 };
 use crate::dom::bindings::codegen::Bindings::NodeListBinding::NodeListMethods;
 use crate::dom::bindings::codegen::Bindings::ProcessingInstructionBinding::ProcessingInstructionMethods;
-use crate::dom::bindings::codegen::Bindings::ShadowRootBinding::ShadowRootBinding::ShadowRootMethods;
+use crate::dom::bindings::codegen::Bindings::ShadowRootBinding::ShadowRoot_Binding::ShadowRootMethods;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
 use crate::dom::bindings::codegen::InheritTypes::DocumentFragmentTypeId;
 use crate::dom::bindings::codegen::UnionTypes::NodeOrString;
@@ -473,12 +473,11 @@ impl<'a> Iterator for QuerySelectorIterator {
             .filter_map(|node| {
                 // TODO(cgaebel): Is it worth it to build a bloom filter here
                 // (instead of passing `None`)? Probably.
-                //
-                // FIXME(bholley): Consider an nth-index cache here.
+                let mut nth_index_cache = Default::default();
                 let mut ctx = MatchingContext::new(
                     MatchingMode::Normal,
                     None,
-                    None,
+                    &mut nth_index_cache,
                     node.owner_doc().quirks_mode(),
                     NeedsSelectorFlags::No,
                 );
@@ -967,11 +966,11 @@ impl Node {
             Err(_) => Err(Error::Syntax),
             // Step 3.
             Ok(selectors) => {
-                // FIXME(bholley): Consider an nth-index cache here.
+                let mut nth_index_cache = Default::default();
                 let mut ctx = MatchingContext::new(
                     MatchingMode::Normal,
                     None,
-                    None,
+                    &mut nth_index_cache,
                     doc.quirks_mode(),
                     NeedsSelectorFlags::No,
                 );
@@ -1787,7 +1786,7 @@ impl Node {
         Node::new_(NodeFlags::new(), Some(doc))
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     pub fn new_document_node() -> Node {
         Node::new_(
             NodeFlags::new() | NodeFlags::IS_IN_DOC | NodeFlags::IS_CONNECTED,
@@ -1795,7 +1794,7 @@ impl Node {
         )
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     fn new_(flags: NodeFlags, doc: Option<&Document>) -> Node {
         Node {
             eventtarget: EventTarget::new_inherited(),
@@ -3151,7 +3150,7 @@ pub fn containing_shadow_root<T: DerivedFrom<Node> + DomObject>(
     derived.upcast().containing_shadow_root()
 }
 
-#[allow(unrooted_must_root)]
+#[allow(crown::unrooted_must_root)]
 pub fn stylesheets_owner_from_node<T: DerivedFrom<Node> + DomObject>(
     derived: &T,
 ) -> StyleSheetListOwner {

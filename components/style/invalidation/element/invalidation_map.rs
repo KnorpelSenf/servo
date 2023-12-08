@@ -5,7 +5,6 @@
 //! Code for invalidations due to state or attribute changes.
 
 use crate::context::QuirksMode;
-use crate::element_state::{DocumentState, ElementState};
 use crate::selector_map::{
     MaybeCaseInsensitiveHashMap, PrecomputedHashMap, SelectorMap, SelectorMapEntry,
 };
@@ -15,8 +14,9 @@ use crate::{Atom, LocalName, Namespace, ShrinkIfNeeded};
 use selectors::attr::NamespaceConstraint;
 use selectors::parser::{Combinator, Component};
 use selectors::parser::{Selector, SelectorIter};
-use selectors::visitor::SelectorVisitor;
+use selectors::visitor::{SelectorVisitor, SelectorListKind};
 use smallvec::SmallVec;
+use style_traits::dom::{DocumentState, ElementState};
 
 /// Mapping between (partial) CompoundSelectors (and the combinator to their
 /// right) and the states and attributes they depend on.
@@ -430,7 +430,11 @@ impl<'a> SelectorDependencyCollector<'a> {
 impl<'a> SelectorVisitor for SelectorDependencyCollector<'a> {
     type Impl = SelectorImpl;
 
-    fn visit_selector_list(&mut self, list: &[Selector<SelectorImpl>]) -> bool {
+    fn visit_selector_list(
+        &mut self,
+        _list_kind: SelectorListKind,
+        list: &[Selector<SelectorImpl>],
+    ) -> bool {
         for selector in list {
             // Here we cheat a bit: We can visit the rightmost compound with
             // the "outer" visitor, and it'd be fine. This reduces the amount of

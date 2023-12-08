@@ -1,4 +1,5 @@
 -moz-content-preferred-color-scheme
+-moz-device-pixel-ratio
 -moz-gtk-csd-close-button-position
 -moz-gtk-csd-maximize-button-position
 -moz-gtk-csd-menu-radius
@@ -33,10 +34,12 @@ compositionstart
 compositionupdate
 controllerchange
 cursive
+dark
 datachannel
 date
 datetime-local
 dir
+device-pixel-ratio
 durationchange
 email
 emptied
@@ -67,6 +70,7 @@ keydown
 keypress
 kind
 left
+light
 ltr
 load
 loadeddata
@@ -84,6 +88,7 @@ mouseover
 mouseup
 negotiationneeded
 none
+normal
 number
 onchange
 open
@@ -108,6 +113,7 @@ rejectionhandled
 removetrack
 reset
 resize
+resolution
 resourcetimingbufferfull
 right
 rtl
@@ -119,6 +125,7 @@ safe-area-inset-right
 scan
 screen
 scroll-position
+scrollbar-inline-size
 search
 seeked
 seeking

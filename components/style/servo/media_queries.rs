@@ -4,6 +4,7 @@
 
 //! Servo's media-query device and expression representation.
 
+use crate::color::AbsoluteColor;
 use crate::context::QuirksMode;
 use crate::custom_properties::CssEnvironment;
 use crate::font_metrics::FontMetrics;
@@ -12,16 +13,15 @@ use crate::media_queries::MediaType;
 use crate::properties::ComputedValues;
 use crate::values::computed::CSSPixelLength;
 use crate::values::computed::Context;
+use crate::values::computed::Resolution;
 use crate::values::specified::font::FONT_MEDIUM_PX;
 use crate::values::specified::ViewportVariant;
 use crate::values::KeyframesName;
-use app_units::Au;
-use cssparser::RGBA;
+use app_units::{Au, AU_PER_PX};
 use euclid::default::Size2D as UntypedSize2D;
 use euclid::{Scale, SideOffsets2D, Size2D};
 use mime::Mime;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use style_traits::viewport::ViewportConstraints;
 use style_traits::{CSSPixel, DevicePixel};
 
 /// A device is a structure that represents the current media a given document
@@ -117,7 +117,7 @@ impl Device {
     /// Sets the body text color for the "inherit color from body" quirk.
     ///
     /// <https://quirks.spec.whatwg.org/#the-tables-inherit-color-from-body-quirk>
-    pub fn set_body_text_color(&self, _color: RGBA) {
+    pub fn set_body_text_color(&self, _color: AbsoluteColor) {
         // Servo doesn't implement this quirk (yet)
     }
 
@@ -158,9 +158,20 @@ impl Device {
         self.used_viewport_units.load(Ordering::Relaxed)
     }
 
+    /// Returns the number of app units per device pixel we're using currently.
+    pub fn app_units_per_device_pixel(&self) -> i32 {
+        (AU_PER_PX as f32 / self.device_pixel_ratio.0) as i32
+    }
+
     /// Returns the device pixel ratio.
     pub fn device_pixel_ratio(&self) -> Scale<f32, CSSPixel, DevicePixel> {
         self.device_pixel_ratio
+    }
+
+    /// Gets the size of the scrollbar in CSS pixels.
+    pub fn scrollbar_inline_size(&self) -> CSSPixelLength {
+        // TODO: implement this.
+        CSSPixelLength::new(0.0)
     }
 
     /// Queries dummy font metrics for Servo. Knows nothing about fonts and does not provide
@@ -179,11 +190,6 @@ impl Device {
         Default::default()
     }
 
-    /// Take into account a viewport rule taken from the stylesheets.
-    pub fn account_for_viewport_rule(&mut self, constraints: &ViewportConstraints) {
-        self.viewport_size = constraints.size;
-    }
-
     /// Return the media type of the current device.
     pub fn media_type(&self) -> MediaType {
         self.media_type.clone()
@@ -195,13 +201,13 @@ impl Device {
     }
 
     /// Returns the default background color.
-    pub fn default_background_color(&self) -> RGBA {
-        RGBA::new(255, 255, 255, 255)
+    pub fn default_background_color(&self) -> AbsoluteColor {
+        AbsoluteColor::white()
     }
 
     /// Returns the default foreground color.
-    pub fn default_color(&self) -> RGBA {
-        RGBA::new(0, 0, 0, 255)
+    pub fn default_color(&self) -> AbsoluteColor {
+        AbsoluteColor::black()
     }
 
     /// Returns safe area insets
@@ -228,7 +234,7 @@ impl Device {
 
     /// Return whether the document is a chrome document.
     #[inline]
-    pub fn is_chrome_document(&self) -> bool {
+    pub fn chrome_rules_enabled_for_document(&self) -> bool {
         false
     }
 }
@@ -252,9 +258,19 @@ fn eval_scan(_: &Context, _: Option<Scan>) -> bool {
     false
 }
 
+/// https://drafts.csswg.org/mediaqueries-4/#resolution
+fn eval_resolution(context: &Context) -> Resolution {
+    Resolution::from_dppx(context.device().device_pixel_ratio.0)
+}
+
+/// https://compat.spec.whatwg.org/#css-media-queries-webkit-device-pixel-ratio
+fn eval_device_pixel_ratio(context: &Context) -> f32 {
+    eval_resolution(context).dppx()
+}
+
 lazy_static! {
     /// A list with all the media features that Servo supports.
-    pub static ref MEDIA_FEATURES: [QueryFeatureDescription; 2] = [
+    pub static ref MEDIA_FEATURES: [QueryFeatureDescription; 5] = [
         feature!(
             atom!("width"),
             AllowsRanges::Yes,
@@ -265,6 +281,24 @@ lazy_static! {
             atom!("scan"),
             AllowsRanges::No,
             keyword_evaluator!(eval_scan, Scan),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("resolution"),
+            AllowsRanges::Yes,
+            Evaluator::Resolution(eval_resolution),
+            FeatureFlags::empty(),
+        ),
+        feature!(
+            atom!("device-pixel-ratio"),
+            AllowsRanges::Yes,
+            Evaluator::Float(eval_device_pixel_ratio),
+            FeatureFlags::WEBKIT_PREFIX,
+        ),
+        feature!(
+            atom!("-moz-device-pixel-ratio"),
+            AllowsRanges::Yes,
+            Evaluator::Float(eval_device_pixel_ratio),
             FeatureFlags::empty(),
         ),
     ];

@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 #![allow(bare_trait_objects)] // Until https://github.com/brendanzab/gl-rs/pull/493
-
+                              //
 pub type ServoGl = std::rc::Rc<dyn servo::gl::Gl>;
 
 #[cfg(any(target_os = "android", target_os = "windows"))]
@@ -117,16 +117,15 @@ pub mod gl {
         }
 
         let gl = unsafe {
+            let lib = match Library::new("libGL.so.1").or_else(|_| Library::new("libGL.so")) {
+                Ok(lib) => lib,
+                Err(_) => return Err("Can't find libGL.so, OpenGL isn't configured/installed"),
+            };
 
-        let lib = match Library::new("libGL.so.1").or_else(|_| Library::new("libGL.so")) {
-            Ok(lib) => lib,
-            Err(_) => return Err("Can't find libGL.so, OpenGL isn't configured/installed"),
-        };
-
-        let glx = glx::Glx::load_with(|sym| unsafe {
-            let symbol: Symbol<*const c_void> = lib.get(sym.as_bytes()).unwrap();
-            *symbol.into_raw()
-        });
+            let glx = glx::Glx::load_with(|sym| {
+                let symbol: Symbol<*const c_void> = lib.get(sym.as_bytes()).unwrap();
+                *symbol.into_raw()
+            });
 
             GlFns::load_with(|addr| {
                 let addr = CString::new(addr.as_bytes()).unwrap();

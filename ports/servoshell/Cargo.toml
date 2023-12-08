@@ -14,7 +14,7 @@ path = "main.rs"
 bench = false
 
 [build-dependencies]
-vergen = { version = "8.2.5", features = ["git", "gitcl"] }
+vergen = { version = "8.2.6", features = ["git", "git2"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
@@ -65,7 +65,7 @@ shellwords = "1.0.0"
 surfman = { workspace = true, features = ["sm-x11", "sm-raw-window-handle"] }
 tinyfiledialogs = "3.0"
 webxr = { git = "https://github.com/servo/webxr", features = ["ipc", "glwindow", "headless"] }
-winit = "0.28.6"
+winit = "0.28.7"
 url = { workspace = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]

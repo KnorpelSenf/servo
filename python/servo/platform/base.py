@@ -8,6 +8,7 @@
 # except according to those terms.
 
 import os
+import shutil
 import subprocess
 from typing import Dict, Optional
 
@@ -50,8 +51,6 @@ class Base:
                 f"gst-plugin-scanner{self.executable_suffix()}",
             )
             env["GST_PLUGIN_SYSTEM_PATH"] = os.path.join(gstreamer_root, "lib", "gstreamer-1.0")
-            if self.is_macos:
-                env["OPENSSL_INCLUDE_DIR"] = os.path.join(gstreamer_root, "Headers")
 
         # If we are not cross-compiling GStreamer must be installed for the system. In
         # the cross-compilation case, we might be picking it up from another directory.
@@ -66,9 +65,6 @@ class Base:
 
     def library_path_variable_name(self):
         raise NotImplementedError("Do not know how to set library path for platform.")
-
-    def linker_flag(self) -> str:
-        return ""
 
     def executable_suffix(self) -> str:
         return ""
@@ -96,8 +92,33 @@ class Base:
         )
 
     def bootstrap(self, force: bool):
-        if not self._platform_bootstrap(force):
+        installed_something = self._platform_bootstrap(force)
+        installed_something |= self.install_taplo(force)
+        installed_something |= self.install_crown(force)
+        if not installed_something:
             print("Dependencies were already installed!")
+
+    def install_taplo(self, force: bool) -> bool:
+        if not force and shutil.which("taplo") is not None:
+            return False
+
+        if subprocess.call(["cargo", "install", "taplo-cli", "--locked"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE) != 0:
+            raise EnvironmentError("Installation of taplo failed.")
+
+        return True
+
+    def install_crown(self, force: bool) -> bool:
+        # We need to override the rustc set in cargo/config.toml because crown
+        # may not be installed yet.
+        env = dict(os.environ)
+        env["CARGO_BUILD_RUSTC"] = "rustc"
+
+        if subprocess.call(["cargo", "install", "--path", "support/crown"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) != 0:
+            raise EnvironmentError("Installation of crown failed.")
+
+        return True
 
     def passive_bootstrap(self) -> bool:
         """A bootstrap method that is called without explicitly invoking `./mach bootstrap`

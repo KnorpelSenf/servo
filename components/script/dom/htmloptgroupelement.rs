@@ -5,7 +5,7 @@
 use dom_struct::dom_struct;
 use html5ever::{local_name, LocalName, Prefix};
 use js::rust::HandleObject;
-use style::element_state::ElementState;
+use style_traits::dom::ElementState;
 
 use crate::dom::attr::Attr;
 use crate::dom::bindings::codegen::Bindings::HTMLOptGroupElementBinding::HTMLOptGroupElementMethods;
@@ -34,7 +34,7 @@ impl HTMLOptGroupElement {
     ) -> HTMLOptGroupElement {
         HTMLOptGroupElement {
             htmlelement: HTMLElement::new_inherited_with_state(
-                ElementState::IN_ENABLED_STATE,
+                ElementState::ENABLED,
                 local_name,
                 prefix,
                 document,
@@ -42,7 +42,7 @@ impl HTMLOptGroupElement {
         }
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     pub fn new(
         local_name: LocalName,
         prefix: Option<Prefix>,

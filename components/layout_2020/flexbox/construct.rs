@@ -132,7 +132,7 @@ where
                     .stylist
                     .style_for_anonymous::<Node::ConcreteElement>(
                         &self.context.shared_context().guards,
-                        &style::selector_parser::PseudoElement::ServoText,
+                        &style::selector_parser::PseudoElement::ServoAnonymousBox,
                         &self.info.style,
                     ),
             )
@@ -165,6 +165,7 @@ where
                 } => {
                     let display_inside = match display {
                         DisplayGeneratingBox::OutsideInside { inside, .. } => inside,
+                        DisplayGeneratingBox::LayoutInternal(_) => display.display_inside(),
                     };
                     let box_ = if info.style.get_box().position.is_absolutely_positioned() {
                         // https://drafts.csswg.org/css-flexbox/#abspos-items

@@ -277,7 +277,7 @@ pub trait Flow: HasBaseFlow + fmt::Debug + Sync + Send + 'static {
         might_have_floats_in_or_out
     }
 
-    fn has_non_invertible_transform(&self) -> bool {
+    fn has_non_invertible_transform_or_zero_scale(&self) -> bool {
         if !self.class().is_block_like() ||
             self.as_block()
                 .fragment
@@ -290,7 +290,9 @@ pub trait Flow: HasBaseFlow + fmt::Debug + Sync + Send + 'static {
             return false;
         }
 
-        self.as_block().fragment.has_non_invertible_transform()
+        self.as_block()
+            .fragment
+            .has_non_invertible_transform_or_zero_scale()
     }
 
     fn get_overflow_in_parent_coordinates(&self) -> Overflow {
@@ -1176,7 +1178,7 @@ impl BaseFlow {
         state: &mut StackingContextCollectionState,
     ) {
         for kid in self.children.iter_mut() {
-            if !kid.has_non_invertible_transform() {
+            if !kid.has_non_invertible_transform_or_zero_scale() {
                 kid.collect_stacking_contexts(state);
             }
         }
@@ -1376,7 +1378,11 @@ impl MutableOwnedFlowUtils for FlowRef {
         let base = FlowRef::deref_mut(self).mut_base();
 
         for descendant_link in abs_descendants.descendant_links.iter_mut() {
-            debug_assert!(!descendant_link.has_reached_containing_block);
+            // TODO(servo#30573) revert to debug_assert!() once underlying bug is fixed
+            #[cfg(debug_assertions)]
+            if !(!descendant_link.has_reached_containing_block) {
+                log::warn!("debug assertion failed! !descendant_link.has_reached_containing_block");
+            }
             let descendant_base = FlowRef::deref_mut(&mut descendant_link.flow).mut_base();
             descendant_base.absolute_cb.set(this.clone());
         }

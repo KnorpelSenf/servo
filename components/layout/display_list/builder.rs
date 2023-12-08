@@ -29,6 +29,7 @@ use net_traits::image_cache::UsePlaceholder;
 use range::Range;
 use servo_config::opts;
 use servo_geometry::{self, MaxRect};
+use style::color::AbsoluteColor;
 use style::computed_values::border_style::T as BorderStyle;
 use style::computed_values::overflow_x::T as StyleOverflow;
 use style::computed_values::pointer_events::T as PointerEvents;
@@ -43,7 +44,6 @@ use style::values::computed::{ClipRectOrAuto, Gradient};
 use style::values::generics::background::BackgroundSize;
 use style::values::generics::image::PaintWorklet;
 use style::values::specified::ui::CursorKind;
-use style::values::RGBA;
 use style_traits::{CSSPixel, ToCss};
 use webrender_api::units::{LayoutRect, LayoutTransform, LayoutVector2D};
 use webrender_api::{
@@ -62,7 +62,7 @@ use crate::display_list::items::{
     PushTextShadowDisplayItem, StackingContext, StackingContextType, StickyFrameData,
     TextOrientation, WebRenderImageInfo,
 };
-use crate::display_list::{border, gradient, ToLayout};
+use crate::display_list::{border, gradient, FilterToLayout, ToLayout};
 use crate::flow::{BaseFlow, Flow, FlowFlags};
 use crate::flow_ref::FlowRef;
 use crate::fragment::{
@@ -671,7 +671,7 @@ impl Fragment {
         state: &mut DisplayListBuildState,
         style: &ComputedValues,
         background: &style_structs::Background,
-        background_color: RGBA,
+        background_color: AbsoluteColor,
         display_list_section: DisplayListSection,
         absolute_bounds: Rect<Au>,
     ) {
@@ -1573,7 +1573,7 @@ impl Fragment {
         }
 
         // If this fragment takes up no space, we don't need to build any display items for it.
-        if self.has_non_invertible_transform() {
+        if self.has_non_invertible_transform_or_zero_scale() {
             return;
         }
 
@@ -1975,8 +1975,14 @@ impl Fragment {
             .translate(-border_box_offset.to_vector());
 
         // Create the filter pipeline.
+        let current_color = self.style().clone_color();
         let effects = self.style().get_effects();
-        let mut filters: Vec<FilterOp> = effects.filter.0.iter().map(ToLayout::to_layout).collect();
+        let mut filters: Vec<FilterOp> = effects
+            .filter
+            .0
+            .iter()
+            .map(|filter| FilterToLayout::to_layout(filter, &current_color))
+            .collect();
         if effects.opacity != 1.0 {
             filters.push(FilterOp::Opacity(effects.opacity.into(), effects.opacity));
         }
@@ -2196,7 +2202,7 @@ impl Fragment {
     fn build_display_list_for_text_decoration(
         &self,
         state: &mut DisplayListBuildState,
-        color: &RGBA,
+        color: &AbsoluteColor,
         stacking_relative_box: &LogicalRect<Au>,
         clip: Rect<Au>,
     ) {
@@ -2413,7 +2419,7 @@ impl BlockFlow {
         flags: StackingContextCollectionFlags,
     ) {
         // This block flow produces no stacking contexts if it takes up no space.
-        if self.has_non_invertible_transform() {
+        if self.has_non_invertible_transform_or_zero_scale() {
             return;
         }
 
@@ -2587,11 +2593,10 @@ impl BlockFlow {
         // order to properly calculate max offsets we need to compare our size and
         // position in our parent's coordinate system.
         let border_box_in_parent = self.stacking_relative_border_box(CoordinateSystem::Parent);
-        let margins = self.fragment.margin.to_physical(
-            self.base
-                .early_absolute_position_info
-                .relative_containing_block_mode,
-        );
+        let margins = self
+            .fragment
+            .margin
+            .to_physical(self.fragment.style.writing_mode);
 
         // Position:sticky elements are always restricted based on the size and position of
         // their containing block, which for sticky items is like relative and statically
@@ -2854,7 +2859,7 @@ impl BlockFlow {
         &self,
         state: &mut DisplayListBuildState,
         background: &style_structs::Background,
-        background_color: RGBA,
+        background_color: AbsoluteColor,
     ) {
         let stacking_relative_border_box = self
             .base

@@ -25,18 +25,17 @@ manually, try the [manual build setup][manual-build].
 - Install [Xcode](https://developer.apple.com/xcode/)
 - Install [Homebrew](https://brew.sh/)
 - Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Run `pip install virtualenv`
 - Run `./mach bootstrap`<br/>
   *Note: This will install the recommended version of GStreamer globally on your system.*
 
 ### Linux
 
 - Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Install Python and virtualenv
-    - **Debian-like:** Run `sudo apt install python3-virtualenv python3-pip`
-    - **Fedora:** Run `sudo dnf install python3 python3-virtualenv python3-pip python3-devel`
-    - **Arch:** Run `sudo pacman -S --needed python python-virtualenv python-pip`
-    - **Gentoo:** Run `sudo emerge dev-python/virtualenv dev-python/pip`
+- Install Python
+    - **Debian-like:** Run `sudo apt install python3-pip`
+    - **Fedora:** Run `sudo dnf install python3 python3-pip python3-devel`
+    - **Arch:** Run `sudo pacman -S --needed python python-pip`
+    - **Gentoo:** Run `sudo emerge dev-python/pip`
 - Run `./mach bootstrap`
 
 ### Windows
@@ -79,7 +78,7 @@ The examples below will use Unix, but the same applies to Windows.
 
 Servo's build system uses rustup.rs to automatically download a Rust compiler.
 This is a specific version of Rust Nightly determined by the
-[`rust-toolchain`](https://github.com/servo/servo/blob/master/rust-toolchain) file.
+[`rust-toolchain.toml`](https://github.com/servo/servo/blob/master/rust-toolchain.toml) file.
 
 ### Normal build
 
@@ -166,7 +165,11 @@ Run Servo with the command:
 
 * `GStreamer` >=1.16
 * `gst-plugins-bad` >=1.16
-
+* `libXcursor`
+* `libXrandr`
+* `libXi`
+* `libxkbcommon`
+* `vulkan-loader`
 
 ## Developing
 

@@ -13,6 +13,7 @@
 /ports/android/obj
 /ports/libsimpleservo/capi/target
 /python/_virtualenv*
+/python/_venv*
 /python/tidy/servo_tidy.egg-info
 /tests/wpt/sync
 *.pkl
@@ -29,6 +30,9 @@ Servo.app
 /glfw
 capture_webrender/
 /screenshots
+
+# Allow CSV files to be used as resources in tests
+!/tests/**/*.csv
 
 # Editors
 ## IntelliJ
@@ -58,6 +62,9 @@ Sessionx.vim
 
 # Layout debugger trace files
 layout_trace*
+
+# Package managers
+support/macos/Brewfile.lock.json
 
 # direnv
 .envrc

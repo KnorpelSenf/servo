@@ -50,11 +50,11 @@ use crate::document_loader::{LoadBlocker, LoadType};
 use crate::dom::activation::Activatable;
 use crate::dom::attr::Attr;
 use crate::dom::bindings::cell::{DomRefCell, RefMut};
-use crate::dom::bindings::codegen::Bindings::DOMRectBinding::DOMRectBinding::DOMRectMethods;
-use crate::dom::bindings::codegen::Bindings::ElementBinding::ElementBinding::ElementMethods;
+use crate::dom::bindings::codegen::Bindings::DOMRectBinding::DOMRect_Binding::DOMRectMethods;
+use crate::dom::bindings::codegen::Bindings::ElementBinding::Element_Binding::ElementMethods;
 use crate::dom::bindings::codegen::Bindings::HTMLImageElementBinding::HTMLImageElementMethods;
 use crate::dom::bindings::codegen::Bindings::MouseEventBinding::MouseEventMethods;
-use crate::dom::bindings::codegen::Bindings::NodeBinding::NodeBinding::NodeMethods;
+use crate::dom::bindings::codegen::Bindings::NodeBinding::Node_Binding::NodeMethods;
 use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
 use crate::dom::bindings::error::{Error, Fallible};
 use crate::dom::bindings::inheritance::Castable;
@@ -141,7 +141,7 @@ enum ImageRequestPhase {
     Current,
 }
 #[derive(JSTraceable, MallocSizeOf)]
-#[unrooted_must_root_lint::must_root]
+#[crown::unrooted_must_root_lint::must_root]
 struct ImageRequest {
     state: State,
     #[no_trace]
@@ -690,6 +690,7 @@ impl HTMLImageElement {
             Some(CssRuleType::Style),
             ParsingMode::all(),
             quirks_mode,
+            /* namespaces = */ Default::default(),
             None,
             None,
         );
@@ -1248,7 +1249,7 @@ impl HTMLImageElement {
         }
     }
 
-    #[allow(unrooted_must_root)]
+    #[allow(crown::unrooted_must_root)]
     pub fn new(
         local_name: LocalName,
         prefix: Option<Prefix>,
@@ -1442,6 +1443,7 @@ pub fn parse_a_sizes_attribute(value: DOMString) -> SourceSizeList {
         // browsers do regarding quirks-mode in a media list?
         ParsingMode::empty(),
         QuirksMode::NoQuirks,
+        /* namespaces = */ Default::default(),
         None,
         None,
     );

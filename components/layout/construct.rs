@@ -805,7 +805,7 @@ where
                 .stylist
                 .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                     &context.guards,
-                    &PseudoElement::ServoText,
+                    &PseudoElement::ServoLegacyText,
                     &style,
                 );
             if node_is_input_or_text_area {
@@ -813,7 +813,7 @@ where
                     .stylist
                     .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                         &context.guards,
-                        &PseudoElement::ServoInputText,
+                        &PseudoElement::ServoLegacyInputText,
                         &style,
                     )
             }
@@ -1116,7 +1116,7 @@ where
                     .stylist
                     .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                         &context.guards,
-                        &PseudoElement::ServoText,
+                        &PseudoElement::ServoLegacyText,
                         &style,
                     ),
                 node.restyle_damage(),
@@ -1133,7 +1133,7 @@ where
                     .stylist
                     .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                         &context.guards,
-                        &PseudoElement::ServoText,
+                        &PseudoElement::ServoLegacyText,
                         &style,
                     );
                 self.create_fragments_for_node_text_content(&mut fragments, node, &text_style)
@@ -1176,7 +1176,7 @@ where
             .stylist
             .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                 &context.guards,
-                &PseudoElement::ServoInlineBlockWrapper,
+                &PseudoElement::ServoLegacyInlineBlockWrapper,
                 &style,
             );
         let fragment_info =
@@ -1227,7 +1227,7 @@ where
             .stylist
             .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                 &style_context.guards,
-                &PseudoElement::ServoInlineAbsolute,
+                &PseudoElement::ServoLegacyInlineAbsolute,
                 &style,
             );
         let fragment = Fragment::from_opaque_node_and_style(
@@ -1372,7 +1372,7 @@ where
                 .stylist
                 .style_for_anonymous::<ConcreteThreadSafeLayoutNode::ConcreteElement>(
                     &context.guards,
-                    &PseudoElement::ServoTableWrapper,
+                    &PseudoElement::ServoLegacyTableWrapper,
                     &table_style,
                 );
         }
@@ -2189,7 +2189,7 @@ where
     )));
     let text_style = context.stylist.style_for_anonymous::<E>(
         &context.guards,
-        &PseudoElement::ServoText,
+        &PseudoElement::ServoLegacyText,
         &node.style,
     );
 
@@ -2208,14 +2208,15 @@ fn has_padding_or_border(values: &ComputedValues) -> bool {
     let padding = values.get_padding();
     let border = values.get_border();
 
+    use style::Zero;
     !padding.padding_top.is_definitely_zero() ||
         !padding.padding_right.is_definitely_zero() ||
         !padding.padding_bottom.is_definitely_zero() ||
         !padding.padding_left.is_definitely_zero() ||
-        border.border_top_width.px() != 0. ||
-        border.border_right_width.px() != 0. ||
-        border.border_bottom_width.px() != 0. ||
-        border.border_left_width.px() != 0.
+        !border.border_top_width.is_zero() ||
+        !border.border_right_width.is_zero() ||
+        !border.border_bottom_width.is_zero() ||
+        !border.border_left_width.is_zero()
 }
 
 /// Maintains a stack of anonymous boxes needed to ensure that the flow tree is *legal*. The tree
@@ -2317,7 +2318,7 @@ impl Legalizer {
                 let mut block_wrapper = Legalizer::create_anonymous_flow::<E, _>(
                     context,
                     parent,
-                    &[PseudoElement::ServoAnonymousBlock],
+                    &[PseudoElement::ServoLegacyAnonymousBlock],
                     SpecificFragmentInfo::Generic,
                     BlockFlow::from_fragment,
                 );
@@ -2378,21 +2379,21 @@ impl Legalizer {
             FlowClass::TableRow => self.push_new_anonymous_flow::<E, _>(
                 context,
                 parent,
-                &[PseudoElement::ServoAnonymousTableCell],
+                &[PseudoElement::ServoLegacyAnonymousTableCell],
                 SpecificFragmentInfo::TableCell,
                 TableCellFlow::from_fragment,
             ),
             FlowClass::Table | FlowClass::TableRowGroup => self.push_new_anonymous_flow::<E, _>(
                 context,
                 parent,
-                &[PseudoElement::ServoAnonymousTableRow],
+                &[PseudoElement::ServoLegacyAnonymousTableRow],
                 SpecificFragmentInfo::TableRow,
                 TableRowFlow::from_fragment,
             ),
             FlowClass::TableWrapper => self.push_new_anonymous_flow::<E, _>(
                 context,
                 parent,
-                &[PseudoElement::ServoAnonymousTable],
+                &[PseudoElement::ServoLegacyAnonymousTable],
                 SpecificFragmentInfo::Table,
                 TableFlow::from_fragment,
             ),
@@ -2400,8 +2401,8 @@ impl Legalizer {
                 context,
                 parent,
                 &[
-                    PseudoElement::ServoTableWrapper,
-                    PseudoElement::ServoAnonymousTableWrapper,
+                    PseudoElement::ServoLegacyTableWrapper,
+                    PseudoElement::ServoLegacyAnonymousTableWrapper,
                 ],
                 SpecificFragmentInfo::TableWrapper,
                 TableWrapperFlow::from_fragment,

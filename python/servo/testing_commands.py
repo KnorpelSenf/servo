@@ -7,8 +7,6 @@
 # option. This file may not be copied, modified, or distributed
 # except according to those terms.
 
-from __future__ import print_function, unicode_literals
-
 import argparse
 import logging
 import re
@@ -37,7 +35,6 @@ import tidy
 
 from servo.command_base import BuildType, CommandBase, call, check_call
 from servo.util import delete
-from distutils.dir_util import copy_tree
 
 SCRIPT_PATH = os.path.split(__file__)[0]
 PROJECT_TOPLEVEL_PATH = os.path.abspath(os.path.join(SCRIPT_PATH, "..", ".."))
@@ -55,6 +52,18 @@ TEST_SUITES = OrderedDict([
 ])
 
 TEST_SUITES_BY_PREFIX = {path: k for k, v in TEST_SUITES.items() if "paths" in v for path in v["paths"]}
+
+
+def format_toml_files_with_taplo(check_only: bool = True) -> int:
+    taplo = shutil.which("taplo")
+    if taplo is None:
+        print("Could not find `taplo`. Run `./mach bootstrap` or `cargo install taplo-cli --locked`")
+        return 1
+
+    if check_only:
+        return call([taplo, "fmt", "--check"], env={'RUST_LOG': 'error'})
+    else:
+        return call([taplo, "fmt"], env={'RUST_LOG': 'error'})
 
 
 @CommandProvider
@@ -165,8 +174,8 @@ class MachCommands(CommandBase):
                      help="Run in bench mode")
     @CommandArgument('--nocapture', default=False, action="store_true",
                      help="Run tests with nocapture ( show test stdout )")
-    @CommandBase.common_command_arguments(build_configuration=True, build_type=False)
-    def test_unit(self, test_name=None, package=None, bench=False, nocapture=False, **kwargs):
+    @CommandBase.common_command_arguments(build_configuration=True, build_type=True)
+    def test_unit(self, build_type: BuildType, test_name=None, package=None, bench=False, nocapture=False, **kwargs):
         if test_name is None:
             test_name = []
 
@@ -209,6 +218,7 @@ class MachCommands(CommandBase):
             "script_traits",
             "servo_config",
             "servo_remutex",
+            "crown",
         ]
         if not packages:
             packages = set(os.listdir(path.join(self.context.topdir, "tests", "unit"))) - set(['.DS_Store'])
@@ -230,6 +240,14 @@ class MachCommands(CommandBase):
 
         # Gather Cargo build timings (https://doc.rust-lang.org/cargo/reference/timings.html).
         args = ["--timings"]
+
+        if build_type.is_release():
+            args += ["--release"]
+        elif build_type.is_dev():
+            pass  # there is no argument for debug
+        else:
+            args += ["--profile", build_type.profile]
+
         for crate in packages:
             args += ["-p", "%s_tests" % crate]
         for crate in in_crate_packages:
@@ -274,12 +292,17 @@ class MachCommands(CommandBase):
         else:
             manifest_dirty = wpt.manifestupdate.update(check_clean=True)
         tidy_failed = tidy.scan(not all_files, not no_progress, stylo=stylo, no_wpt=no_wpt)
-        rustfmt_failed = call(["cargo", "fmt", "--", "--check"])
+
+        call(["rustup", "install", "nightly-2023-03-18"])
+        call(["rustup", "component", "add", "rustfmt", "--toolchain", "nightly-2023-03-18"])
+        rustfmt_failed = call(["cargo", "+nightly-2023-03-18", "fmt", "--", "--check"])
 
         if rustfmt_failed:
             print("Run `./mach fmt` to fix the formatting")
 
-        return tidy_failed or manifest_dirty or rustfmt_failed
+        taplo_failed = format_toml_files_with_taplo()
+
+        return tidy_failed or manifest_dirty or rustfmt_failed or taplo_failed
 
     @Command('test-scripts',
              description='Run tests for all build and support scripts.',
@@ -370,10 +393,16 @@ class MachCommands(CommandBase):
         return wpt.manifestupdate.update(check_clean=False)
 
     @Command('fmt',
-             description='Format the Rust and CPP source files with rustfmt',
+             description='Format Rust and TOML files',
              category='testing')
     def format_code(self):
-        return call(["cargo", "fmt"])
+        result = format_toml_files_with_taplo(check_only=False)
+        if result != 0:
+            return result
+
+        call(["rustup", "install", "nightly-2023-03-18"])
+        call(["rustup", "component", "add", "rustfmt", "--toolchain", "nightly-2023-03-18"])
+        return call(["cargo", "+nightly-2023-03-18", "fmt"])
 
     @Command('update-wpt',
              description='Update the web platform tests',
@@ -763,6 +792,8 @@ tests/wpt/mozilla/tests for Servo-only tests""" % reference_path)
         res = call(["npm", "run", "wpt"], cwd=clone_dir)
         if res != 0:
             return res
+        # https://github.com/gpuweb/cts/pull/2770
+        delete(path.join(clone_dir, "out-wpt", "cts-chunked2sec.https.html"))
         cts_html = path.join(clone_dir, "out-wpt", "cts.https.html")
         # patch
         with open(cts_html, 'r') as file:
@@ -774,7 +805,7 @@ tests/wpt/mozilla/tests for Servo-only tests""" % reference_path)
             file.write(filedata)
         # copy
         delete(path.join(tdir, "webgpu"))
-        copy_tree(path.join(clone_dir, "out-wpt"), path.join(tdir, "webgpu"))
+        shutil.copytree(path.join(clone_dir, "out-wpt"), path.join(tdir, "webgpu"))
         # update commit
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=clone_dir).decode()
         with open(path.join(tdir, "checkout_commit.txt"), 'w') as file:

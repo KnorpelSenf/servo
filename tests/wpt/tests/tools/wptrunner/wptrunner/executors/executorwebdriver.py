@@ -32,7 +32,9 @@ from .protocol import (BaseProtocolPart,
                        WindowProtocolPart,
                        DebugProtocolPart,
                        SPCTransactionsProtocolPart,
+                       RPHRegistrationsProtocolPart,
                        FedCMProtocolPart,
+                       VirtualSensorProtocolPart,
                        merge_dicts)
 
 from webdriver.client import Session
@@ -91,7 +93,9 @@ addEventListener("__test_restart", e => {e.preventDefault(); callback(true)})"""
             except (socket.timeout, error.NoSuchWindowException, error.UnknownErrorException, OSError):
                 break
             except Exception:
-                self.logger.error(traceback.format_exc())
+                message = "Uncaught exception in WebDriverBaseProtocolPart.wait:\n"
+                message += traceback.format_exc()
+                self.logger.error(message)
                 break
         return False
 
@@ -360,6 +364,13 @@ class WebDriverSPCTransactionsProtocolPart(SPCTransactionsProtocolPart):
         body = {"mode": mode}
         return self.webdriver.send_session_command("POST", "secure-payment-confirmation/set-mode", body)
 
+class WebDriverRPHRegistrationsProtocolPart(RPHRegistrationsProtocolPart):
+    def setup(self):
+        self.webdriver = self.parent.webdriver
+
+    def set_rph_registration_mode(self, mode):
+        body = {"mode": mode}
+        return self.webdriver.send_session_command("POST", "custom-handlers/set-mode", body)
 
 class WebDriverFedCMProtocolPart(FedCMProtocolPart):
     def setup(self):
@@ -394,6 +405,26 @@ class WebDriverDebugProtocolPart(DebugProtocolPart):
         raise NotImplementedError()
 
 
+class WebDriverVirtualSensorPart(VirtualSensorProtocolPart):
+    def setup(self):
+        self.webdriver = self.parent.webdriver
+
+    def create_virtual_sensor(self, sensor_type, sensor_params):
+        body = {"type": sensor_type}
+        body.update(sensor_params)
+        return self.webdriver.send_session_command("POST", "sensor", body)
+
+    def update_virtual_sensor(self, sensor_type, reading):
+        body = {"reading": reading}
+        return self.webdriver.send_session_command("POST", "sensor/%s" % sensor_type, body)
+
+    def remove_virtual_sensor(self, sensor_type):
+        return self.webdriver.send_session_command("DELETE", "sensor/%s" % sensor_type)
+
+    def get_virtual_sensor_information(self, sensor_type):
+        return self.webdriver.send_session_command("GET", "sensor/%s" % sensor_type)
+
+
 class WebDriverProtocol(Protocol):
     implements = [WebDriverBaseProtocolPart,
                   WebDriverTestharnessProtocolPart,
@@ -409,8 +440,10 @@ class WebDriverProtocol(Protocol):
                   WebDriverSetPermissionProtocolPart,
                   WebDriverVirtualAuthenticatorProtocolPart,
                   WebDriverSPCTransactionsProtocolPart,
+                  WebDriverRPHRegistrationsProtocolPart,
                   WebDriverFedCMProtocolPart,
-                  WebDriverDebugProtocolPart]
+                  WebDriverDebugProtocolPart,
+                  WebDriverVirtualSensorPart]
 
     def __init__(self, executor, browser, capabilities, **kwargs):
         super().__init__(executor, browser)
@@ -685,7 +718,7 @@ class WebDriverCrashtestExecutor(CrashtestExecutor):
     def __init__(self, logger, browser, server_config, timeout_multiplier=1,
                  screenshot_cache=None, close_after_done=True,
                  debug_info=None, capabilities=None, **kwargs):
-        """WebDriver-based executor for reftests"""
+        """WebDriver-based executor for crashtests"""
         CrashtestExecutor.__init__(self,
                                    logger,
                                    browser,

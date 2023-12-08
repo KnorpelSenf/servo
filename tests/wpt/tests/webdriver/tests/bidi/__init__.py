@@ -11,7 +11,7 @@ def recursive_compare(expected: Any, actual: Any) -> None:
         expected(actual)
         return
 
-    assert type(expected) == type(actual)
+    assert type(expected) is type(actual)
     if type(expected) is list:
         assert len(expected) == len(actual)
         for index, _ in enumerate(expected):
@@ -20,8 +20,9 @@ def recursive_compare(expected: Any, actual: Any) -> None:
 
     if type(expected) is dict:
         # Actual dict can have more keys as part of the forwards-compat design.
-        assert expected.keys() <= actual.keys(), \
-            f"Key set should be present: {set(expected.keys()) - set(actual.keys())}"
+        assert (
+            expected.keys() <= actual.keys()
+        ), f"Key set should be present: {set(expected.keys()) - set(actual.keys())}"
         for key in expected.keys():
             recursive_compare(expected[key], actual[key])
         return
@@ -48,6 +49,11 @@ def any_int_or_null(actual: Any) -> None:
 
 def any_list(actual: Any) -> None:
     assert isinstance(actual, list)
+
+
+def any_list_or_null(actual: Any) -> None:
+    if actual is not None:
+        any_list(actual)
 
 
 def any_string(actual: Any) -> None:
@@ -83,7 +89,8 @@ async def get_device_pixel_ratio(bidi_session, context: str) -> float:
         return window.devicePixelRatio;
     }""",
         target=ContextTarget(context["context"]),
-        await_promise=False)
+        await_promise=False,
+    )
     return result["value"]
 
 
@@ -106,6 +113,22 @@ async def get_viewport_dimensions(bidi_session, context: str):
         ({
           height: window.innerHeight || document.documentElement.clientHeight,
           width: window.innerWidth || document.documentElement.clientWidth,
+        });
+    """
+    result = await bidi_session.script.evaluate(
+        expression=expression,
+        target=ContextTarget(context["context"]),
+        await_promise=False,
+    )
+
+    return remote_mapping_to_dict(result["value"])
+
+
+async def get_document_dimensions(bidi_session, context: str):
+    expression = """
+        ({
+          height: document.documentElement.scrollHeight,
+          width: document.documentElement.scrollWidth,
         });
     """
     result = await bidi_session.script.evaluate(
