@@ -3,11 +3,11 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use background_hang_monitor::HangMonitorRegister;
 use compositing_traits::{
-    CompositingReason, CompositorMsg, CompositorProxy, CompositorReceiver, ConstellationMsg,
+    CompositorMsg, CompositorProxy, CompositorReceiver,
     FontToCompositorMsg, ForwardedToCompositorMsg,
 };
 use crossbeam_channel::unbounded;
-use embedder_traits::{EmbedderMsg, EmbedderProxy, EmbedderReceiver, EventLoopWaker};
+use embedder_traits::{EmbedderProxy, EmbedderReceiver};
 use euclid::{Scale, Size2D};
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc;
@@ -21,10 +21,10 @@ use net_traits::image_cache::ImageCache;
 use net_traits::IpcSend;
 use profile::{mem as profile_mem, time as profile_time};
 use script_layout_interface::message::Msg;
-use script_traits::{WebrenderIpcSender, WindowSizeData};
+use script_traits::WindowSizeData;
 use servo_url::ServoUrl;
 use url::Url;
-use webrender_api::{DocumentId, FontInstanceKey, FontKey, ImageKey};
+use webrender_api::{FontInstanceKey, FontKey};
 
 use crate::events_loop::HeadlessEventLoopWaker;
 
@@ -58,7 +58,7 @@ fn main() {
     let pipeline_id = PipelineId::new();
     let time_profiler_chan = profile_time::Profiler::create(&None, None);
     let mem_profiler_chan = profile_mem::Profiler::create(None);
-    let (webrender_image_ipc_sender, webrender_image_ipc_receiver) =
+    let (webrender_image_ipc_sender, _webrender_image_ipc_receiver) =
         ipc::channel().expect("ipc channel failure");
     let image_cache = Arc::new(ImageCacheImpl::new(net_traits::WebrenderIpcSender::new(
         webrender_image_ipc_sender,
@@ -67,17 +67,17 @@ fn main() {
     let (script_chan, _) = ipc::channel().expect("ipc channel failure");
     let (_, pipeline_port) = ipc::channel().expect("ipc channel failure");
 
-    let (constellation_chan_sender, constellation_chan_receiver) =
+    let (constellation_chan_sender, _constellation_chan_receiver) =
         ipc::channel().expect("ipc channel failure");
-    let (constellation_chan_sender2, constellation_chan_receiver2) =
+    let (constellation_chan_sender2, _constellation_chan_receiver2) =
         ipc::channel().expect("ipc channel failure");
-    let (control_sender, control_receiver) = ipc::channel().expect("ipc channel failure");
+    let (_control_sender, control_receiver) = ipc::channel().expect("ipc channel failure");
     let background_hang_monitor_register =
         HangMonitorRegister::init(constellation_chan_sender.clone(), control_receiver, false);
 
-    let (layout_ipc_sender, layout_ipc_receiver) = ipc::channel().expect("ipc channel failure");
+    let (layout_ipc_sender, _layout_ipc_receiver) = ipc::channel().expect("ipc channel failure");
 
-    let (webrender_ipc_sender, webrender_ipc_receiver) =
+    let (webrender_ipc_sender, _webrender_ipc_receiver) =
         ipc::channel().expect("ipc channel failure");
 
     let webrender_api_sender = script_traits::WebrenderIpcSender::new(webrender_ipc_sender);
@@ -87,7 +87,7 @@ fn main() {
         Condvar::new(),
     ))));
     let (embedder_sender, embedder_receiver) = unbounded();
-    let (embedder_proxy, embedder_receiver) = (
+    let (embedder_proxy, _embedder_receiver) = (
         EmbedderProxy {
             sender: embedder_sender,
             event_loop_waker: event_loop_waker.clone(),
@@ -96,7 +96,7 @@ fn main() {
             receiver: embedder_receiver,
         },
     );
-    let (public_resource_threads, private_resource_threads) = new_resource_threads(
+    let (public_resource_threads, _private_resource_threads) = new_resource_threads(
         "".into(),
         None,
         time_profiler_chan.clone(),
@@ -108,7 +108,7 @@ fn main() {
     );
 
     let (compositor_sender, compositor_receiver) = unbounded();
-    let (compositor_proxy, compositor_receiver) = (
+    let (compositor_proxy, _compositor_receiver) = (
         CompositorProxy {
             sender: compositor_sender,
             event_loop_waker,
