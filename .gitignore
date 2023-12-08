@@ -11,7 +11,6 @@
 /ports/android/libs
 /ports/android/local.properties
 /ports/android/obj
-/ports/libsimpleservo/capi/target
 /python/_virtualenv*
 /python/_venv*
 /python/tidy/servo_tidy.egg-info
