@@ -3,8 +3,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use background_hang_monitor::HangMonitorRegister;
 use compositing_traits::{
-    CompositorMsg, CompositorProxy, CompositorReceiver,
-    FontToCompositorMsg, ForwardedToCompositorMsg,
+    CompositorMsg, CompositorProxy, CompositorReceiver, FontToCompositorMsg,
+    ForwardedToCompositorMsg,
 };
 use crossbeam_channel::unbounded;
 use embedder_traits::{EmbedderProxy, EmbedderReceiver};
@@ -14,7 +14,10 @@ use ipc_channel::ipc;
 use layout_thread_2020::LayoutThread;
 use layout_traits::LayoutThreadFactory;
 use metrics::PaintTimeMetrics;
-use msg::constellation_msg::{PipelineId, TopLevelBrowsingContextId};
+use msg::constellation_msg::{
+    PipelineId, PipelineNamespace, PipelineNamespaceInstaller, TopLevelBrowsingContextId,
+    PIPELINE_NAMESPACE,
+};
 use net::image_cache::ImageCacheImpl;
 use net::resource_thread::new_resource_threads;
 use net_traits::image_cache::ImageCache;
@@ -51,10 +54,13 @@ impl gfx_traits::WebrenderApi for FontCacheWR {
     }
 }
 
-fn main() {
+pub fn main() {
     let layout_pair = unbounded::<Msg>();
     //let layout_chan = layout_pair.0.clone();
 
+    let (namespace_request_sender, _) = ipc::channel().expect("ipc channel failure");
+    PipelineNamespace::set_installer_sender(namespace_request_sender);
+    PipelineNamespaceInstaller::new().install_namespace();
     let pipeline_id = PipelineId::new();
     let time_profiler_chan = profile_time::Profiler::create(&None, None);
     let mem_profiler_chan = profile_mem::Profiler::create(None);

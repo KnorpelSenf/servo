@@ -84,6 +84,7 @@ impl PipelineNamespaceInstaller {
     pub fn new() -> Self {
         let (namespace_sender, namespace_receiver) =
             ipc::channel().expect("PipelineNamespaceInstaller ipc channel failure");
+        println!("constructing installer");
         PipelineNamespaceInstaller {
             request_sender: None,
             namespace_sender: namespace_sender,
@@ -93,6 +94,7 @@ impl PipelineNamespaceInstaller {
 
     /// Provide a request sender to send requests to the constellation.
     pub fn set_sender(&mut self, sender: IpcSender<PipelineNamespaceRequest>) {
+        println!("setting sender");
         self.request_sender = Some(sender);
     }
 
