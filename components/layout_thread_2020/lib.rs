@@ -1281,7 +1281,7 @@ impl LayoutThread {
             .maybe_observe_paint_time(self, epoch, is_contentful);
 
         if reflow_goal.needs_display() {
-            // denate send
+            // denate send display list
             self.webrender_api
                 .send_display_list(display_list.compositor_info, display_list.wr.finalize().1);
         }

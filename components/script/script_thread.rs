@@ -2508,7 +2508,7 @@ impl ScriptThread {
 
         let layout_is_busy = Arc::new(AtomicBool::new(false));
 
-        // denate
+        // denate create layout thread
         let msg = message::Msg::CreateLayoutThread(LayoutThreadInit {
             id: new_pipeline_id,
             url: load_data.url.clone(),
