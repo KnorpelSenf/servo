@@ -4,10 +4,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use background_hang_monitor::HangMonitorRegister;
 use compositing_traits::{
     CompositingReason, CompositorMsg, CompositorProxy, CompositorReceiver, ConstellationMsg,
-    WebrenderCanvasMsg, WebrenderFontMsg, WebrenderMsg,
+    FontToCompositorMsg, ForwardedToCompositorMsg,
 };
 use crossbeam_channel::unbounded;
-use deno_bindgen::deno_bindgen;
 use embedder_traits::{EmbedderMsg, EmbedderProxy, EmbedderReceiver, EventLoopWaker};
 use euclid::{Scale, Size2D};
 use gfx::font_cache_thread::FontCacheThread;
@@ -34,21 +33,24 @@ struct FontCacheWR(CompositorProxy);
 impl gfx_traits::WebrenderApi for FontCacheWR {
     fn add_font_instance(&self, font_key: FontKey, size: f32) -> FontInstanceKey {
         let (sender, receiver) = unbounded();
-        let _ = self.0.send(CompositorMsg::Webrender(WebrenderMsg::Font(
-            WebrenderFontMsg::AddFontInstance(font_key, size, sender),
-        )));
+        let _ = self
+            .0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddFontInstance(font_key, size, sender),
+            )));
         receiver.recv().unwrap()
     }
     fn add_font(&self, data: gfx_traits::FontData) -> FontKey {
         let (sender, receiver) = unbounded();
-        let _ = self.0.send(CompositorMsg::Webrender(WebrenderMsg::Font(
-            WebrenderFontMsg::AddFont(data, sender),
-        )));
+        let _ = self
+            .0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddFont(data, sender),
+            )));
         receiver.recv().unwrap()
     }
 }
 
-#[deno_bindgen]
 fn main() {
     let layout_pair = unbounded::<Msg>();
     //let layout_chan = layout_pair.0.clone();

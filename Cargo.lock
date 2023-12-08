@@ -3,16 +3,6 @@
 version = 3
 
 [[package]]
-name = "Inflector"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
-dependencies = [
- "lazy_static",
- "regex",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1320,7 +1310,6 @@ dependencies = [
  "background_hang_monitor",
  "compositing_traits",
  "crossbeam-channel",
- "deno_bindgen",
  "embedder_traits",
  "euclid",
  "gfx",
@@ -1342,31 +1331,6 @@ dependencies = [
  "url",
  "webrender_api",
  "winit",
-]
-
-[[package]]
-name = "deno_bindgen"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b7bd470e900d698b2a500b7ee5375a47a33e22f2332df3750a2f3e39b8297f2"
-dependencies = [
- "deno_bindgen_macro",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "deno_bindgen_macro"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6b684807ba0d2c9d09e1769811d5b0552032f82edf27b3b77baf0840ad6d520"
-dependencies = [
- "Inflector",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn 1.0.103",
 ]
 
 [[package]]
