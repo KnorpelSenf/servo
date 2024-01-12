@@ -56,6 +56,7 @@ fn get_placeholder_image(webrender_api: &WebrenderIpcSender, data: &[u8]) -> Arc
     Arc::new(image)
 }
 
+// TODO denate remove default_key, correctly link ipc channels
 fn set_webrender_image_key(webrender_api: &WebrenderIpcSender, image: &mut Image, default_key: Option<webrender_api::ImageKey>){
     if image.id.is_some() {
         return;

@@ -115,6 +115,7 @@ impl SpaceAndClipInfo {
     }
 }
 
+// denate display list item
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub enum DisplayItem {
