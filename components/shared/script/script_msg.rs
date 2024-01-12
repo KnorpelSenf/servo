@@ -258,12 +258,12 @@ pub enum ScriptMsg {
     MediaSessionEvent(PipelineId, MediaSessionEvent),
     /// Create a WebGPU Adapter instance
     RequestAdapter(
-        IpcSender<WebGPUResponseResult>,
+        IpcSender<Option<WebGPUResponseResult>>,
         wgpu::instance::RequestAdapterOptions,
         SmallVec<[wgpu::id::AdapterId; 4]>,
     ),
     /// Get WebGPU channel
-    GetWebGPUChan(IpcSender<WebGPU>),
+    GetWebGPUChan(IpcSender<Option<WebGPU>>),
     /// Notify the constellation of a pipeline's document's title.
     TitleChanged(PipelineId, String),
 }

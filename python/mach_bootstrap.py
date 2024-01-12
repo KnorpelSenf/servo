@@ -5,17 +5,15 @@
 import os
 import platform
 import site
-import shutil
+import subprocess
 import sys
-
-from subprocess import Popen
-from tempfile import TemporaryFile
 
 SCRIPT_PATH = os.path.abspath(os.path.dirname(__file__))
 TOP_DIR = os.path.abspath(os.path.join(SCRIPT_PATH, ".."))
 WPT_PATH = os.path.join(TOP_DIR, "tests", "wpt")
-WPT_RUNNER_PATH = os.path.join(WPT_PATH, "tests", "tools", "wptrunner")
-WPT_SERVE_PATH = os.path.join(WPT_PATH, "tests", "tools", "wptserve")
+WPT_TOOLS_PATH = os.path.join(WPT_PATH, "tests", "tools")
+WPT_RUNNER_PATH = os.path.join(WPT_TOOLS_PATH, "wptrunner")
+WPT_SERVE_PATH = os.path.join(WPT_TOOLS_PATH, "wptserve")
 
 SEARCH_PATHS = [
     os.path.join("python", "mach"),
@@ -102,31 +100,12 @@ def _get_virtualenv_lib_dir():
 
 
 def _process_exec(args):
-    with TemporaryFile() as out:
-        with TemporaryFile() as err:
-            process = Popen(args, stdout=out, stderr=err)
-            process.wait()
-            if process.returncode:
-                print('"%s" failed with error code %d:' % ('" "'.join(args), process.returncode))
-
-                if sys.version_info >= (3, 0):
-                    stdout = sys.stdout.buffer
-                else:
-                    stdout = sys.stdout
-
-                print('Output:')
-                out.seek(0)
-                stdout.flush()
-                shutil.copyfileobj(out, stdout)
-                stdout.flush()
-
-                print('Error:')
-                err.seek(0)
-                stdout.flush()
-                shutil.copyfileobj(err, stdout)
-                stdout.flush()
-
-                sys.exit(1)
+    try:
+        subprocess.check_output(args, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as exception:
+        print(exception.output.decode(sys.stdout.encoding))
+        print(f"Process failed with return code: {exception.returncode}")
+        sys.exit(1)
 
 
 def _activate_virtualenv(topdir):
@@ -136,6 +115,7 @@ def _activate_virtualenv(topdir):
     if os.environ.get("VIRTUAL_ENV") != virtualenv_path:
         venv_script_path = os.path.join(virtualenv_path, _get_virtualenv_script_dir())
         if not os.path.exists(virtualenv_path):
+            print(" * Setting up virtual environment...")
             _process_exec([python, "-m", "venv", "--system-site-packages", virtualenv_path])
 
         # This general approach is taken from virtualenv's `activate_this.py`.
@@ -162,6 +142,7 @@ def _activate_virtualenv(topdir):
     # and it will check for conflicts.
     requirements_paths = [
         os.path.join("python", "requirements.txt"),
+        os.path.join(WPT_TOOLS_PATH, "requirements_tests.txt",),
         os.path.join(WPT_RUNNER_PATH, "requirements.txt",),
     ]
 
@@ -176,6 +157,7 @@ def _activate_virtualenv(topdir):
         except OSError:
             pass
 
+        print(f" * Installing Python requirements from {req_path}...")
         _process_exec([python, "-m", "pip", "install", "-I", "-r", req_path])
 
         open(marker_path, 'w').close()

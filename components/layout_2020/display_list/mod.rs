@@ -282,7 +282,11 @@ impl Fragment {
             .translate(containing_block.origin.to_vector());
         let mut baseline_origin = rect.origin.clone();
         baseline_origin.y += Length::from(fragment.font_metrics.ascent);
-        let glyphs = glyphs(&fragment.glyphs, baseline_origin);
+        let glyphs = glyphs(
+            &fragment.glyphs,
+            baseline_origin,
+            fragment.justification_adjustment,
+        );
         if glyphs.is_empty() {
             return;
         }
@@ -759,7 +763,8 @@ fn rgba(color: AbsoluteColor) -> wr::ColorF {
 
 fn glyphs(
     glyph_runs: &[Arc<GlyphStore>],
-    mut origin: PhysicalPoint<Length>,
+    mut baseline_origin: PhysicalPoint<Length>,
+    justification_adjustment: Length,
 ) -> Vec<wr::GlyphInstance> {
     use gfx_traits::ByteIndex;
     use range::Range;
@@ -770,8 +775,8 @@ fn glyphs(
             if !run.is_whitespace() {
                 let glyph_offset = glyph.offset().unwrap_or(Point2D::zero());
                 let point = units::LayoutPoint::new(
-                    origin.x.px() + glyph_offset.x.to_f32_px(),
-                    origin.y.px() + glyph_offset.y.to_f32_px(),
+                    baseline_origin.x.px() + glyph_offset.x.to_f32_px(),
+                    baseline_origin.y.px() + glyph_offset.y.to_f32_px(),
                 );
                 let glyph = wr::GlyphInstance {
                     index: glyph.id(),
@@ -779,7 +784,11 @@ fn glyphs(
                 };
                 glyphs.push(glyph);
             }
-            origin.x += Length::from(glyph.advance());
+
+            if glyph.char_is_word_separator() {
+                baseline_origin.x += justification_adjustment;
+            }
+            baseline_origin.x += Length::from(glyph.advance());
         }
     }
     glyphs

@@ -32,7 +32,7 @@ manually, try the [manual build setup][manual-build].
 
 - Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - Install Python
-    - **Debian-like:** Run `sudo apt install python3-pip`
+    - **Debian-like:** Run `sudo apt install python3-pip python3-venv`
     - **Fedora:** Run `sudo dnf install python3 python3-pip python3-devel`
     - **Arch:** Run `sudo pacman -S --needed python python-pip`
     - **Gentoo:** Run `sudo emerge dev-python/pip`
@@ -42,8 +42,9 @@ manually, try the [manual build setup][manual-build].
 
  - Download and run [`rustup-init.exe`](https://win.rustup.rs/) then follow the onscreen instructions.
  - Install [chocolatey](https://chocolatey.org/)
+ - Install [Python 3.11](https://apps.microsoft.com/detail/9NRWMJP3717K?hl=en-US&gl=US)
  - Run `mach bootstrap`
-  - *This will install CMake, Git, Ninja, Python and the Visual Studio 2019 Build Tools
+  - *This will install CMake, Git, Ninja, and the Visual Studio 2019 Build Tools
      via choco in an Administrator console. It can take quite a while.*
   - *If you already have Visual Studio 2019 installed, this may not install all necessary components.
      Please follow the Visual Studio 2019 installation instructions in the [manual setup][manual-build].*
@@ -78,7 +79,7 @@ The examples below will use Unix, but the same applies to Windows.
 
 Servo's build system uses rustup.rs to automatically download a Rust compiler.
 This is a specific version of Rust Nightly determined by the
-[`rust-toolchain.toml`](https://github.com/servo/servo/blob/master/rust-toolchain.toml) file.
+[`rust-toolchain.toml`](https://github.com/servo/servo/blob/main/rust-toolchain.toml) file.
 
 ### Normal build
 

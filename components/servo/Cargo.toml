@@ -37,7 +37,7 @@ bluetooth = { path = "../bluetooth" }
 bluetooth_traits = { workspace = true }
 canvas = { path = "../canvas", default-features = false }
 canvas_traits = { workspace = true }
-compositing = { path = "../compositing", features = ["gl"] }
+compositing = { path = "../compositing" }
 compositing_traits = { workspace = true }
 constellation = { path = "../constellation" }
 crossbeam-channel = { workspace = true }
@@ -49,7 +49,7 @@ euclid = { workspace = true }
 gfx = { path = "../gfx" }
 gfx_traits = { workspace = true }
 gleam = { workspace = true }
-gstreamer = { version = "0.15", features = ["v1_16"], optional = true }
+gstreamer = { workspace = true, optional = true }
 ipc-channel = { workspace = true }
 keyboard-types = { workspace = true }
 layout_thread_2013 = { path = "../layout_thread" }

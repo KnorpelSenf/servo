@@ -7,6 +7,7 @@
 
 mod construct;
 
+pub(crate) use construct::AnonymousTableContent;
 pub use construct::TableBuilder;
 use euclid::{Point2D, UnknownUnit, Vector2D};
 use serde::Serialize;
@@ -39,6 +40,7 @@ impl Table {
         IndependentLayout {
             fragments: Vec::new(),
             content_block_size: Length::new(0.),
+            last_inflow_baseline_offset: None,
         }
     }
 }

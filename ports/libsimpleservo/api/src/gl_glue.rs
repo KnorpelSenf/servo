@@ -116,17 +116,17 @@ pub mod gl {
             include!(concat!(env!("OUT_DIR"), "/glx_bindings.rs"));
         }
 
+        let lib = match Library::new("libGL.so.1").or_else(|_| Library::new("libGL.so")) {
+            Ok(lib) => lib,
+            Err(_) => return Err("Can't find libGL.so, OpenGL isn't configured/installed"),
+        };
+
+        let glx = glx::Glx::load_with(|sym| unsafe {
+            let symbol: Symbol<*const c_void> = lib.get(sym.as_bytes()).unwrap();
+            *symbol.into_raw()
+        });
+
         let gl = unsafe {
-            let lib = match Library::new("libGL.so.1").or_else(|_| Library::new("libGL.so")) {
-                Ok(lib) => lib,
-                Err(_) => return Err("Can't find libGL.so, OpenGL isn't configured/installed"),
-            };
-
-            let glx = glx::Glx::load_with(|sym| {
-                let symbol: Symbol<*const c_void> = lib.get(sym.as_bytes()).unwrap();
-                *symbol.into_raw()
-            });
-
             GlFns::load_with(|addr| {
                 let addr = CString::new(addr.as_bytes()).unwrap();
                 glx.GetProcAddress(addr.as_ptr() as *const _) as *const _

@@ -58,7 +58,6 @@ class MachCommands(CommandBase):
     def build(self, build_type: BuildType, jobs=None, params=None, no_package=False,
               verbose=False, very_verbose=False, libsimpleservo=False, **kwargs):
         opts = params or []
-        has_media_stack = "media-gstreamer" in self.features
 
         if build_type.is_release():
             opts += ["--release"]
@@ -74,7 +73,7 @@ class MachCommands(CommandBase):
         if very_verbose:
             opts += ["-vv"]
 
-        env = self.build_env(is_build=True)
+        env = self.build_env()
         self.ensure_bootstrapped()
         self.ensure_clobbered()
 
@@ -173,7 +172,7 @@ class MachCommands(CommandBase):
                     status = 1
 
                 # copy needed gstreamer DLLs in to servo.exe dir
-                if has_media_stack:
+                if self.enable_media:
                     print("Packaging gstreamer DLLs")
                     if not package_gstreamer_dlls(env, servo_exe_dir, target_triple):
                         status = 1
@@ -189,7 +188,7 @@ class MachCommands(CommandBase):
                 servo_bin_dir = os.path.dirname(servo_path)
                 assert os.path.exists(servo_bin_dir)
 
-                if has_media_stack:
+                if self.enable_media:
                     print("Packaging gstreamer dylibs")
                     if not package_gstreamer_dylibs(self.cross_compile_target, servo_path):
                         return 1
@@ -373,13 +372,15 @@ def resolve_rpath(lib, rpath_root):
     raise Exception("Unable to satisfy rpath dependency: " + lib)
 
 
-def copy_dependencies(binary_path, lib_path, gst_root):
+def copy_dependencies(binary_path, lib_path, gst_lib_dir):
     relative_path = path.relpath(lib_path, path.dirname(binary_path)) + "/"
 
     # Update binary libraries
     binary_dependencies = set(otool(binary_path))
     change_non_system_libraries_path(binary_dependencies, relative_path, binary_path)
-    binary_dependencies = binary_dependencies.union(macos_plugins())
+
+    plugins = [os.path.join(gst_lib_dir, "gstreamer-1.0", plugin) for plugin in macos_plugins()]
+    binary_dependencies = binary_dependencies.union(plugins)
 
     # Update dependencies libraries
     need_checked = binary_dependencies
@@ -391,7 +392,7 @@ def copy_dependencies(binary_path, lib_path, gst_root):
             # No need to check these for their dylibs
             if is_system_library(f):
                 continue
-            full_path = resolve_rpath(f, gst_root)
+            full_path = resolve_rpath(f, gst_lib_dir)
             need_relinked = set(otool(full_path))
             new_path = path.join(lib_path, path.basename(full_path))
             if not path.exists(new_path):
@@ -428,46 +429,8 @@ def package_gstreamer_dlls(env, servo_exe_dir, target):
         print("Could not find GStreamer installation directory.")
         return False
 
-    # All the shared libraries required for starting up and loading plugins.
-    gst_dlls = [
-        "avcodec-58.dll",
-        "avfilter-7.dll",
-        "avformat-58.dll",
-        "avutil-56.dll",
-        "bz2.dll",
-        "ffi-7.dll",
-        "gio-2.0-0.dll",
-        "glib-2.0-0.dll",
-        "gmodule-2.0-0.dll",
-        "gobject-2.0-0.dll",
-        "graphene-1.0-0.dll",
-        "intl-8.dll",
-        "libcrypto-1_1-x64.dll",
-        "libgmp-10.dll",
-        "libgnutls-30.dll",
-        "libhogweed-4.dll",
-        "libjpeg-8.dll",
-        "libnettle-6.dll.",
-        "libogg-0.dll",
-        "libopus-0.dll",
-        "libpng16-16.dll",
-        "libssl-1_1-x64.dll",
-        "libtasn1-6.dll",
-        "libtheora-0.dll",
-        "libtheoradec-1.dll",
-        "libtheoraenc-1.dll",
-        "libusrsctp-1.dll",
-        "libvorbis-0.dll",
-        "libvorbisenc-2.dll",
-        "libwinpthread-1.dll",
-        "nice-10.dll",
-        "orc-0.4-0.dll",
-        "swresample-3.dll",
-        "z-1.dll",
-    ] + windows_dlls()
-
     missing = []
-    for gst_lib in gst_dlls:
+    for gst_lib in windows_dlls():
         try:
             shutil.copy(path.join(gst_root, "bin", gst_lib), servo_exe_dir)
         except Exception:

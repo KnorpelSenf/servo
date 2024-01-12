@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "denate",
     "ports/servoshell",
-    "ports/gstplugin",
     "ports/libsimpleservo/capi/",
     "ports/libsimpleservo/jniapi/",
     "tests/unit/*",
@@ -19,7 +18,7 @@ arrayvec = "0.7"
 async-tungstenite = { version = "0.23", features = ["tokio-rustls-webpki-roots"] }
 atomic_refcell = "0.1.13"
 backtrace = "0.3"
-base64 = "0.21.5"
+base64 = "0.21.6"
 bitflags = "2.4"
 bluetooth_traits = { path = "components/shared/bluetooth" }
 byteorder = "1.5"
@@ -42,17 +41,27 @@ fxhash = "0.2"
 getopts = "0.2.11"
 gfx_traits = { path = "components/shared/gfx" }
 gleam = "0.15"
+glib = "0.18"
+gstreamer = { version = "0.21", features = ["v1_18"] }
+gstreamer-base = "0.21"
+gstreamer-gl = "0.21"
+gstreamer-gl-sys = { version = "0.21" }
+gstreamer-gl-wayland = { version = "0.21" }
+gstreamer-sys = "0.21"
+gstreamer-video = "0.21"
 headers = "0.3"
 html5ever = "0.26"
 http = "0.2"
 hyper = "0.14"
 hyper-rustls = { version = "0.24", default-features = false, features = ["acceptor", "http1", "http2", "logging", "tls12", "webpki-tokio"] }
-hyper_serde = "0.13"
+hyper_serde = { path = "components/hyper_serde" }
 image = "0.24"
 imsz = "0.2"
-indexmap = { version = "1.0.2", features = ["std"] }
+indexmap = { version = "2.1.0", features = ["std"] }
 ipc-channel = "0.18"
-itertools = "0.10"
+itertools = "0.12"
+jemallocator = "0.5.4"
+jemalloc-sys = "0.5.4"
 keyboard-types = "0.6"
 layout_traits = { path = "components/shared/layout" }
 lazy_static = "1.4"
@@ -75,11 +84,11 @@ rand_core = "0.6"
 rand_isaac = "0.3"
 rayon = "1"
 regex = "1.10"
-rustls = { version = "0.21.9", features = ["dangerous_configuration"] }
+rustls = { version = "0.21.10", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0.4"
 script_layout_interface = { path = "components/shared/script_layout" }
 script_traits = { path = "components/shared/script" }
-serde = "1.0.193"
+serde = "1.0.195"
 serde_bytes = "0.11"
 serde_json = "1.0"
 smallbitvec = "2.3.0"
@@ -107,6 +116,8 @@ webpki-roots = "0.25"
 webrender = { git = "https://github.com/servo/webrender", features = ["capture"] }
 webrender_api = { git = "https://github.com/servo/webrender" }
 webrender_traits = { path = "components/shared/webrender" }
+wgpu-core = "0.18"
+wgpu-types = "0.18"
 winapi = "0.3"
 xi-unicode = "0.1.0"
 xml5ever = "0.17"

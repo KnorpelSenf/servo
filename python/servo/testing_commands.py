@@ -209,6 +209,7 @@ class MachCommands(CommandBase):
             "servoshell",
             "background_hang_monitor",
             "gfx",
+            "hyper_serde",
             "layout_2013",
             "layout_2020",
             "msg",
@@ -257,9 +258,7 @@ class MachCommands(CommandBase):
         if nocapture:
             args += ["--", "--nocapture"]
 
-        # We are setting is_build here to true, because running `cargo test` can trigger builds.
-        env = self.build_env(is_build=True)
-
+        env = self.build_env()
         return self.run_cargo_build_like_command(
             "bench" if bench else "test",
             args,
@@ -280,29 +279,27 @@ class MachCommands(CommandBase):
     @CommandArgument('--all', default=False, action="store_true", dest="all_files",
                      help="Check all files, and run the WPT lint in tidy, "
                           "even if unchanged")
-    @CommandArgument('--no-wpt', default=False, action="store_true", dest="no_wpt",
-                     help="Skip checking that web-platform-tests manifests are up to date")
     @CommandArgument('--no-progress', default=False, action="store_true",
                      help="Don't show progress for tidy")
-    @CommandArgument('--stylo', default=False, action="store_true",
-                     help="Only handle files in the stylo tree")
-    def test_tidy(self, all_files, no_progress, stylo, no_wpt=False):
-        if no_wpt:
-            manifest_dirty = False
-        else:
-            manifest_dirty = wpt.manifestupdate.update(check_clean=True)
-        tidy_failed = tidy.scan(not all_files, not no_progress, stylo=stylo, no_wpt=no_wpt)
+    def test_tidy(self, all_files, no_progress):
+        tidy_failed = tidy.scan(not all_files, not no_progress)
 
         call(["rustup", "install", "nightly-2023-03-18"])
         call(["rustup", "component", "add", "rustfmt", "--toolchain", "nightly-2023-03-18"])
         rustfmt_failed = call(["cargo", "+nightly-2023-03-18", "fmt", "--", "--check"])
-
         if rustfmt_failed:
             print("Run `./mach fmt` to fix the formatting")
 
         taplo_failed = format_toml_files_with_taplo()
 
-        return tidy_failed or manifest_dirty or rustfmt_failed or taplo_failed
+        tidy_failed = tidy_failed or rustfmt_failed or taplo_failed
+        print()
+        if tidy_failed:
+            print("\r ❌ test-tidy reported errors.")
+        else:
+            print("\r ✅ test-tidy reported no errors.")
+
+        tidy_failed
 
     @Command('test-scripts',
              description='Run tests for all build and support scripts.',
