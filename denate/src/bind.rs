@@ -11,12 +11,13 @@ use embedder_traits::{EmbedderProxy, EmbedderReceiver};
 use euclid::{Scale, Size2D};
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc;
+use ipc_channel::router::ROUTER;
 use layout_thread_2020::LayoutThread;
 use layout_traits::LayoutThreadFactory;
 use metrics::PaintTimeMetrics;
 use msg::constellation_msg::{
-    PipelineId, PipelineNamespace, PipelineNamespaceInstaller, TopLevelBrowsingContextId,
-    PIPELINE_NAMESPACE,
+    PipelineId, PipelineNamespace, PipelineNamespaceId, PipelineNamespaceInstaller,
+    TopLevelBrowsingContextId,
 };
 use net::image_cache::ImageCacheImpl;
 use net::resource_thread::new_resource_threads;
@@ -55,24 +56,36 @@ impl gfx_traits::WebrenderApi for FontCacheWR {
 }
 
 pub fn main() {
+    println!("main");
     let layout_pair = unbounded::<Msg>();
     //let layout_chan = layout_pair.0.clone();
 
-    let (namespace_request_sender, _) = ipc::channel().expect("ipc channel failure");
-    PipelineNamespace::set_installer_sender(namespace_request_sender);
-    PipelineNamespaceInstaller::new().install_namespace();
+    let (namespace_request_sender, _namespace_request_receiver) =
+        ipc::channel().expect("ipc channel failure");
+    println!("setting up pipeline namespace");
+    let mut pipeline_namespace = PipelineNamespaceInstaller::new();
+    println!("setting sender");
+    pipeline_namespace.set_sender(namespace_request_sender);
+    println!("installing namespace");
+    PipelineNamespace::install(PipelineNamespaceId(1));
+    println!("setting up profiler");
     let pipeline_id = PipelineId::new();
     let time_profiler_chan = profile_time::Profiler::create(&None, None);
     let mem_profiler_chan = profile_mem::Profiler::create(None);
+
     let (webrender_image_ipc_sender, _webrender_image_ipc_receiver) =
         ipc::channel().expect("ipc channel failure");
-    let image_cache = Arc::new(ImageCacheImpl::new(net_traits::WebrenderIpcSender::new(
-        webrender_image_ipc_sender,
-    )));
 
+    println!("preparing webrender for image cache");
+    let web_render_ipc_sender = net_traits::WebrenderIpcSender::new(webrender_image_ipc_sender);
+    println!("creating image cache");
+    let image_cache = Arc::new(ImageCacheImpl::new(web_render_ipc_sender));
+
+    println!("creating script channels");
     let (script_chan, _) = ipc::channel().expect("ipc channel failure");
     let (_, pipeline_port) = ipc::channel().expect("ipc channel failure");
 
+    println!("creating background hang monitor register");
     let (constellation_chan_sender, _constellation_chan_receiver) =
         ipc::channel().expect("ipc channel failure");
     let (constellation_chan_sender2, _constellation_chan_receiver2) =
@@ -86,12 +99,15 @@ pub fn main() {
     let (webrender_ipc_sender, _webrender_ipc_receiver) =
         ipc::channel().expect("ipc channel failure");
 
+    println!("creating webrender ipc sender");
     let webrender_api_sender = script_traits::WebrenderIpcSender::new(webrender_ipc_sender);
 
+    println!("setting up event loop waker");
     let event_loop_waker = Box::new(HeadlessEventLoopWaker(Arc::new((
         Mutex::new(false),
         Condvar::new(),
     ))));
+    println!("creating embedder");
     let (embedder_sender, embedder_receiver) = unbounded();
     let (embedder_proxy, _embedder_receiver) = (
         EmbedderProxy {
@@ -102,6 +118,7 @@ pub fn main() {
             receiver: embedder_receiver,
         },
     );
+    println!("setting up resource thread");
     let (public_resource_threads, _private_resource_threads) = new_resource_threads(
         "".into(),
         None,
@@ -113,6 +130,7 @@ pub fn main() {
         true,
     );
 
+    println!("setting up compositor proxy");
     let (compositor_sender, compositor_receiver) = unbounded();
     let (compositor_proxy, _compositor_receiver) = (
         CompositorProxy {
@@ -124,13 +142,16 @@ pub fn main() {
         },
     );
 
+    println!("creating font thread");
     let font_cache_thread = FontCacheThread::new(
         public_resource_threads.sender(),
         Box::new(FontCacheWR(compositor_proxy.clone())),
     );
 
+    println!("creating blank url");
     let url = ServoUrl::from_url(Url::parse("about:blank").unwrap());
 
+    println!("creating layout thread");
     LayoutThread::create(
         pipeline_id,
         TopLevelBrowsingContextId::new(),
@@ -159,4 +180,5 @@ pub fn main() {
             device_pixel_ratio: Scale::new(1.0),
         },
     );
+    println!("DONE OMG");
 }
