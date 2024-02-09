@@ -94,7 +94,6 @@ impl PipelineNamespaceInstaller {
 
     /// Provide a request sender to send requests to the constellation.
     pub fn set_sender(&mut self, sender: IpcSender<PipelineNamespaceRequest>) {
-        println!("setting sender");
         self.request_sender = Some(sender);
     }
 
