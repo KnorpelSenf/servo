@@ -169,10 +169,10 @@ pub fn main() {
         webrender_api_sender,
         PaintTimeMetrics::new(
             pipeline_id,
-            time_profiler_chan.clone(),
-            constellation_chan_sender2.clone(),
-            script_chan.clone(),
-            url.clone(),
+            time_profiler_chan,
+            constellation_chan_sender2,
+            script_chan,
+            url,
         ),
         Arc::new(AtomicBool::new(false)),
         WindowSizeData {
