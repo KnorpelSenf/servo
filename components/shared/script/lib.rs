@@ -1183,6 +1183,9 @@ impl WebrenderIpcSender {
     ) {
         let (display_list_data, display_list_descriptor) = list.into_data();
         let (display_list_sender, display_list_receiver) = ipc::bytes_channel().unwrap();
+
+        println!(" === sending display list === ");
+        
         if let Err(e) = self.0.send(ScriptToCompositorMsg::SendDisplayList {
             display_list_info,
             display_list_descriptor,

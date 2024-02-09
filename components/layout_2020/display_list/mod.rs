@@ -54,6 +54,7 @@ type HitInfo = Option<ItemTag>;
 /// includes both a [wr::DisplayListBuilder] for building up WebRender-specific
 /// display list information and a [CompositorDisplayListInfo] used to store
 /// information used by the compositor, such as a compositor-side scroll tree.
+#[derive(Debug)]
 pub struct DisplayList {
     /// The [wr::DisplayListBuilder] used to collect display list items.
     pub wr: wr::DisplayListBuilder,

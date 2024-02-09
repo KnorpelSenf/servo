@@ -108,7 +108,7 @@ pub struct TempFilterData<'a> {
 }
 
 /// A display list.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct BuiltDisplayList {
     /// Serde encoded bytes. Mostly DisplayItems, but some mixed in slices.
     data: Vec<u8>,
@@ -116,7 +116,7 @@ pub struct BuiltDisplayList {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Deserialize, Serialize)]
+#[derive(Copy, Clone, Deserialize, Serialize, Debug)]
 pub enum GeckoDisplayListType {
   None,
   Partial(f64),
@@ -132,7 +132,7 @@ impl Default for GeckoDisplayListType {
 /// A display list consists of some number of display list items, followed by a number of display
 /// items.
 #[repr(C)]
-#[derive(Copy, Clone, Default, Deserialize, Serialize)]
+#[derive(Copy, Clone, Default, Deserialize, Serialize, Debug)]
 pub struct BuiltDisplayListDescriptor {
     /// Gecko specific information about the display list.
     gecko_display_list_type: GeckoDisplayListType,
@@ -1008,7 +1008,7 @@ pub enum DisplayListSection {
     Chunk,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DisplayListBuilder {
     pub data: Vec<u8>,
     pub pipeline_id: PipelineId,

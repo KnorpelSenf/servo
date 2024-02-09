@@ -640,6 +640,7 @@ impl<'a> SceneBuilder<'a> {
         let mut traversal = root_pipeline.display_list.iter();
 
         'outer: while let Some(bc) = stack.pop() {
+            println!(" === New loop");
             loop {
                 let item = match traversal.next() {
                     Some(item) => item,
@@ -1058,6 +1059,7 @@ impl<'a> SceneBuilder<'a> {
         item: DisplayItemRef,
         pipeline_id: PipelineId,
     ) {
+        println!(" == Debug Item {:?}", item.item());
         match *item.item() {
             DisplayItem::Image(ref info) => {
                 profile_scope!("image");
