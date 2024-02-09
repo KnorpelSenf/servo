@@ -3,15 +3,13 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use background_hang_monitor::HangMonitorRegister;
 use compositing_traits::{
-    CompositorMsg, CompositorProxy, CompositorReceiver, FontToCompositorMsg,
-    ForwardedToCompositorMsg,
+    CompositorMsg, CompositorProxy, FontToCompositorMsg, ForwardedToCompositorMsg,
 };
 use crossbeam_channel::unbounded;
-use embedder_traits::{EmbedderProxy, EmbedderReceiver};
+use embedder_traits::EmbedderProxy;
 use euclid::{Scale, Size2D};
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc;
-use ipc_channel::router::ROUTER;
 use layout_thread_2020::LayoutThread;
 use layout_traits::LayoutThreadFactory;
 use metrics::PaintTimeMetrics;
@@ -58,14 +56,11 @@ impl gfx_traits::WebrenderApi for FontCacheWR {
 pub fn main() {
     println!("main");
     let layout_pair = unbounded::<Msg>();
-    //let layout_chan = layout_pair.0.clone();
-
-    let (namespace_request_sender, _namespace_request_receiver) =
-        ipc::channel().expect("ipc channel failure");
+    let namespace_request_chan = ipc::channel().expect("ipc channel failure");
     println!("setting up pipeline namespace");
     let mut pipeline_namespace = PipelineNamespaceInstaller::new();
     println!("setting sender");
-    pipeline_namespace.set_sender(namespace_request_sender);
+    pipeline_namespace.set_sender(namespace_request_chan.0);
     println!("installing namespace");
     PipelineNamespace::install(PipelineNamespaceId(1));
     println!("setting up profiler");
@@ -73,34 +68,29 @@ pub fn main() {
     let time_profiler_chan = profile_time::Profiler::create(&None, None);
     let mem_profiler_chan = profile_mem::Profiler::create(None);
 
-    let (webrender_image_ipc_sender, _webrender_image_ipc_receiver) =
-        ipc::channel().expect("ipc channel failure");
+    let webrender_image_channel = ipc::channel().expect("ipc channel failure");
 
     println!("preparing webrender for image cache");
-    let web_render_ipc_sender = net_traits::WebrenderIpcSender::new(webrender_image_ipc_sender);
+    let webrender_sender = net_traits::WebrenderIpcSender::new(webrender_image_channel.0);
     println!("creating image cache");
-    let image_cache = Arc::new(ImageCacheImpl::new(web_render_ipc_sender));
+    let image_cache = Arc::new(ImageCacheImpl::new(webrender_sender));
 
     println!("creating script channels");
-    let (script_chan, _) = ipc::channel().expect("ipc channel failure");
-    let (_, pipeline_port) = ipc::channel().expect("ipc channel failure");
+    let script_chan = ipc::channel().expect("ipc channel failure");
+    let pipeline_port = ipc::channel().expect("ipc channel failure");
 
     println!("creating background hang monitor register");
-    let (constellation_chan_sender, _constellation_chan_receiver) =
-        ipc::channel().expect("ipc channel failure");
-    let (constellation_chan_sender2, _constellation_chan_receiver2) =
-        ipc::channel().expect("ipc channel failure");
-    let (_control_sender, control_receiver) = ipc::channel().expect("ipc channel failure");
+    let constellation_chan = ipc::channel().expect("ipc channel failure");
+    let constellation_chan_2 = ipc::channel().expect("ipc channel failure");
+    let control_chan = ipc::channel().expect("ipc channel failure");
     let background_hang_monitor_register =
-        HangMonitorRegister::init(constellation_chan_sender.clone(), control_receiver, false);
+        HangMonitorRegister::init(constellation_chan.0.clone(), control_chan.1, false);
 
-    let (layout_ipc_sender, _layout_ipc_receiver) = ipc::channel().expect("ipc channel failure");
-
-    let (webrender_ipc_sender, _webrender_ipc_receiver) =
-        ipc::channel().expect("ipc channel failure");
+    let layout_chan = ipc::channel().expect("ipc channel failure");
 
     println!("creating webrender ipc sender");
-    let webrender_api_sender = script_traits::WebrenderIpcSender::new(webrender_ipc_sender);
+    let webrender_chan = ipc::channel().expect("ipc channel failure");
+    let webrender_api_sender = script_traits::WebrenderIpcSender::new(webrender_chan.0);
 
     println!("setting up event loop waker");
     let event_loop_waker = Box::new(HeadlessEventLoopWaker(Arc::new((
@@ -108,16 +98,11 @@ pub fn main() {
         Condvar::new(),
     ))));
     println!("creating embedder");
-    let (embedder_sender, embedder_receiver) = unbounded();
-    let (embedder_proxy, _embedder_receiver) = (
-        EmbedderProxy {
-            sender: embedder_sender,
-            event_loop_waker: event_loop_waker.clone(),
-        },
-        EmbedderReceiver {
-            receiver: embedder_receiver,
-        },
-    );
+    let embedder_chan = unbounded();
+    let embedder_proxy = EmbedderProxy {
+        sender: embedder_chan.0,
+        event_loop_waker: event_loop_waker.clone(),
+    };
     println!("setting up resource thread");
     let (public_resource_threads, _private_resource_threads) = new_resource_threads(
         "".into(),
@@ -131,16 +116,11 @@ pub fn main() {
     );
 
     println!("setting up compositor proxy");
-    let (compositor_sender, compositor_receiver) = unbounded();
-    let (compositor_proxy, _compositor_receiver) = (
-        CompositorProxy {
-            sender: compositor_sender,
-            event_loop_waker,
-        },
-        CompositorReceiver {
-            receiver: compositor_receiver,
-        },
-    );
+    let compositor_chan = unbounded();
+    let compositor_proxy = CompositorProxy {
+        sender: compositor_chan.0,
+        event_loop_waker,
+    };
 
     println!("creating font thread");
     let font_cache_thread = FontCacheThread::new(
@@ -158,10 +138,10 @@ pub fn main() {
         url.clone(),
         false,
         layout_pair,
-        pipeline_port,
+        pipeline_port.1,
         background_hang_monitor_register,
-        layout_ipc_sender,
-        script_chan.clone(),
+        layout_chan.0,
+        script_chan.0.clone(),
         image_cache,
         font_cache_thread,
         time_profiler_chan.clone(),
@@ -170,8 +150,8 @@ pub fn main() {
         PaintTimeMetrics::new(
             pipeline_id,
             time_profiler_chan,
-            constellation_chan_sender2,
-            script_chan,
+            constellation_chan_2.0,
+            script_chan.0,
             url,
         ),
         Arc::new(AtomicBool::new(false)),
