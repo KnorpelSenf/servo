@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -7,11 +8,13 @@ use compositing_traits::{
 };
 use crossbeam_channel::unbounded;
 use embedder_traits::EmbedderProxy;
-use euclid::{Scale, Size2D};
+use euclid::{Point2D, Rect, Scale, Size2D};
+use fxhash::{FxBuildHasher, FxHashMap};
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc;
 use layout_thread_2020::LayoutThread;
 use layout_traits::LayoutThreadFactory;
+use libc::c_void;
 use metrics::PaintTimeMetrics;
 use msg::constellation_msg::{
     PipelineId, PipelineNamespace, PipelineNamespaceId, PipelineNamespaceInstaller,
@@ -21,11 +24,15 @@ use net::image_cache::ImageCacheImpl;
 use net::resource_thread::new_resource_threads;
 use net_traits::image_cache::ImageCache;
 use net_traits::IpcSend;
+use parking_lot::RwLock;
 use profile::{mem as profile_mem, time as profile_time};
-use script_layout_interface::message::Msg;
+use script_layout_interface::message::{Msg, Reflow, ReflowGoal, ScriptReflow};
+use script_layout_interface::TrustedNodeAddress;
 use script_traits::WindowSizeData;
 use servo_url::ServoUrl;
+use style::animation::{AnimationSetKey, DocumentAnimationSet, ElementAnimationSet};
 use url::Url;
+use webrender_api::units::Au;
 use webrender_api::{FontInstanceKey, FontKey};
 
 use crate::events_loop::HeadlessEventLoopWaker;
@@ -137,7 +144,7 @@ pub fn main() {
         TopLevelBrowsingContextId::new(),
         url.clone(),
         false,
-        layout_pair,
+        layout_pair.clone(),
         pipeline_port.1,
         background_hang_monitor_register,
         layout_chan.0,
@@ -152,7 +159,7 @@ pub fn main() {
             time_profiler_chan,
             constellation_chan_2.0,
             script_chan.0,
-            url,
+            url.clone(),
         ),
         Arc::new(AtomicBool::new(false)),
         WindowSizeData {
@@ -160,5 +167,46 @@ pub fn main() {
             device_pixel_ratio: Scale::new(1.0),
         },
     );
+
+    let send = move |msg: Msg| match layout_pair.0.send(msg) {
+        Ok(()) => println!("sent"),
+        Err(e) => println!("err {:?}", e),
+    };
+
+    send(Msg::SetFinalUrl(url));
+
+    let reflow_complete_sender = unbounded();
+    let reflow = ScriptReflow {
+        reflow_info: Reflow {
+            page_clip_rect: Rect {
+                origin: Point2D::new(Au(0), Au(0)),
+                size: Size2D::new(Au(500), Au(500)),
+            },
+        },
+        document: TrustedNodeAddress(0 as *const c_void),
+        dirty_root: None,
+        stylesheets_changed: false,
+        window_size: WindowSizeData {
+            initial_viewport: Size2D::new(500.0, 500.0),
+            device_pixel_ratio: Scale::new(1.0),
+        },
+        origin: servo_url::ImmutableOrigin::Tuple(
+            "http".to_owned(),
+            url::Host::Domain("quox.dev".to_owned()),
+            80,
+        ),
+        reflow_goal: ReflowGoal::Full,
+        script_join_chan: reflow_complete_sender.0,
+        dom_count: 0,
+        pending_restyles: vec![],
+        animation_timeline_value: 0.0,
+        animations: DocumentAnimationSet {
+            sets: servo_arc::Arc::new(RwLock::new(HashMap::with_hasher(FxBuildHasher::default()))),
+        },
+    };
+    send(Msg::Reflow(reflow));
+
+    let ev = reflow_complete_sender.1.recv().expect("reflow err");
+
     println!("DONE OMG");
 }

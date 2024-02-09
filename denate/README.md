@@ -24,7 +24,7 @@ Our current understanding of the IPC channels is that they do the following.
   - reflowing
   - mem reporting
   - exiting
-  - creating a layout thread (?)
+  - creating a layout thread
   - setting scroll states
   - navigation
 - namespace_request_channel

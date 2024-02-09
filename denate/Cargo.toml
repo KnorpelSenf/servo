@@ -13,22 +13,27 @@ compositing_traits = { path = "../components/shared/compositing" }
 # deno_bindgen = "0.8.1"
 embedder_traits = { path = "../components/shared/embedder" }
 euclid = { workspace = true }
+fxhash = { workspace = true }
 gfx = { path = "../components/gfx" }
 gfx_traits = { path = "../components/shared/gfx" }
 ipc-channel = { workspace = true }
 layout_thread_2020 = { path = "../components/layout_thread_2020" }
 layout_traits = { path = "../components/shared/layout" }
+libc = { workspace = true }
 log = { workspace = true }
 metrics = { path = "../components/metrics" }
 msg = { path = "../components/shared/msg" }
 net = { path = "../components/net" }
 net_traits = { path = "../components/shared/net" }
+parking_lot = { workspace = true }
 profile = { path = "../components/profile" }
 script_traits = { path = "../components/shared/script" }
 script_layout_interface = { path = "../components/shared/script_layout" }
 serde = { version = "1", features = ["derive"] }
+servo_arc = { path = "../components/servo_arc" }
 servo_config = { path = "../components/config" }
 servo_url = { path = "../components/url" }
+style = { path = "../components/style" }
 url = { workspace = true }
 webrender_api = { workspace = true }
 winit = "0.28.6"
