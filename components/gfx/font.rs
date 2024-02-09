@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use std::{iter, str};
 
 use app_units::Au;
@@ -121,6 +122,27 @@ pub struct FontMetrics {
     pub line_gap: Au,
 }
 
+impl FontMetrics {
+    /// Create an empty [`FontMetrics`] mainly to be used in situations where
+    /// no font can be found.
+    pub fn empty() -> Self {
+        Self {
+            underline_size: Au(0),
+            underline_offset: Au(0),
+            strikeout_size: Au(0),
+            strikeout_offset: Au(0),
+            leading: Au(0),
+            x_height: Au(0),
+            em_size: Au(0),
+            ascent: Au(0),
+            descent: Au(0),
+            max_advance: Au(0),
+            average_advance: Au(0),
+            line_gap: Au(0),
+        }
+    }
+}
+
 /// `FontDescriptor` describes the parameters of a `Font`. It represents rendering a given font
 /// template at a particular size, with a particular font-variant-caps applied, etc. This contrasts
 /// with `FontTemplateDescriptor` in that the latter represents only the parameters inherent in the
@@ -232,7 +254,7 @@ impl Font {
             .borrow_mut()
             .entry(lookup_key)
             .or_insert_with(|| {
-                let start_time = time::precise_time_ns();
+                let start_time = Instant::now();
                 let mut glyphs = GlyphStore::new(
                     text.len(),
                     options
@@ -255,9 +277,11 @@ impl Font {
                         .shape_text(text, options, &mut glyphs);
                 }
 
-                let end_time = time::precise_time_ns();
-                TEXT_SHAPING_PERFORMANCE_COUNTER
-                    .fetch_add((end_time - start_time) as usize, Ordering::Relaxed);
+                let end_time = Instant::now();
+                TEXT_SHAPING_PERFORMANCE_COUNTER.fetch_add(
+                    (end_time.duration_since(start_time).as_nanos()) as usize,
+                    Ordering::Relaxed,
+                );
                 Arc::new(glyphs)
             })
             .clone();

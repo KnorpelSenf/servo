@@ -9,11 +9,9 @@
 
 import os
 import subprocess
-import tempfile
 from typing import Optional, Tuple
 
 import distro
-from .. import util
 from .base import Base
 
 # Please keep these in sync with the packages on the wiki, using the instructions below
@@ -28,8 +26,15 @@ from .base import Base
 APT_PKGS = [
     'build-essential', 'ccache', 'clang', 'cmake', 'curl', 'g++', 'git',
     'gperf', 'libdbus-1-dev', 'libfreetype6-dev', 'libgl1-mesa-dri',
-    'libgles2-mesa-dev', 'libglib2.0-dev', 'libgstreamer-plugins-bad1.0-dev',
-    'libgstreamer-plugins-base1.0-dev', 'libgstreamer1.0-dev',
+    'libgles2-mesa-dev', 'libglib2.0-dev',
+    'gstreamer1.0-plugins-good', 'libgstreamer-plugins-good1.0-dev',
+    'gstreamer1.0-plugins-bad', 'libgstreamer-plugins-bad1.0-dev',
+    'gstreamer1.0-plugins-ugly',
+    "gstreamer1.0-plugins-base", 'libgstreamer-plugins-base1.0-dev',
+    'gstreamer1.0-libav',
+    'libgstrtspserver-1.0-dev',
+    'gstreamer1.0-tools',
+    'libges-1.0-dev',
     'libharfbuzz-dev', 'liblzma-dev', 'libunwind-dev', 'libunwind-dev',
     'libvulkan1', 'libx11-dev', 'libxcb-render0-dev', 'libxcb-shape0-dev',
     'libxcb-xfixes0-dev', 'libxmu-dev', 'libxmu6', 'libegl1-mesa-dev',
@@ -68,8 +73,6 @@ XBPS_PKGS = ['libtool', 'gcc', 'libXi-devel', 'freetype-devel',
 
 GSTREAMER_URL = \
     "https://github.com/servo/servo-build-deps/releases/download/linux/gstreamer-1.16-x86_64-linux-gnu.20190515.tar.gz"
-PREPACKAGED_GSTREAMER_ROOT = \
-    os.path.join(util.get_target_dir(), "dependencies", "gstreamer")
 
 
 class Linux(Base):
@@ -77,9 +80,6 @@ class Linux(Base):
         super().__init__(*args, **kwargs)
         self.is_linux = True
         (self.distro, self.version) = Linux.get_distro_and_version()
-
-    def library_path_variable_name(self):
-        return "LD_LIBRARY_PATH"
 
     @staticmethod
     def get_distro_and_version() -> Tuple[str, str]:
@@ -142,24 +142,32 @@ class Linux(Base):
             'nixos',
             'ubuntu',
             'void',
+            'fedora linux asahi remix'
         ]:
             raise NotImplementedError("mach bootstrap does not support "
                                       f"{self.distro}, please file a bug")
 
         installed_something = self.install_non_gstreamer_dependencies(force)
-        installed_something |= self._platform_bootstrap_gstreamer(force)
         return installed_something
 
     def install_non_gstreamer_dependencies(self, force: bool) -> bool:
         install = False
         pkgs = []
         if self.distro in ['Ubuntu', 'Debian GNU/Linux', 'Raspbian GNU/Linux']:
-            command = ['apt-get', 'install']
+            command = ['apt-get', 'install', "-m"]
             pkgs = APT_PKGS
-            if subprocess.call(['dpkg', '-s'] + pkgs,
+
+            # Try to filter out unknown packages from the list. This is important for Debian
+            # as it does not ship all of the packages we want.
+            installable = subprocess.check_output(['apt-cache', '--generate', 'pkgnames'])
+            if installable:
+                installable = installable.decode("ascii").splitlines()
+                pkgs = list(filter(lambda pkg: pkg in installable, pkgs))
+
+            if subprocess.call(['dpkg', '-s'] + pkgs, shell=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE) != 0:
                 install = True
-        elif self.distro in ['CentOS', 'CentOS Linux', 'Fedora', 'Fedora Linux']:
+        elif self.distro in ['CentOS', 'CentOS Linux', 'Fedora', 'Fedora Linux', 'Fedora Linux Asahi Remix']:
             installed_pkgs = str(subprocess.check_output(['rpm', '-qa'])).replace('\n', '|')
             pkgs = DNF_PKGS
             for pkg in pkgs:
@@ -192,30 +200,9 @@ class Linux(Base):
         return True
 
     def gstreamer_root(self, cross_compilation_target: Optional[str]) -> Optional[str]:
-        if cross_compilation_target:
-            return None
-        if os.path.exists(PREPACKAGED_GSTREAMER_ROOT):
-            return PREPACKAGED_GSTREAMER_ROOT
-        # GStreamer might be installed system-wide, but we do not return a root in this
-        # case because we don't have to update environment variables.
         return None
 
-    def _platform_bootstrap_gstreamer(self, force: bool) -> bool:
-        if not force and self.is_gstreamer_installed(cross_compilation_target=None):
-            return False
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_name = os.path.join(temp_dir, GSTREAMER_URL.rsplit('/', maxsplit=1)[-1])
-            util.download_file("Pre-packaged GStreamer binaries", GSTREAMER_URL, file_name)
-
-            print(f"Installing GStreamer packages to {PREPACKAGED_GSTREAMER_ROOT}...")
-            os.makedirs(PREPACKAGED_GSTREAMER_ROOT, exist_ok=True)
-
-            # Extract, but strip one component from the output, because the package includes
-            # a toplevel directory called "./gst/" and we'd like to have the same directory
-            # structure on all platforms.
-            subprocess.check_call(["tar", "xf", file_name, "-C", PREPACKAGED_GSTREAMER_ROOT,
-                                   "--strip-components=2"])
-
-            assert self.is_gstreamer_installed(cross_compilation_target=None)
-            return True
+    def _platform_bootstrap_gstreamer(self, _force: bool) -> bool:
+        raise EnvironmentError(
+            "Bootstrapping GStreamer on Linux is not supported. "
+            + "Please install it using your distribution package manager.")

@@ -3,7 +3,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::cell::Cell;
-use std::ptr::NonNull;
 use std::{f64, ptr};
 
 use cssparser::{Parser, ParserInput};
@@ -12,7 +11,7 @@ use euclid::default::Transform3D;
 use euclid::Angle;
 use js::jsapi::JSObject;
 use js::rust::{CustomAutoRooterGuard, HandleObject};
-use js::typedarray::{CreateWith, Float32Array, Float64Array};
+use js::typedarray::{Float32Array, Float64Array};
 use style::parser::ParserContext;
 
 use crate::dom::bindings::cell::{DomRefCell, Ref};
@@ -25,6 +24,7 @@ use crate::dom::bindings::error::Fallible;
 use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::reflector::{reflect_dom_object_with_proto, DomObject, Reflector};
 use crate::dom::bindings::root::DomRoot;
+use crate::dom::bindings::typedarrays::create_typed_array;
 use crate::dom::dommatrix::DOMMatrix;
 use crate::dom::dompoint::DOMPoint;
 use crate::dom::globalscope::GlobalScope;
@@ -676,8 +676,7 @@ impl DOMMatrixReadOnlyMethods for DOMMatrixReadOnly {
     }
 
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-tofloat32array
-    #[allow(unsafe_code)]
-    fn ToFloat32Array(&self, cx: JSContext) -> NonNull<JSObject> {
+    fn ToFloat32Array(&self, cx: JSContext) -> Float32Array {
         let vec: Vec<f32> = self
             .matrix
             .borrow()
@@ -685,22 +684,16 @@ impl DOMMatrixReadOnlyMethods for DOMMatrixReadOnly {
             .iter()
             .map(|&x| x as f32)
             .collect();
-        unsafe {
-            rooted!(in (*cx) let mut array = ptr::null_mut::<JSObject>());
-            let _ = Float32Array::create(*cx, CreateWith::Slice(&vec), array.handle_mut()).unwrap();
-            NonNull::new_unchecked(array.get())
-        }
+        rooted!(in (*cx) let mut array = ptr::null_mut::<JSObject>());
+        create_typed_array(cx, &vec, array.handle_mut())
+            .expect("Converting matrix to float32 array should never fail")
     }
 
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-tofloat64array
-    #[allow(unsafe_code)]
-    fn ToFloat64Array(&self, cx: JSContext) -> NonNull<JSObject> {
-        let arr = self.matrix.borrow().to_array();
-        unsafe {
-            rooted!(in (*cx) let mut array = ptr::null_mut::<JSObject>());
-            let _ = Float64Array::create(*cx, CreateWith::Slice(&arr), array.handle_mut()).unwrap();
-            NonNull::new_unchecked(array.get())
-        }
+    fn ToFloat64Array(&self, cx: JSContext) -> Float64Array {
+        rooted!(in (*cx) let mut array = ptr::null_mut::<JSObject>());
+        create_typed_array(cx, &self.matrix.borrow().to_array(), array.handle_mut())
+            .expect("Converting matrix to float64 array should never fail")
     }
 }
 

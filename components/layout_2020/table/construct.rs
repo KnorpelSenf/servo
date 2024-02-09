@@ -7,20 +7,29 @@ use std::convert::{TryFrom, TryInto};
 
 use log::warn;
 use script_layout_interface::wrapper_traits::ThreadSafeLayoutNode;
+use servo_arc::Arc;
+use style::properties::ComputedValues;
+use style::selector_parser::PseudoElement;
+use style::str::char_is_whitespace;
 use style::values::specified::TextDecorationLine;
 
 use super::{Table, TableSlot, TableSlotCell, TableSlotCoordinates, TableSlotOffset};
 use crate::context::LayoutContext;
 use crate::dom::{BoxSlot, NodeExt};
 use crate::dom_traversal::{Contents, NodeAndStyleInfo, NonReplacedContents, TraversalHandler};
-use crate::flow::BlockFormattingContext;
+use crate::flow::{BlockContainerBuilder, BlockFormattingContext};
+use crate::formatting_contexts::{
+    IndependentFormattingContext, NonReplacedFormattingContext,
+    NonReplacedFormattingContextContents,
+};
+use crate::fragment_tree::{BaseFragmentInfo, FragmentFlags, Tag};
 use crate::style_ext::{DisplayGeneratingBox, DisplayLayoutInternal};
 
 /// A reference to a slot and its coordinates in the table
 #[derive(Clone, Copy, Debug)]
-struct ResolvedSlotAndLocation<'a> {
-    cell: &'a TableSlotCell,
-    coords: TableSlotCoordinates,
+pub(super) struct ResolvedSlotAndLocation<'a> {
+    pub cell: &'a TableSlotCell,
+    pub coords: TableSlotCoordinates,
 }
 
 impl<'a> ResolvedSlotAndLocation<'a> {
@@ -33,6 +42,16 @@ impl<'a> ResolvedSlotAndLocation<'a> {
     }
 }
 
+pub(crate) enum AnonymousTableContent<'dom, Node> {
+    Text(NodeAndStyleInfo<Node>, Cow<'dom, str>),
+    Element {
+        info: NodeAndStyleInfo<Node>,
+        display: DisplayGeneratingBox,
+        contents: Contents,
+        box_slot: BoxSlot<'dom>,
+    },
+}
+
 impl Table {
     pub(crate) fn construct<'dom>(
         context: &LayoutContext,
@@ -40,24 +59,73 @@ impl Table {
         contents: NonReplacedContents,
         propagated_text_decoration_line: TextDecorationLine,
     ) -> Self {
-        let mut traversal = TableBuilderTraversal {
-            context,
-            _info: info,
-            propagated_text_decoration_line,
-            builder: Default::default(),
-        };
+        let mut traversal =
+            TableBuilderTraversal::new(context, info, propagated_text_decoration_line);
         contents.traverse(context, info, &mut traversal);
-        traversal.builder.finish()
+        traversal.finish()
+    }
+
+    pub(crate) fn construct_anonymous<'dom, Node>(
+        context: &LayoutContext,
+        parent_info: &NodeAndStyleInfo<Node>,
+        contents: Vec<AnonymousTableContent<'dom, Node>>,
+        propagated_text_decoration_line: style::values::specified::TextDecorationLine,
+    ) -> IndependentFormattingContext
+    where
+        Node: crate::dom::NodeExt<'dom>,
+    {
+        let anonymous_style = context
+            .shared_context()
+            .stylist
+            .style_for_anonymous::<Node::ConcreteElement>(
+                &context.shared_context().guards,
+                // TODO: This should be updated for Layout 2020 once we've determined
+                // which styles should be inherited for tables.
+                &PseudoElement::ServoLegacyAnonymousTable,
+                &parent_info.style,
+            );
+        let anonymous_info = parent_info.new_replacing_style(anonymous_style.clone());
+
+        let mut table_builder =
+            TableBuilderTraversal::new(context, &anonymous_info, propagated_text_decoration_line);
+
+        for content in contents {
+            match content {
+                AnonymousTableContent::Element {
+                    info,
+                    display,
+                    contents,
+                    box_slot,
+                } => {
+                    table_builder.handle_element(&info, display, contents, box_slot);
+                },
+                AnonymousTableContent::Text(..) => {
+                    // This only happens if there was whitespace between our internal table elements.
+                    // We only collect that whitespace in case we need to re-emit trailing whitespace
+                    // after we've added our anonymous table.
+                },
+            }
+        }
+
+        IndependentFormattingContext::NonReplaced(NonReplacedFormattingContext {
+            base_fragment_info: (&anonymous_info).into(),
+            style: anonymous_style,
+            content_sizes: None,
+            contents: NonReplacedFormattingContextContents::Table(table_builder.finish()),
+        })
     }
 
     /// Push a new slot into the last row of this table.
     fn push_new_slot_to_last_row(&mut self, slot: TableSlot) {
-        self.slots.last_mut().expect("Should have rows").push(slot)
-    }
+        let last_row = match self.slots.last_mut() {
+            Some(row) => row,
+            None => {
+                unreachable!("Should have some rows before calling `push_new_slot_to_last_row`")
+            },
+        };
 
-    /// Convenience method for get() that returns a SlotAndLocation
-    fn get_slot<'a>(&'a self, coords: TableSlotCoordinates) -> Option<&'a TableSlot> {
-        self.slots.get(coords.y)?.get(coords.x)
+        self.size.width = self.size.width.max(last_row.len() + 1);
+        last_row.push(slot);
     }
 
     /// Find [`ResolvedSlotAndLocation`] of all the slots that cover the slot at the given
@@ -65,20 +133,16 @@ impl Table {
     /// the target and returns a [`ResolvedSlotAndLocation`] for each of them. If there is
     /// no slot at the given coordinates or that slot is an empty space, an empty vector
     /// is returned.
-    fn resolve_slot_at<'a>(
-        &'a self,
+    pub(super) fn resolve_slot_at(
+        &self,
         coords: TableSlotCoordinates,
-    ) -> Vec<ResolvedSlotAndLocation<'a>> {
+    ) -> Vec<ResolvedSlotAndLocation<'_>> {
         let slot = self.get_slot(coords);
         match slot {
-            Some(TableSlot::Cell(cell)) => vec![ResolvedSlotAndLocation {
-                cell: &cell,
-                coords,
-            }],
+            Some(TableSlot::Cell(cell)) => vec![ResolvedSlotAndLocation { cell, coords }],
             Some(TableSlot::Spanned(ref offsets)) => offsets
                 .iter()
-                .map(|offset| self.resolve_slot_at(coords - *offset))
-                .flatten()
+                .flat_map(|offset| self.resolve_slot_at(coords - *offset))
                 .collect(),
             Some(TableSlot::Empty) | None => {
                 warn!("Tried to resolve an empty or nonexistant slot!");
@@ -102,12 +166,12 @@ impl Table {
 
         let coords_of_slots_that_cover_target: Vec<_> = slots_covering_slot_above
             .into_iter()
-            .filter(|ref slot| slot.covers_cell_at(target_coords))
+            .filter(|slot| slot.covers_cell_at(target_coords))
             .map(|slot| target_coords - slot.coords)
             .collect();
 
         if coords_of_slots_that_cover_target.is_empty() {
-            return None;
+            None
         } else {
             Some(TableSlot::Spanned(coords_of_slots_that_cover_target))
         }
@@ -129,7 +193,6 @@ impl TableSlot {
     }
 }
 
-#[derive(Default)]
 pub struct TableBuilder {
     /// The table that we are building.
     table: Table,
@@ -147,7 +210,22 @@ pub struct TableBuilder {
 }
 
 impl TableBuilder {
-    pub fn finish(self) -> Table {
+    pub(super) fn new(style: Arc<ComputedValues>) -> Self {
+        Self {
+            table: Table::new(style),
+            incoming_rowspans: Vec::new(),
+        }
+    }
+
+    pub fn new_for_tests() -> Self {
+        Self::new(ComputedValues::initial_values().to_arc())
+    }
+
+    pub fn finish(mut self) -> Table {
+        // Make sure that every row has the same number of cells.
+        for row in self.table.slots.iter_mut() {
+            row.resize_with(self.table.size.width, || TableSlot::Empty);
+        }
         self.table
     }
 
@@ -163,8 +241,9 @@ impl TableBuilder {
         TableSlotCoordinates::new(self.current_x(), self.current_y())
     }
 
-    pub fn start_row<'builder>(&'builder mut self) {
+    pub fn start_row(&mut self) {
         self.table.slots.push(Vec::new());
+        self.table.size.height += 1;
         self.create_slots_for_cells_above_with_rowspan(true);
     }
 
@@ -220,7 +299,7 @@ impl TableBuilder {
         }
     }
 
-    /// https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows
+    /// <https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows>
     /// Push a single cell onto the slot map, handling any colspans it may have, and
     /// setting up the outgoing rowspans.
     pub fn add_cell(&mut self, cell: TableSlotCell) {
@@ -295,9 +374,9 @@ impl TableBuilder {
     }
 }
 
-struct TableBuilderTraversal<'a, Node> {
-    context: &'a LayoutContext<'a>,
-    _info: &'a NodeAndStyleInfo<Node>,
+pub(crate) struct TableBuilderTraversal<'style, 'dom, Node> {
+    context: &'style LayoutContext<'style>,
+    info: &'style NodeAndStyleInfo<Node>,
 
     /// Propagated value for text-decoration-line, used to construct the block
     /// contents of table cells.
@@ -306,17 +385,86 @@ struct TableBuilderTraversal<'a, Node> {
     /// The [`TableBuilder`] for this [`TableBuilderTraversal`]. This is separated
     /// into another struct so that we can write unit tests against the builder.
     builder: TableBuilder,
+
+    current_anonymous_row_content: Vec<AnonymousTableContent<'dom, Node>>,
 }
 
-impl<'a, 'dom, Node: 'dom> TraversalHandler<'dom, Node> for TableBuilderTraversal<'a, Node>
+impl<'style, 'dom, Node> TableBuilderTraversal<'style, 'dom, Node>
 where
     Node: NodeExt<'dom>,
 {
-    fn handle_text(&mut self, _info: &NodeAndStyleInfo<Node>, _text: Cow<'dom, str>) {
-        // TODO: We should collect these contents into a new table cell.
+    pub(crate) fn new(
+        context: &'style LayoutContext<'style>,
+        info: &'style NodeAndStyleInfo<Node>,
+        propagated_text_decoration_line: TextDecorationLine,
+    ) -> Self {
+        TableBuilderTraversal {
+            context,
+            info,
+            propagated_text_decoration_line,
+            builder: TableBuilder::new(info.style.clone()),
+            current_anonymous_row_content: Vec::new(),
+        }
     }
 
-    /// https://html.spec.whatwg.org/multipage/#forming-a-table
+    pub(crate) fn finish(mut self) -> Table {
+        self.finish_anonymous_row_if_needed();
+        self.builder.finish()
+    }
+
+    fn finish_anonymous_row_if_needed(&mut self) {
+        if self.current_anonymous_row_content.is_empty() {
+            return;
+        }
+
+        let row_content = std::mem::take(&mut self.current_anonymous_row_content);
+        let context = self.context;
+        let anonymous_style = self
+            .context
+            .shared_context()
+            .stylist
+            .style_for_anonymous::<Node::ConcreteElement>(
+                &context.shared_context().guards,
+                &PseudoElement::ServoAnonymousTableCell,
+                &self.info.style,
+            );
+        let anonymous_info = self.info.new_replacing_style(anonymous_style);
+        let mut row_builder = TableRowBuilder::new(self, &anonymous_info);
+
+        for cell_content in row_content {
+            match cell_content {
+                AnonymousTableContent::Element {
+                    info,
+                    display,
+                    contents,
+                    box_slot,
+                } => {
+                    row_builder.handle_element(&info, display, contents, box_slot);
+                },
+                AnonymousTableContent::Text(info, text) => {
+                    row_builder.handle_text(&info, text);
+                },
+            }
+        }
+
+        row_builder.finish();
+    }
+}
+
+impl<'style, 'dom, Node: 'dom> TraversalHandler<'dom, Node>
+    for TableBuilderTraversal<'style, 'dom, Node>
+where
+    Node: NodeExt<'dom>,
+{
+    fn handle_text(&mut self, info: &NodeAndStyleInfo<Node>, text: Cow<'dom, str>) {
+        if text.chars().all(char_is_whitespace) {
+            return;
+        }
+        self.current_anonymous_row_content
+            .push(AnonymousTableContent::Text(info.clone(), text));
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#forming-a-table>
     fn handle_element(
         &mut self,
         info: &NodeAndStyleInfo<Node>,
@@ -326,7 +474,11 @@ where
     ) {
         match display {
             DisplayGeneratingBox::LayoutInternal(internal) => match internal {
-                DisplayLayoutInternal::TableRowGroup => {
+                DisplayLayoutInternal::TableRowGroup |
+                DisplayLayoutInternal::TableFooterGroup |
+                DisplayLayoutInternal::TableHeaderGroup => {
+                    self.finish_anonymous_row_if_needed();
+
                     // TODO: Should we fixup `rowspan=0` to the actual resolved value and
                     // any other rowspans that have been cut short?
                     self.builder.incoming_rowspans.clear();
@@ -337,50 +489,160 @@ where
                     );
 
                     // TODO: Handle style for row groups here.
+
+                    // We are doing this until we have actually set a Box for this `BoxSlot`.
+                    ::std::mem::forget(box_slot)
                 },
                 DisplayLayoutInternal::TableRow => {
-                    self.builder.start_row();
+                    self.finish_anonymous_row_if_needed();
+
+                    let context = self.context;
+
+                    let mut row_builder = TableRowBuilder::new(self, info);
                     NonReplacedContents::try_from(contents).unwrap().traverse(
-                        self.context,
+                        context,
                         info,
-                        &mut TableRowBuilder::new(self),
+                        &mut row_builder,
                     );
-                    self.builder.end_row();
+                    row_builder.finish();
+
+                    // We are doing this until we have actually set a Box for this `BoxSlot`.
+                    ::std::mem::forget(box_slot)
                 },
-                _ => {
-                    // TODO: Handle other types of unparented table content, colgroups, and captions.
+                DisplayLayoutInternal::TableCaption |
+                DisplayLayoutInternal::TableColumn |
+                DisplayLayoutInternal::TableColumnGroup => {
+                    // TODO: Handle these other types of table elements.
+
+                    // We are doing this until we have actually set a Box for this `BoxSlot`.
+                    ::std::mem::forget(box_slot)
+                },
+                DisplayLayoutInternal::TableCell => {
+                    self.current_anonymous_row_content
+                        .push(AnonymousTableContent::Element {
+                            info: info.clone(),
+                            display,
+                            contents,
+                            box_slot,
+                        });
                 },
             },
             _ => {
-                // TODO: Create an anonymous row and cell for other unwrapped content.
+                self.current_anonymous_row_content
+                    .push(AnonymousTableContent::Element {
+                        info: info.clone(),
+                        display,
+                        contents,
+                        box_slot,
+                    });
             },
         }
-
-        // We are doing this until we have actually set a Box for this `BoxSlot`.
-        ::std::mem::forget(box_slot)
     }
 }
 
-struct TableRowBuilder<'a, 'builder, Node> {
-    table_traversal: &'builder mut TableBuilderTraversal<'a, Node>,
+struct TableRowBuilder<'style, 'builder, 'dom, 'a, Node> {
+    table_traversal: &'builder mut TableBuilderTraversal<'style, 'dom, Node>,
+
+    /// The [`NodeAndStyleInfo`] of this table row, which we use to
+    /// construct anonymous table cells.
+    info: &'a NodeAndStyleInfo<Node>,
+
+    current_anonymous_cell_content: Vec<AnonymousTableContent<'dom, Node>>,
 }
 
-impl<'a, 'builder, Node> TableRowBuilder<'a, 'builder, Node> {
-    fn new(table_traversal: &'builder mut TableBuilderTraversal<'a, Node>) -> Self {
-        TableRowBuilder { table_traversal }
-    }
-}
-
-impl<'a, 'builder, 'dom, Node: 'dom> TraversalHandler<'dom, Node>
-    for TableRowBuilder<'a, 'builder, Node>
+impl<'style, 'builder, 'dom, 'a, Node: 'dom> TableRowBuilder<'style, 'builder, 'dom, 'a, Node>
 where
     Node: NodeExt<'dom>,
 {
-    fn handle_text(&mut self, _info: &NodeAndStyleInfo<Node>, _text: Cow<'dom, str>) {
-        // TODO: We should collect these contents into a new table cell.
+    fn new(
+        table_traversal: &'builder mut TableBuilderTraversal<'style, 'dom, Node>,
+        info: &'a NodeAndStyleInfo<Node>,
+    ) -> Self {
+        table_traversal.builder.start_row();
+
+        TableRowBuilder {
+            table_traversal,
+            info,
+            current_anonymous_cell_content: Vec::new(),
+        }
     }
 
-    /// https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows
+    fn finish(mut self) {
+        self.finish_current_anonymous_cell_if_needed();
+        self.table_traversal.builder.end_row();
+    }
+
+    fn finish_current_anonymous_cell_if_needed(&mut self) {
+        if self.current_anonymous_cell_content.is_empty() {
+            return;
+        }
+
+        let context = self.table_traversal.context;
+        let anonymous_style = context
+            .shared_context()
+            .stylist
+            .style_for_anonymous::<Node::ConcreteElement>(
+                &context.shared_context().guards,
+                &PseudoElement::ServoAnonymousTableCell,
+                &self.info.style,
+            );
+        let anonymous_info = self.info.new_replacing_style(anonymous_style);
+        let mut builder = BlockContainerBuilder::new(
+            context,
+            &anonymous_info,
+            self.table_traversal.propagated_text_decoration_line,
+        );
+
+        for cell_content in self.current_anonymous_cell_content.drain(..) {
+            match cell_content {
+                AnonymousTableContent::Element {
+                    info,
+                    display,
+                    contents,
+                    box_slot,
+                } => {
+                    builder.handle_element(&info, display, contents, box_slot);
+                },
+                AnonymousTableContent::Text(info, text) => {
+                    builder.handle_text(&info, text);
+                },
+            }
+        }
+
+        let tag = Tag::new_pseudo(
+            self.info.node.opaque(),
+            Some(PseudoElement::ServoAnonymousTableCell),
+        );
+        let base_fragment_info = BaseFragmentInfo {
+            tag,
+            flags: FragmentFlags::empty(),
+        };
+
+        let block_container = builder.finish();
+        self.table_traversal.builder.add_cell(TableSlotCell {
+            contents: BlockFormattingContext::from_block_container(block_container),
+            colspan: 1,
+            rowspan: 1,
+            style: anonymous_info.style,
+            base_fragment_info,
+        });
+    }
+}
+
+impl<'style, 'builder, 'dom, 'a, Node: 'dom> TraversalHandler<'dom, Node>
+    for TableRowBuilder<'style, 'builder, 'dom, 'a, Node>
+where
+    Node: NodeExt<'dom>,
+{
+    fn handle_text(&mut self, info: &NodeAndStyleInfo<Node>, text: Cow<'dom, str>) {
+        if text.chars().all(char_is_whitespace) {
+            return;
+        }
+        self.current_anonymous_cell_content
+            .push(AnonymousTableContent::Text(info.clone(), text));
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows>
     fn handle_element(
         &mut self,
         info: &NodeAndStyleInfo<Node>,
@@ -413,27 +675,42 @@ where
                             )
                         },
                         Err(_replaced) => {
-                            panic!("We don't handle this yet.");
+                            unreachable!("Replaced should not have a LayoutInternal display type.");
                         },
                     };
 
+                    self.finish_current_anonymous_cell_if_needed();
                     self.table_traversal.builder.add_cell(TableSlotCell {
                         contents,
                         colspan,
                         rowspan,
-                        id: 0, // This is just an id used for testing purposes.
+                        style: info.style.clone(),
+                        base_fragment_info: info.into(),
                     });
+
+                    // We are doing this until we have actually set a Box for this `BoxSlot`.
+                    ::std::mem::forget(box_slot)
                 },
                 _ => {
-                    // TODO: Properly handle other table-like elements in the middle of a row.
+                    //// TODO: Properly handle other table-like elements in the middle of a row.
+                    self.current_anonymous_cell_content
+                        .push(AnonymousTableContent::Element {
+                            info: info.clone(),
+                            display,
+                            contents,
+                            box_slot,
+                        });
                 },
             },
             _ => {
-                // TODO: We should collect these contents into a new table cell.
+                self.current_anonymous_cell_content
+                    .push(AnonymousTableContent::Element {
+                        info: info.clone(),
+                        display,
+                        contents,
+                        box_slot,
+                    });
             },
         }
-
-        // We are doing this until we have actually set a Box for this `BoxSlot`.
-        ::std::mem::forget(box_slot)
     }
 }

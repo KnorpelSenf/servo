@@ -4,11 +4,11 @@
 
 use std::convert::TryInto;
 
+use app_units::Au;
 use serde::Serialize;
 use servo_arc::Arc;
 use style::logical_geometry::WritingMode;
 use style::properties::ComputedValues;
-use style::values::computed::Length;
 use style::values::specified::text::TextDecorationLine;
 
 use crate::context::LayoutContext;
@@ -24,7 +24,7 @@ use crate::style_ext::DisplayInside;
 use crate::table::Table;
 use crate::ContainingBlock;
 
-/// https://drafts.csswg.org/css-display/#independent-formatting-context
+/// <https://drafts.csswg.org/css-display/#independent-formatting-context>
 #[derive(Debug, Serialize)]
 pub(crate) enum IndependentFormattingContext {
     NonReplaced(NonReplacedFormattingContext),
@@ -59,11 +59,24 @@ pub(crate) enum NonReplacedFormattingContextContents {
     // Other layout modes go here
 }
 
+/// The baselines of a layout or a [`BoxFragment`]. Some layout uses the first and some layout uses
+/// the last.
+#[derive(Default, Serialize)]
+pub(crate) struct Baselines {
+    pub first: Option<Au>,
+    pub last: Option<Au>,
+}
+
 pub(crate) struct IndependentLayout {
     pub fragments: Vec<Fragment>,
 
-    /// https://drafts.csswg.org/css2/visudet.html#root-height
-    pub content_block_size: Length,
+    /// <https://drafts.csswg.org/css2/visudet.html#root-height>
+    pub content_block_size: Au,
+
+    /// The offset of the last inflow baseline of this layout in the content area, if
+    /// there was one. This is used to propagate baselines to the ancestors of `display:
+    /// inline-block`.
+    pub baselines: Baselines,
 }
 
 impl IndependentFormattingContext {
@@ -121,21 +134,6 @@ impl IndependentFormattingContext {
         }
     }
 
-    pub fn construct_for_text_runs<'dom>(
-        node_and_style_info: &NodeAndStyleInfo<impl NodeExt<'dom>>,
-        runs: impl Iterator<Item = crate::flow::inline::TextRun>,
-        propagated_text_decoration_line: TextDecorationLine,
-    ) -> Self {
-        let bfc =
-            BlockFormattingContext::construct_for_text_runs(runs, propagated_text_decoration_line);
-        Self::NonReplaced(NonReplacedFormattingContext {
-            base_fragment_info: node_and_style_info.into(),
-            style: Arc::clone(&node_and_style_info.style),
-            content_sizes: None,
-            contents: NonReplacedFormattingContextContents::Flow(bfc),
-        })
-    }
-
     pub fn style(&self) -> &Arc<ComputedValues> {
         match self {
             Self::NonReplaced(inner) => &inner.style,
@@ -150,7 +148,7 @@ impl IndependentFormattingContext {
         }
     }
 
-    pub fn inline_content_sizes(&self, layout_context: &LayoutContext) -> ContentSizes {
+    pub fn inline_content_sizes(&mut self, layout_context: &LayoutContext) -> ContentSizes {
         match self {
             Self::NonReplaced(inner) => inner
                 .contents
@@ -168,13 +166,11 @@ impl IndependentFormattingContext {
             Self::NonReplaced(non_replaced) => {
                 let style = &non_replaced.style;
                 let content_sizes = &mut non_replaced.content_sizes;
-                let contents = &non_replaced.contents;
-                sizing::outer_inline(&style, containing_block_writing_mode, || {
-                    content_sizes
-                        .get_or_insert_with(|| {
-                            contents.inline_content_sizes(layout_context, style.writing_mode)
-                        })
-                        .clone()
+                let contents = &mut non_replaced.contents;
+                sizing::outer_inline(style, containing_block_writing_mode, || {
+                    *content_sizes.get_or_insert_with(|| {
+                        contents.inline_content_sizes(layout_context, style.writing_mode)
+                    })
                 })
             },
             Self::Replaced(replaced) => {
@@ -208,16 +204,16 @@ impl NonReplacedFormattingContext {
 
     pub fn inline_content_sizes(&mut self, layout_context: &LayoutContext) -> ContentSizes {
         let writing_mode = self.style.writing_mode;
-        let contents = &self.contents;
-        self.content_sizes
+        let contents = &mut self.contents;
+        *self
+            .content_sizes
             .get_or_insert_with(|| contents.inline_content_sizes(layout_context, writing_mode))
-            .clone()
     }
 }
 
 impl NonReplacedFormattingContextContents {
     pub fn inline_content_sizes(
-        &self,
+        &mut self,
         layout_context: &LayoutContext,
         writing_mode: WritingMode,
     ) -> ContentSizes {
@@ -226,7 +222,7 @@ impl NonReplacedFormattingContextContents {
                 .contents
                 .inline_content_sizes(layout_context, writing_mode),
             Self::Flex(inner) => inner.inline_content_sizes(),
-            Self::Table(table) => table.inline_content_sizes(),
+            Self::Table(table) => table.inline_content_sizes(layout_context, writing_mode),
         }
     }
 }

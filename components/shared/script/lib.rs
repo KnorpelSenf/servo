@@ -27,7 +27,7 @@ use canvas_traits::webgl::WebGLPipeline;
 use compositor::ScrollTreeNodeId;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use devtools_traits::{DevtoolScriptControlMsg, ScriptToDevtoolsControlMsg, WorkerId};
-use embedder_traits::Cursor;
+use embedder_traits::{CompositorEventVariant, Cursor};
 use euclid::default::Point2D;
 use euclid::{Length, Rect, Scale, Size2D, UnknownUnit, Vector2D};
 use gfx_traits::Epoch;
@@ -288,7 +288,7 @@ pub enum UpdatePipelineIdReason {
 pub enum ConstellationControlMsg {
     /// Takes the associated window proxy out of "delaying-load-events-mode",
     /// used if a scheduled navigated was refused by the embedder.
-    /// https://html.spec.whatwg.org/multipage/#delaying-load-events-mode
+    /// <https://html.spec.whatwg.org/multipage/#delaying-load-events-mode>
     StopDelayingLoadEventsMode(PipelineId),
     /// Sends the final response to script thread for fetching after all redirections
     /// have been resolved
@@ -344,7 +344,7 @@ pub enum ConstellationControlMsg {
         /// The expected origin of the target.
         target_origin: Option<ImmutableOrigin>,
         /// The source origin of the message.
-        /// https://html.spec.whatwg.org/multipage/#dom-messageevent-origin
+        /// <https://html.spec.whatwg.org/multipage/#dom-messageevent-origin>
         source_origin: ImmutableOrigin,
         /// The data to be posted.
         data: StructuredSerializedData,
@@ -569,6 +569,21 @@ pub enum CompositorEvent {
     CompositionEvent(CompositionEvent),
     /// Virtual keyboard was dismissed
     IMEDismissedEvent,
+}
+
+impl From<&CompositorEvent> for CompositorEventVariant {
+    fn from(value: &CompositorEvent) -> Self {
+        match value {
+            CompositorEvent::ResizeEvent(..) => CompositorEventVariant::ResizeEvent,
+            CompositorEvent::MouseButtonEvent(..) => CompositorEventVariant::MouseButtonEvent,
+            CompositorEvent::MouseMoveEvent(..) => CompositorEventVariant::MouseMoveEvent,
+            CompositorEvent::TouchEvent(..) => CompositorEventVariant::TouchEvent,
+            CompositorEvent::WheelEvent(..) => CompositorEventVariant::WheelEvent,
+            CompositorEvent::KeyboardEvent(..) => CompositorEventVariant::KeyboardEvent,
+            CompositorEvent::CompositionEvent(..) => CompositorEventVariant::CompositionEvent,
+            CompositorEvent::IMEDismissedEvent => CompositorEventVariant::IMEDismissedEvent,
+        }
+    }
 }
 
 /// Requests a TimerEvent-Message be sent after the given duration.
@@ -1001,7 +1016,7 @@ impl StructuredSerializedData {
     }
 }
 
-/// A task on the https://html.spec.whatwg.org/multipage/#port-message-queue
+/// A task on the <https://html.spec.whatwg.org/multipage/#port-message-queue>
 #[derive(Debug, Deserialize, MallocSizeOf, Serialize)]
 pub struct PortMessageTask {
     /// The origin of this task.
@@ -1047,7 +1062,7 @@ impl Clone for BroadcastMsg {
 }
 
 /// The type of MediaSession action.
-/// https://w3c.github.io/mediasession/#enumdef-mediasessionaction
+/// <https://w3c.github.io/mediasession/#enumdef-mediasessionaction>
 #[derive(Clone, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
 pub enum MediaSessionActionType {
     /// The action intent is to resume playback.

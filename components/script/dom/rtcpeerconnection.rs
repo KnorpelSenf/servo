@@ -360,7 +360,7 @@ impl RTCPeerConnection {
         self.data_channels.borrow_mut().remove(&id);
     }
 
-    /// https://www.w3.org/TR/webrtc/#update-ice-gathering-state
+    /// <https://www.w3.org/TR/webrtc/#update-ice-gathering-state>
     fn update_gathering_state(&self, state: GatheringState) {
         // step 1
         if self.closed.get() {
@@ -400,7 +400,7 @@ impl RTCPeerConnection {
         }
     }
 
-    /// https://www.w3.org/TR/webrtc/#update-ice-connection-state
+    /// <https://www.w3.org/TR/webrtc/#update-ice-connection-state>
     fn update_ice_connection_state(&self, state: IceConnectionState) {
         // step 1
         if self.closed.get() {
@@ -458,8 +458,11 @@ impl RTCPeerConnection {
             .task_manager()
             .networking_task_source_with_canceller();
         let this = Trusted::new(self);
-        self.controller.borrow_mut().as_ref().unwrap().create_offer(
-            (move |desc: SessionDescription| {
+        self.controller
+            .borrow_mut()
+            .as_ref()
+            .unwrap()
+            .create_offer(Box::new(move |desc: SessionDescription| {
                 let _ = task_source.queue_with_canceller(
                     task!(offer_created: move || {
                         let this = this.root();
@@ -476,9 +479,7 @@ impl RTCPeerConnection {
                     }),
                     &canceller,
                 );
-            })
-            .into(),
-        );
+            }));
     }
 
     fn create_answer(&self) {
@@ -493,27 +494,24 @@ impl RTCPeerConnection {
             .borrow_mut()
             .as_ref()
             .unwrap()
-            .create_answer(
-                (move |desc: SessionDescription| {
-                    let _ = task_source.queue_with_canceller(
-                        task!(answer_created: move || {
-                            let this = this.root();
-                            if this.offer_answer_generation.get() != generation {
-                                // the state has changed since we last created the offer,
-                                // create a fresh one
-                                this.create_answer();
-                            } else {
-                                let init: RTCSessionDescriptionInit = desc.into();
-                                for promise in this.answer_promises.borrow_mut().drain(..) {
-                                    promise.resolve_native(&init);
-                                }
+            .create_answer(Box::new(move |desc: SessionDescription| {
+                let _ = task_source.queue_with_canceller(
+                    task!(answer_created: move || {
+                        let this = this.root();
+                        if this.offer_answer_generation.get() != generation {
+                            // the state has changed since we last created the offer,
+                            // create a fresh one
+                            this.create_answer();
+                        } else {
+                            let init: RTCSessionDescriptionInit = desc.into();
+                            for promise in this.answer_promises.borrow_mut().drain(..) {
+                                promise.resolve_native(&init);
                             }
-                        }),
-                        &canceller,
-                    );
-                })
-                .into(),
-            );
+                        }
+                    }),
+                    &canceller,
+                );
+            }));
     }
 }
 
@@ -555,7 +553,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
     // https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-ondatachannel
     event_handler!(datachannel, GetOndatachannel, SetOndatachannel);
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-addicecandidate
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-addicecandidate>
     fn AddIceCandidate(&self, candidate: &RTCIceCandidateInit, comp: InRealm) -> Rc<Promise> {
         let p = Promise::new_in_current_realm(comp);
         if candidate.sdpMid.is_none() && candidate.sdpMLineIndex.is_none() {
@@ -590,7 +588,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
         p
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-createoffer
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-createoffer>
     fn CreateOffer(&self, _options: &RTCOfferOptions, comp: InRealm) -> Rc<Promise> {
         let p = Promise::new_in_current_realm(comp);
         if self.closed.get() {
@@ -602,7 +600,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
         p
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-createoffer
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-createoffer>
     fn CreateAnswer(&self, _options: &RTCAnswerOptions, comp: InRealm) -> Rc<Promise> {
         let p = Promise::new_in_current_realm(comp);
         if self.closed.get() {
@@ -614,17 +612,17 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
         p
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-localdescription
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-localdescription>
     fn GetLocalDescription(&self) -> Option<DomRoot<RTCSessionDescription>> {
         self.local_description.get()
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-remotedescription
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-remotedescription>
     fn GetRemoteDescription(&self) -> Option<DomRoot<RTCSessionDescription>> {
         self.remote_description.get()
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-setlocaldescription
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-setlocaldescription>
     fn SetLocalDescription(&self, desc: &RTCSessionDescriptionInit, comp: InRealm) -> Rc<Promise> {
         // XXXManishearth validate the current state
         let p = Promise::new_in_current_realm(comp);
@@ -642,7 +640,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
             .unwrap()
             .set_local_description(
                 desc.clone(),
-                (move || {
+                Box::new(move || {
                     let _ = task_source.queue_with_canceller(
                         task!(local_description_set: move || {
                             // XXXManishearth spec actually asks for an intricate
@@ -659,13 +657,12 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
                         }),
                         &canceller,
                     );
-                })
-                .into(),
+                }),
             );
         p
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-setremotedescription
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-setremotedescription>
     fn SetRemoteDescription(&self, desc: &RTCSessionDescriptionInit, comp: InRealm) -> Rc<Promise> {
         // XXXManishearth validate the current state
         let p = Promise::new_in_current_realm(comp);
@@ -683,7 +680,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
             .unwrap()
             .set_remote_description(
                 desc.clone(),
-                (move || {
+                Box::new(move || {
                     let _ = task_source.queue_with_canceller(
                         task!(remote_description_set: move || {
                             // XXXManishearth spec actually asks for an intricate
@@ -700,8 +697,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
                         }),
                         &canceller,
                     );
-                })
-                .into(),
+                }),
             );
         p
     }
@@ -717,22 +713,22 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
         }
     }
 
-    /// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-icegatheringstate
+    /// <https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-icegatheringstate>
     fn IceGatheringState(&self) -> RTCIceGatheringState {
         self.gathering_state.get()
     }
 
-    /// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-iceconnectionstate
+    /// <https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-iceconnectionstate>
     fn IceConnectionState(&self) -> RTCIceConnectionState {
         self.ice_connection_state.get()
     }
 
-    /// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-signalingstate
+    /// <https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-signalingstate>
     fn SignalingState(&self) -> RTCSignalingState {
         self.signaling_state.get()
     }
 
-    /// https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close
+    /// <https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-close>
     fn Close(&self) {
         // Step 1
         if self.closed.get() {
@@ -762,7 +758,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
         // (no current support for connection state)
     }
 
-    /// https://www.w3.org/TR/webrtc/#dom-peerconnection-createdatachannel
+    /// <https://www.w3.org/TR/webrtc/#dom-peerconnection-createdatachannel>
     fn CreateDataChannel(
         &self,
         label: USVString,
@@ -771,7 +767,7 @@ impl RTCPeerConnectionMethods for RTCPeerConnection {
         RTCDataChannel::new(&self.global(), &self, label, init, None)
     }
 
-    /// https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-addtransceiver
+    /// <https://w3c.github.io/webrtc-pc/#dom-rtcpeerconnection-addtransceiver>
     fn AddTransceiver(
         &self,
         _track_or_kind: MediaStreamTrackOrString,

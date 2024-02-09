@@ -155,9 +155,15 @@ pub enum EmbedderMsg {
     /// Whether or not to allow a pipeline to load a url.
     AllowNavigationRequest(PipelineId, ServoUrl),
     /// Whether or not to allow script to open a new tab/browser
-    AllowOpeningBrowser(IpcSender<bool>),
-    /// A new browser was created by script
-    BrowserCreated(TopLevelBrowsingContextId),
+    AllowOpeningWebView(IpcSender<bool>),
+    /// A browser was created
+    WebViewOpened(TopLevelBrowsingContextId),
+    /// A browser was destroyed
+    WebViewClosed(TopLevelBrowsingContextId),
+    /// A browser gained focus for keyboard events
+    WebViewFocused(TopLevelBrowsingContextId),
+    /// All browsers lost focus for keyboard events
+    WebViewBlurred,
     /// Wether or not to unload a document
     AllowUnload(IpcSender<bool>),
     /// Sends an unconsumed key event back to the embedder.
@@ -180,8 +186,6 @@ pub enum EmbedderMsg {
     LoadStart,
     /// The load of a page has completed
     LoadComplete,
-    /// A browser is to be closed
-    CloseBrowser,
     /// A pipeline panicked. First string is the reason, second one is the backtrace.
     Panic(String, Option<String>),
     /// Open dialog to select bluetooth device.
@@ -208,6 +212,21 @@ pub enum EmbedderMsg {
     OnDevtoolsStarted(Result<u16, ()>, String),
     /// Compositing done, but external code needs to present.
     ReadyToPresent,
+    /// The given event was delivered to a pipeline in the given browser.
+    EventDelivered(CompositorEventVariant),
+}
+
+/// The variant of CompositorEvent that was delivered to a pipeline.
+#[derive(Debug, Deserialize, Serialize)]
+pub enum CompositorEventVariant {
+    ResizeEvent,
+    MouseButtonEvent,
+    MouseMoveEvent,
+    TouchEvent,
+    WheelEvent,
+    KeyboardEvent,
+    CompositionEvent,
+    IMEDismissedEvent,
 }
 
 impl Debug for EmbedderMsg {
@@ -226,7 +245,6 @@ impl Debug for EmbedderMsg {
             EmbedderMsg::SetCursor(..) => write!(f, "SetCursor"),
             EmbedderMsg::NewFavicon(..) => write!(f, "NewFavicon"),
             EmbedderMsg::HeadParsed => write!(f, "HeadParsed"),
-            EmbedderMsg::CloseBrowser => write!(f, "CloseBrowser"),
             EmbedderMsg::HistoryChanged(..) => write!(f, "HistoryChanged"),
             EmbedderMsg::SetFullscreenState(..) => write!(f, "SetFullscreenState"),
             EmbedderMsg::LoadStart => write!(f, "LoadStart"),
@@ -238,13 +256,17 @@ impl Debug for EmbedderMsg {
             EmbedderMsg::ShowIME(..) => write!(f, "ShowIME"),
             EmbedderMsg::HideIME => write!(f, "HideIME"),
             EmbedderMsg::Shutdown => write!(f, "Shutdown"),
-            EmbedderMsg::AllowOpeningBrowser(..) => write!(f, "AllowOpeningBrowser"),
-            EmbedderMsg::BrowserCreated(..) => write!(f, "BrowserCreated"),
+            EmbedderMsg::AllowOpeningWebView(..) => write!(f, "AllowOpeningWebView"),
+            EmbedderMsg::WebViewOpened(..) => write!(f, "WebViewOpened"),
+            EmbedderMsg::WebViewClosed(..) => write!(f, "WebViewClosed"),
+            EmbedderMsg::WebViewFocused(..) => write!(f, "WebViewFocused"),
+            EmbedderMsg::WebViewBlurred => write!(f, "WebViewUnfocused"),
             EmbedderMsg::ReportProfile(..) => write!(f, "ReportProfile"),
             EmbedderMsg::MediaSessionEvent(..) => write!(f, "MediaSessionEvent"),
             EmbedderMsg::OnDevtoolsStarted(..) => write!(f, "OnDevtoolsStarted"),
             EmbedderMsg::ShowContextMenu(..) => write!(f, "ShowContextMenu"),
             EmbedderMsg::ReadyToPresent => write!(f, "ReadyToPresent"),
+            EmbedderMsg::EventDelivered(..) => write!(f, "HitTestedEvent"),
         }
     }
 }
@@ -254,7 +276,7 @@ impl Debug for EmbedderMsg {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FilterPattern(pub String);
 
-/// https://w3c.github.io/mediasession/#mediametadata
+/// <https://w3c.github.io/mediasession/#mediametadata>
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MediaMetadata {
     /// Title
@@ -275,7 +297,7 @@ impl MediaMetadata {
     }
 }
 
-/// https://w3c.github.io/mediasession/#enumdef-mediasessionplaybackstate
+/// <https://w3c.github.io/mediasession/#enumdef-mediasessionplaybackstate>
 #[repr(i32)]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum MediaSessionPlaybackState {
@@ -287,7 +309,7 @@ pub enum MediaSessionPlaybackState {
     Paused,
 }
 
-/// https://w3c.github.io/mediasession/#dictdef-mediapositionstate
+/// <https://w3c.github.io/mediasession/#dictdef-mediapositionstate>
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MediaPositionState {
     pub duration: f64,

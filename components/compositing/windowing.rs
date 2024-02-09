@@ -9,16 +9,16 @@ use std::time::Duration;
 
 use embedder_traits::{EmbedderProxy, EventLoopWaker};
 use euclid::Scale;
+use gfx::rendering_context::RenderingContext;
 use keyboard_types::KeyboardEvent;
+use libc::c_void;
 use msg::constellation_msg::{PipelineId, TopLevelBrowsingContextId, TraversalDirection};
 use script_traits::{MediaSessionActionType, MouseButton, TouchEventType, TouchId, WheelDelta};
 use servo_geometry::DeviceIndependentPixel;
-use servo_media::player::context::{GlApi, GlContext, NativeDisplay};
 use servo_url::ServoUrl;
 use style_traits::DevicePixel;
 use webrender_api::units::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, DevicePoint};
 use webrender_api::ScrollLocation;
-use webrender_surfman::WebrenderSurfman;
 
 #[derive(Clone)]
 pub enum MouseWindowEvent {
@@ -82,14 +82,14 @@ pub enum EmbedderEvent {
     /// Sent when Ctr+R/Apple+R is called to reload the current page.
     Reload(TopLevelBrowsingContextId),
     /// Create a new top level browsing context
-    NewBrowser(ServoUrl, TopLevelBrowsingContextId),
+    NewWebView(ServoUrl, TopLevelBrowsingContextId),
     /// Close a top level browsing context
-    CloseBrowser(TopLevelBrowsingContextId),
+    CloseWebView(TopLevelBrowsingContextId),
     /// Panic a top level browsing context.
     SendError(Option<TopLevelBrowsingContextId>, String),
     /// Make a top level browsing context visible, hiding the previous
     /// visible one.
-    SelectBrowser(TopLevelBrowsingContextId),
+    FocusWebView(TopLevelBrowsingContextId),
     /// Toggles a debug flag in WebRender
     ToggleWebRenderDebug(WebRenderDebugOption),
     /// Capture current WebRender
@@ -101,10 +101,18 @@ pub enum EmbedderEvent {
     /// Sent when the user triggers a media action through the UA exposed media UI
     /// (play, pause, seek, etc.).
     MediaSessionAction(MediaSessionActionType),
-    /// Set browser visibility. A hidden browser will not tick the animations.
-    ChangeBrowserVisibility(TopLevelBrowsingContextId, bool),
+    /// The visibility of the webview has changed.
+    WebViewVisibilityChanged(TopLevelBrowsingContextId, bool),
     /// Virtual keyboard was dismissed
     IMEDismissed,
+    /// Sent on platforms like Android where the native widget surface can be
+    /// automatically destroyed by the system, for example when the app
+    /// is sent to background.
+    InvalidateNativeSurface,
+    /// Sent on platforms like Android where system recreates a new surface for
+    /// the native widget when it is brough back to foreground. This event
+    /// carries the pointer to the native widget and its new size.
+    ReplaceNativeSurface(*mut c_void, DeviceIntSize),
 }
 
 impl Debug for EmbedderEvent {
@@ -127,18 +135,20 @@ impl Debug for EmbedderEvent {
             EmbedderEvent::Navigation(..) => write!(f, "Navigation"),
             EmbedderEvent::Quit => write!(f, "Quit"),
             EmbedderEvent::Reload(..) => write!(f, "Reload"),
-            EmbedderEvent::NewBrowser(..) => write!(f, "NewBrowser"),
+            EmbedderEvent::NewWebView(..) => write!(f, "NewWebView"),
             EmbedderEvent::SendError(..) => write!(f, "SendError"),
-            EmbedderEvent::CloseBrowser(..) => write!(f, "CloseBrowser"),
-            EmbedderEvent::SelectBrowser(..) => write!(f, "SelectBrowser"),
+            EmbedderEvent::CloseWebView(..) => write!(f, "CloseWebView"),
+            EmbedderEvent::FocusWebView(..) => write!(f, "FocusWebView"),
             EmbedderEvent::ToggleWebRenderDebug(..) => write!(f, "ToggleWebRenderDebug"),
             EmbedderEvent::CaptureWebRender => write!(f, "CaptureWebRender"),
             EmbedderEvent::ToggleSamplingProfiler(..) => write!(f, "ToggleSamplingProfiler"),
             EmbedderEvent::ExitFullScreen(..) => write!(f, "ExitFullScreen"),
             EmbedderEvent::MediaSessionAction(..) => write!(f, "MediaSessionAction"),
-            EmbedderEvent::ChangeBrowserVisibility(..) => write!(f, "ChangeBrowserVisibility"),
+            EmbedderEvent::WebViewVisibilityChanged(..) => write!(f, "WebViewVisibilityChanged"),
             EmbedderEvent::IMEDismissed => write!(f, "IMEDismissed"),
             EmbedderEvent::ClearCache => write!(f, "ClearCache"),
+            EmbedderEvent::InvalidateNativeSurface => write!(f, "InvalidateNativeSurface"),
+            EmbedderEvent::ReplaceNativeSurface(..) => write!(f, "ReplaceNativeSurface"),
         }
     }
 }
@@ -160,14 +170,8 @@ pub trait WindowMethods {
     /// will want to avoid blocking on UI events, and just
     /// run the event loop at the vsync interval.
     fn set_animation_state(&self, _state: AnimationState);
-    /// Get the media GL context
-    fn get_gl_context(&self) -> GlContext;
-    /// Get the media native display
-    fn get_native_display(&self) -> NativeDisplay;
-    /// Get the GL api
-    fn get_gl_api(&self) -> GlApi;
-    /// Get the webrender surfman instance
-    fn webrender_surfman(&self) -> WebrenderSurfman;
+    /// Get the [`RenderingContext`] of this Window.
+    fn rendering_context(&self) -> RenderingContext;
 }
 
 pub trait EmbedderMethods {

@@ -94,7 +94,9 @@ use crate::dom::create::create_element;
 use crate::dom::customelementregistry::{
     CallbackReaction, CustomElementDefinition, CustomElementReaction, CustomElementState,
 };
-use crate::dom::document::{determine_policy_for_token, Document, LayoutDocumentHelpers};
+use crate::dom::document::{
+    determine_policy_for_token, Document, LayoutDocumentHelpers, ReflowTriggerCondition,
+};
 use crate::dom::documentfragment::DocumentFragment;
 use crate::dom::domrect::DOMRect;
 use crate::dom::domtokenlist::DOMTokenList;
@@ -491,7 +493,7 @@ impl Element {
         self.shadow_root().is_some()
     }
 
-    /// https://dom.spec.whatwg.org/#dom-element-attachshadow
+    /// <https://dom.spec.whatwg.org/#dom-element-attachshadow>
     /// XXX This is not exposed to web content yet. It is meant to be used
     ///     for UA widgets only.
     pub fn attach_shadow(&self, is_ua_widget: IsUserAgentWidget) -> Fallible<DomRoot<ShadowRoot>> {
@@ -987,6 +989,32 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
             hints.push(from_declaration(
                 shared_lock,
                 PropertyDeclaration::BorderRightWidth(width_value),
+            ));
+        }
+
+        if let Some(cellpadding) = self
+            .downcast::<HTMLTableCellElement>()
+            .and_then(|this| this.get_table())
+            .and_then(|table| table.get_cellpadding())
+        {
+            let cellpadding = NonNegative(specified::LengthPercentage::Length(
+                specified::NoCalcLength::from_px(cellpadding as f32),
+            ));
+            hints.push(from_declaration(
+                shared_lock,
+                PropertyDeclaration::PaddingTop(cellpadding.clone()),
+            ));
+            hints.push(from_declaration(
+                shared_lock,
+                PropertyDeclaration::PaddingLeft(cellpadding.clone()),
+            ));
+            hints.push(from_declaration(
+                shared_lock,
+                PropertyDeclaration::PaddingBottom(cellpadding.clone()),
+            ));
+            hints.push(from_declaration(
+                shared_lock,
+                PropertyDeclaration::PaddingRight(cellpadding),
             ));
         }
     }
@@ -3346,30 +3374,29 @@ impl<'a> SelectorsElement for DomRoot<Element> {
 
 impl Element {
     fn client_rect(&self) -> Rect<i32> {
+        let doc = self.node.owner_doc();
+
         if let Some(rect) = self
             .rare_data()
             .as_ref()
             .and_then(|data| data.client_rect.as_ref())
             .and_then(|rect| rect.get().ok())
         {
-            return rect;
+            if matches!(
+                doc.needs_reflow(),
+                None | Some(ReflowTriggerCondition::PaintPostponed)
+            ) {
+                return rect;
+            }
         }
 
         let mut rect = self.upcast::<Node>().client_rect();
-        let in_quirks_mode = self.node.owner_doc().quirks_mode() == QuirksMode::Quirks;
+        let in_quirks_mode = doc.quirks_mode() == QuirksMode::Quirks;
 
-        if (in_quirks_mode &&
-            self.node.owner_doc().GetBody().as_deref() == self.downcast::<HTMLElement>()) ||
+        if (in_quirks_mode && doc.GetBody().as_deref() == self.downcast::<HTMLElement>()) ||
             (!in_quirks_mode && *self.root_element() == *self)
         {
-            let viewport_dimensions = self
-                .node
-                .owner_doc()
-                .window()
-                .window_size()
-                .initial_viewport
-                .round()
-                .to_i32();
+            let viewport_dimensions = doc.window().window_size().initial_viewport.round().to_i32();
             rect.size = Size2D::<i32>::new(viewport_dimensions.width, viewport_dimensions.height);
         }
 

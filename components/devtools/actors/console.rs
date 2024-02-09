@@ -2,14 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Liberally derived from the [Firefox JS implementation]
-//! (http://mxr.mozilla.org/mozilla-central/source/toolkit/devtools/server/actors/webconsole.js).
+//! Liberally derived from the [Firefox JS implementation](http://mxr.mozilla.org/mozilla-central/source/toolkit/devtools/server/actors/webconsole.js).
 //! Mediates interaction between the remote web console and equivalent functionality (object
 //! inspection, JS evaluation, autocompletion) in Servo.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::TcpStream;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use devtools_traits::EvaluateJSReply::{
     ActorValue, BooleanValue, NullValue, NumberValue, StringValue, VoidValue,
@@ -23,7 +23,6 @@ use log::debug;
 use msg::constellation_msg::TEST_PIPELINE_ID;
 use serde::Serialize;
 use serde_json::{self, Map, Number, Value};
-use time::precise_time_ns;
 use uuid::Uuid;
 
 use crate::actor::{Actor, ActorMessageStatus, ActorRegistry};
@@ -295,7 +294,10 @@ impl ConsoleActor {
                 filename: console_message.filename.clone(),
                 lineNumber: console_message.lineNumber as u32,
                 functionName: "".to_string(), //TODO
-                timeStamp: precise_time_ns(),
+                timeStamp: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64,
                 private: false,
                 arguments: vec![console_message.message.clone()],
             }));
@@ -305,7 +307,10 @@ impl ConsoleActor {
                 type_: "consoleAPICall".to_owned(),
                 message: ConsoleMsg {
                     level: level,
-                    timeStamp: precise_time_ns(),
+                    timeStamp: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos() as u64,
                     arguments: vec![console_message.message],
                     filename: console_message.filename,
                     lineNumber: console_message.lineNumber,

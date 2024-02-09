@@ -269,11 +269,15 @@ impl HTMLCanvasElement {
             .global()
             .script_to_constellation_chan()
             .send(ScriptMsg::GetWebGPUChan(sender));
-        let window = window_from_node(self);
-        let channel = receiver.recv().expect("Failed to get WebGPU channel");
-        let context = GPUCanvasContext::new(window.upcast::<GlobalScope>(), self, channel);
-        *self.context.borrow_mut() = Some(CanvasContext::WebGPU(Dom::from_ref(&*context)));
-        Some(context)
+        receiver
+            .recv()
+            .expect("Failed to get WebGPU channel")
+            .map(|channel| {
+                let window = window_from_node(self);
+                let context = GPUCanvasContext::new(window.upcast::<GlobalScope>(), self, channel);
+                *self.context.borrow_mut() = Some(CanvasContext::WebGPU(Dom::from_ref(&*context)));
+                context
+            })
     }
 
     /// Gets the base WebGLRenderingContext for WebGL or WebGL 2, if exists.
@@ -438,7 +442,7 @@ impl HTMLCanvasElementMethods for HTMLCanvasElement {
         Ok(USVString(url))
     }
 
-    /// https://w3c.github.io/mediacapture-fromelement/#dom-htmlcanvaselement-capturestream
+    /// <https://w3c.github.io/mediacapture-fromelement/#dom-htmlcanvaselement-capturestream>
     fn CaptureStream(&self, _frame_request_rate: Option<Finite<f64>>) -> DomRoot<MediaStream> {
         let global = self.global();
         let stream = MediaStream::new(&*global);

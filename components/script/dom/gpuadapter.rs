@@ -86,7 +86,7 @@ impl GPUAdapter {
 }
 
 impl GPUAdapterMethods for GPUAdapter {
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuadapter-requestdevice
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuadapter-requestdevice>
     fn RequestDevice(&self, descriptor: &GPUDeviceDescriptor, comp: InRealm) -> Rc<Promise> {
         // Step 2
         let promise = Promise::new_in_current_realm(comp);
@@ -205,13 +205,13 @@ impl GPUAdapterMethods for GPUAdapter {
         promise
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuadapter-isfallbackadapter
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuadapter-isfallbackadapter>
     fn IsFallbackAdapter(&self) -> bool {
         //TODO
         false
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuadapter-requestadapterinfo
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuadapter-requestadapterinfo>
     fn RequestAdapterInfo(&self, unmask_hints: Vec<DOMString>, comp: InRealm) -> Rc<Promise> {
         // XXX: Adapter info should be generated here ...
         // Step 1
@@ -225,47 +225,47 @@ impl GPUAdapterMethods for GPUAdapter {
         promise
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuadapter-features
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuadapter-features>
     fn Features(&self) -> DomRoot<GPUSupportedFeatures> {
         DomRoot::from_ref(&self.features)
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuadapter-limits
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuadapter-limits>
     fn Limits(&self) -> DomRoot<GPUSupportedLimits> {
         DomRoot::from_ref(&self.limits)
     }
 }
 
 impl AsyncWGPUListener for GPUAdapter {
-    fn handle_response(&self, response: WebGPUResponseResult, promise: &Rc<Promise>) {
+    fn handle_response(&self, response: Option<WebGPUResponseResult>, promise: &Rc<Promise>) {
         match response {
-            Ok(WebGPUResponse::RequestDevice {
-                device_id,
-                queue_id,
-                descriptor,
-            }) => {
-                let device = GPUDevice::new(
-                    &self.global(),
-                    self.channel.clone(),
-                    &self,
-                    Heap::default(),
-                    descriptor.features,
-                    descriptor.limits,
+            Some(response) => match response {
+                Ok(WebGPUResponse::RequestDevice {
                     device_id,
                     queue_id,
-                    descriptor.label.unwrap_or_default(),
-                );
-                self.global().add_gpu_device(&device);
-                promise.resolve_native(&device);
+                    descriptor,
+                }) => {
+                    let device = GPUDevice::new(
+                        &self.global(),
+                        self.channel.clone(),
+                        &self,
+                        Heap::default(),
+                        descriptor.features,
+                        descriptor.limits,
+                        device_id,
+                        queue_id,
+                        descriptor.label.unwrap_or_default(),
+                    );
+                    self.global().add_gpu_device(&device);
+                    promise.resolve_native(&device);
+                },
+                Err(e) => {
+                    warn!("Could not get GPUDevice({:?})", e);
+                    promise.reject_error(Error::Operation);
+                },
+                Ok(_) => unreachable!("GPUAdapter received wrong WebGPUResponse"),
             },
-            Err(e) => {
-                warn!("Could not get GPUDevice({:?})", e);
-                promise.reject_error(Error::Operation);
-            },
-            _ => {
-                warn!("GPUAdapter received wrong WebGPUResponse");
-                promise.reject_error(Error::Operation);
-            },
+            None => unreachable!("Failed to get a response for RequestDevice"),
         }
     }
 }

@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use app_units::Au;
 use servo_config::pref;
 use style::computed_values::mix_blend_mode::T as ComputedMixBlendMode;
 use style::computed_values::position::T as ComputedPosition;
@@ -13,12 +14,14 @@ use style::properties::longhands::column_span::computed_value::T as ColumnSpan;
 use style::properties::ComputedValues;
 use style::values::computed::image::Image as ComputedImageLayer;
 use style::values::computed::{Length, LengthPercentage, NonNegativeLengthPercentage, Size};
-use style::values::generics::box_::Perspective;
+use style::values::generics::box_::{GenericVerticalAlign, Perspective, VerticalAlignKeyword};
 use style::values::generics::length::MaxSize;
-use style::values::specified::box_ as stylo;
+use style::values::specified::box_::DisplayOutside as StyloDisplayOutside;
+use style::values::specified::{box_ as stylo, Overflow};
 use style::Zero;
 use webrender_api as wr;
 
+use crate::dom_traversal::Contents;
 use crate::geom::{
     LengthOrAuto, LengthPercentageOrAuto, LogicalSides, LogicalVec2, PhysicalSides, PhysicalSize,
 };
@@ -37,7 +40,7 @@ pub(crate) enum DisplayGeneratingBox {
         outside: DisplayOutside,
         inside: DisplayInside,
     },
-    // https://drafts.csswg.org/css-display-3/#layout-specific-display
+    /// <https://drafts.csswg.org/css-display-3/#layout-specific-display>
     LayoutInternal(DisplayLayoutInternal),
 }
 
@@ -48,6 +51,23 @@ impl DisplayGeneratingBox {
             DisplayGeneratingBox::LayoutInternal(layout_internal) => {
                 layout_internal.display_inside()
             },
+        }
+    }
+
+    pub(crate) fn used_value_for_contents(&self, contents: &Contents) -> Self {
+        // From <https://www.w3.org/TR/css-display-3/#layout-specific-display>:
+        // > When the display property of a replaced element computes to one of
+        // > the layout-internal values, it is handled as having a used value of
+        // > inline.
+        if matches!(self, Self::LayoutInternal(_)) && contents.is_replaced() {
+            Self::OutsideInside {
+                outside: DisplayOutside::Inline,
+                inside: DisplayInside::Flow {
+                    is_list_item: false,
+                },
+            }
+        } else {
+            *self
         }
     }
 }
@@ -61,7 +81,7 @@ pub(crate) enum DisplayOutside {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum DisplayInside {
     // “list-items are limited to the Flow Layout display types”
-    // https://drafts.csswg.org/css-display/#list-items
+    // <https://drafts.csswg.org/css-display/#list-items>
     Flow { is_list_item: bool },
     FlowRoot { is_list_item: bool },
     Flex,
@@ -69,7 +89,7 @@ pub(crate) enum DisplayInside {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-/// https://drafts.csswg.org/css-display-3/#layout-specific-display
+/// <https://drafts.csswg.org/css-display-3/#layout-specific-display>
 pub(crate) enum DisplayLayoutInternal {
     TableCaption,
     TableCell,
@@ -82,7 +102,7 @@ pub(crate) enum DisplayLayoutInternal {
 }
 
 impl DisplayLayoutInternal {
-    /// https://drafts.csswg.org/css-display-3/#layout-specific-displa
+    /// <https://drafts.csswg.org/css-display-3/#layout-specific-displa>
     pub(crate) fn display_inside(&self) -> DisplayInside {
         // When we add ruby, the display_inside of ruby must be Flow.
         // TODO: this should be unreachable for everything but
@@ -163,10 +183,12 @@ pub(crate) trait ComputedValuesExt {
     fn effective_z_index(&self) -> i32;
     fn establishes_block_formatting_context(&self) -> bool;
     fn establishes_stacking_context(&self) -> bool;
+    fn establishes_scroll_container(&self) -> bool;
     fn establishes_containing_block_for_absolute_descendants(&self) -> bool;
     fn establishes_containing_block_for_all_descendants(&self) -> bool;
     fn background_is_transparent(&self) -> bool;
     fn get_webrender_primitive_flags(&self) -> wr::PrimitiveFlags;
+    fn effective_vertical_align_for_inline_layout(&self) -> GenericVerticalAlign<LengthPercentage>;
 }
 
 impl ComputedValuesExt for ComputedValues {
@@ -403,7 +425,7 @@ impl ComputedValuesExt for ComputedValues {
     }
 
     /// Get the effective z-index of this fragment. Z-indices only apply to positioned elements
-    /// per CSS 2 9.9.1 (http://www.w3.org/TR/CSS2/visuren.html#z-index), so this value may differ
+    /// per CSS 2 9.9.1 (<http://www.w3.org/TR/CSS2/visuren.html#z-index>), so this value may differ
     /// from the value specified in the style.
     fn effective_z_index(&self) -> i32 {
         match self.get_box().position {
@@ -429,6 +451,12 @@ impl ComputedValuesExt for ComputedValues {
 
         // TODO: We need to handle CSS Contain here.
         false
+    }
+
+    /// Whether or not the `overflow` value of this style establishes a scroll container.
+    fn establishes_scroll_container(&self) -> bool {
+        self.get_box().overflow_x != Overflow::Visible ||
+            self.get_box().overflow_y != Overflow::Visible
     }
 
     /// Returns true if this fragment establishes a new stacking context and false otherwise.
@@ -526,6 +554,18 @@ impl ComputedValuesExt for ComputedValues {
             BackfaceVisiblity::Hidden => wr::PrimitiveFlags::empty(),
         }
     }
+
+    /// Get the effective `vertical-align` property for inline layout. Essentially, if this style
+    /// has outside block display, this is the inline formatting context root and `vertical-align`
+    /// doesn't come into play for inline layout.
+    fn effective_vertical_align_for_inline_layout(&self) -> GenericVerticalAlign<LengthPercentage> {
+        match self.clone_display().outside() {
+            StyloDisplayOutside::Block => {
+                GenericVerticalAlign::Keyword(VerticalAlignKeyword::Baseline)
+            },
+            _ => self.clone_vertical_align(),
+        }
+    }
 }
 
 impl From<stylo::Display> for Display {
@@ -603,5 +643,18 @@ fn size_to_length(size: &Size) -> LengthPercentageOrAuto {
     match size {
         Size::LengthPercentage(length) => LengthPercentageOrAuto::LengthPercentage(&length.0),
         Size::Auto => LengthPercentageOrAuto::Auto,
+    }
+}
+
+pub(crate) trait Clamp: Sized {
+    fn clamp_between_extremums(self, min: Self, max: Option<Self>) -> Self;
+}
+
+impl Clamp for Au {
+    fn clamp_between_extremums(self, min: Self, max: Option<Self>) -> Self {
+        match max {
+            Some(max_value) => self.min(max_value).max(min),
+            None => self.max(min),
+        }
     }
 }

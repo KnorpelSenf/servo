@@ -107,17 +107,17 @@ impl GPUCommandEncoder {
 }
 
 impl GPUCommandEncoderMethods for GPUCommandEncoder {
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label>
     fn Label(&self) -> USVString {
         self.label.borrow().clone()
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label>
     fn SetLabel(&self, value: USVString) {
         *self.label.borrow_mut() = value;
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-begincomputepass
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-begincomputepass>
     fn BeginComputePass(
         &self,
         descriptor: &GPUComputePassDescriptor,
@@ -138,6 +138,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
                         .label
                         .as_ref()
                         .map(|l| Cow::Borrowed(&**l)),
+                    timestamp_writes: None,
                 },
             ))
         };
@@ -151,7 +152,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
         )
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-beginrenderpass
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-beginrenderpass>
     fn BeginRenderPass(
         &self,
         descriptor: &GPURenderPassDescriptor,
@@ -234,6 +235,8 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
                     .label
                     .as_ref()
                     .map(|l| Cow::Borrowed(&**l)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
             };
             Some(wgpu_com::RenderPass::new(self.encoder.0, &desc))
         };
@@ -247,7 +250,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
         )
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-copybuffertobuffer
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-copybuffertobuffer>
     fn CopyBufferToBuffer(
         &self,
         source: &GPUBuffer,
@@ -281,7 +284,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
             .expect("Failed to send CopyBufferToBuffer");
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-copybuffertotexture
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-copybuffertotexture>
     fn CopyBufferToTexture(
         &self,
         source: &GPUImageCopyBuffer,
@@ -313,7 +316,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
             .expect("Failed to send CopyBufferToTexture");
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-copybuffertotexture
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-copybuffertotexture>
     fn CopyTextureToBuffer(
         &self,
         source: &GPUImageCopyTexture,
@@ -345,7 +348,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
             .expect("Failed to send CopyTextureToBuffer");
     }
 
-    /// https://gpuweb.github.io/gpuweb/#GPUCommandEncoder-copyTextureToTexture
+    /// <https://gpuweb.github.io/gpuweb/#GPUCommandEncoder-copyTextureToTexture>
     fn CopyTextureToTexture(
         &self,
         source: &GPUImageCopyTexture,
@@ -373,7 +376,7 @@ impl GPUCommandEncoderMethods for GPUCommandEncoder {
             .expect("Failed to send CopyTextureToTexture");
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-finish
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpucommandencoder-finish>
     fn Finish(&self, descriptor: &GPUCommandBufferDescriptor) -> DomRoot<GPUCommandBuffer> {
         self.channel
             .0

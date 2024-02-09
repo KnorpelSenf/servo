@@ -26,9 +26,6 @@ class MacOS(Base):
         super().__init__(*args, **kwargs)
         self.is_macos = True
 
-    def library_path_variable_name(self):
-        return "DYLD_LIBRARY_PATH"
-
     def gstreamer_root(self, cross_compilation_target: Optional[str]) -> Optional[str]:
         # We do not support building with gstreamer while cross-compiling on MacOS.
         if cross_compilation_target or not os.path.exists(GSTREAMER_ROOT):
@@ -36,23 +33,9 @@ class MacOS(Base):
         return GSTREAMER_ROOT
 
     def is_gstreamer_installed(self, cross_compilation_target: Optional[str]) -> bool:
-        if not super().is_gstreamer_installed(cross_compilation_target):
-            return False
-
         # Servo only supports the official GStreamer distribution on MacOS.
-        env = os.environ.copy()
-        self.set_gstreamer_environment_variables_if_necessary(
-            env, cross_compilation_target, check_installation=False
-        )
-        gst_lib_dir = subprocess.check_output(
-            ["pkg-config", "--variable=libdir", "gstreamer-1.0"], env=env
-        )
-        if not gst_lib_dir.startswith(bytes(GSTREAMER_ROOT, "utf-8")):
-            print("GStreamer is installed, but not the official packages.\n"
-                  "Run `./mach bootstrap-gtstreamer` or install packages from "
-                  "https://gstreamer.freedesktop.org/")
-            return False
-        return True
+        # Make sure we use the right `pkg-config`.
+        return not cross_compilation_target and os.path.exists(GSTREAMER_ROOT)
 
     def _platform_bootstrap(self, _force: bool) -> bool:
         installed_something = False

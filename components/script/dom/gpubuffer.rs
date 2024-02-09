@@ -135,7 +135,7 @@ impl Drop for GPUBuffer {
 
 impl GPUBufferMethods for GPUBuffer {
     #[allow(unsafe_code)]
-    /// https://gpuweb.github.io/gpuweb/#dom-gpubuffer-unmap
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpubuffer-unmap>
     fn Unmap(&self) -> Fallible<()> {
         let cx = GlobalScope::get_cx();
         // Step 1
@@ -181,7 +181,7 @@ impl GPUBufferMethods for GPUBuffer {
         Ok(())
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpubuffer-destroy
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpubuffer-destroy>
     fn Destroy(&self) -> Fallible<()> {
         let state = self.state.get();
         match state {
@@ -206,7 +206,7 @@ impl GPUBufferMethods for GPUBuffer {
     }
 
     #[allow(unsafe_code)]
-    /// https://gpuweb.github.io/gpuweb/#dom-gpubuffer-mapasync-offset-size
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpubuffer-mapasync-offset-size>
     fn MapAsync(
         &self,
         mode: u32,
@@ -278,7 +278,7 @@ impl GPUBufferMethods for GPUBuffer {
         promise
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpubuffer-getmappedrange
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpubuffer-getmappedrange>
     #[allow(unsafe_code)]
     fn GetMappedRange(
         &self,
@@ -333,12 +333,12 @@ impl GPUBufferMethods for GPUBuffer {
         Ok(NonNull::new(array_buffer).unwrap())
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label>
     fn Label(&self) -> USVString {
         self.label.borrow().clone()
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label>
     fn SetLabel(&self, value: USVString) {
         *self.label.borrow_mut() = value;
     }
@@ -346,27 +346,27 @@ impl GPUBufferMethods for GPUBuffer {
 
 impl AsyncWGPUListener for GPUBuffer {
     #[allow(unsafe_code)]
-    fn handle_response(&self, response: WebGPUResponseResult, promise: &Rc<Promise>) {
+    fn handle_response(&self, response: Option<WebGPUResponseResult>, promise: &Rc<Promise>) {
         match response {
-            Ok(WebGPUResponse::BufferMapAsync(bytes)) => {
-                *self
-                    .map_info
-                    .borrow_mut()
-                    .as_mut()
-                    .unwrap()
-                    .mapping
-                    .borrow_mut() = bytes.to_vec();
-                promise.resolve_native(&());
-                self.state.set(GPUBufferState::Mapped);
+            Some(response) => match response {
+                Ok(WebGPUResponse::BufferMapAsync(bytes)) => {
+                    *self
+                        .map_info
+                        .borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .mapping
+                        .borrow_mut() = bytes.to_vec();
+                    promise.resolve_native(&());
+                    self.state.set(GPUBufferState::Mapped);
+                },
+                Err(e) => {
+                    warn!("Could not map buffer({:?})", e);
+                    promise.reject_error(Error::Abort);
+                },
+                Ok(_) => unreachable!("GPUBuffer received wrong WebGPUResponse"),
             },
-            Err(e) => {
-                warn!("Could not map buffer({:?})", e);
-                promise.reject_error(Error::Abort);
-            },
-            _ => {
-                warn!("GPUBuffer received wrong WebGPUResponse");
-                promise.reject_error(Error::Operation);
-            },
+            None => unreachable!("Failed to get a response for BufferMapAsync"),
         }
         *self.map_promise.borrow_mut() = None;
         if let Err(e) = self

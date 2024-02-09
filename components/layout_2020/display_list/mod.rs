@@ -118,14 +118,14 @@ pub(crate) struct DisplayListBuilder<'a> {
 
     /// Contentful paint i.e. whether the display list contains items of type
     /// text, image, non-white canvas or SVG). Used by metrics.
-    /// See https://w3c.github.io/paint-timing/#first-contentful-paint.
+    /// See <https://w3c.github.io/paint-timing/#first-contentful-paint>.
     is_contentful: bool,
 }
 
 impl DisplayList {
-    pub fn build<'a>(
+    pub fn build(
         &mut self,
-        context: &'a LayoutContext,
+        context: &LayoutContext,
         fragment_tree: &FragmentTree,
         root_stacking_context: &StackingContext,
     ) -> (FnvHashMap<BrowsingContextId, Size2D<f32, CSSPixel>>, bool) {
@@ -280,9 +280,13 @@ impl Fragment {
             .rect
             .to_physical(fragment.parent_style.writing_mode, containing_block)
             .translate(containing_block.origin.to_vector());
-        let mut baseline_origin = rect.origin.clone();
+        let mut baseline_origin = rect.origin;
         baseline_origin.y += Length::from(fragment.font_metrics.ascent);
-        let glyphs = glyphs(&fragment.glyphs, baseline_origin);
+        let glyphs = glyphs(
+            &fragment.glyphs,
+            baseline_origin,
+            fragment.justification_adjustment,
+        );
         if glyphs.is_empty() {
             return;
         }
@@ -313,8 +317,7 @@ impl Fragment {
             .contains(TextDecorationLine::UNDERLINE)
         {
             let mut rect = rect;
-            rect.origin.y =
-                rect.origin.y + Length::from(font_metrics.ascent - font_metrics.underline_offset);
+            rect.origin.y += Length::from(font_metrics.ascent - font_metrics.underline_offset);
             rect.size.height = Length::new(font_metrics.underline_size.to_nearest_pixel(dppx));
             self.build_display_list_for_text_decoration(fragment, builder, &rect, &color);
         }
@@ -346,8 +349,7 @@ impl Fragment {
             .contains(TextDecorationLine::LINE_THROUGH)
         {
             let mut rect = rect;
-            rect.origin.y =
-                rect.origin.y + Length::from(font_metrics.ascent - font_metrics.strikeout_offset);
+            rect.origin.y += Length::from(font_metrics.ascent - font_metrics.strikeout_offset);
             // XXX(ferjm) This does not work on MacOS #942
             rect.size.height = Length::new(font_metrics.strikeout_size.to_nearest_pixel(dppx));
             self.build_display_list_for_text_decoration(fragment, builder, &rect, &color);
@@ -586,7 +588,7 @@ impl<'a> BuilderForBoxFragment<'a> {
                     if let Some(layer) =
                         &background::layout_layer(self, &source, builder, index, intrinsic)
                     {
-                        gradient::build(&style, &gradient, layer, builder)
+                        gradient::build(style, gradient, layer, builder)
                     }
                 },
                 Image::Url(ref image_url) => {
@@ -683,11 +685,15 @@ impl<'a> BuilderForBoxFragment<'a> {
 
     fn build_border(&mut self, builder: &mut DisplayListBuilder) {
         let border = self.fragment.style.get_border();
+        let border_widths = self
+            .fragment
+            .border
+            .to_physical(self.fragment.style.writing_mode);
         let widths = SideOffsets2D::new(
-            border.border_top_width.to_f32_px(),
-            border.border_right_width.to_f32_px(),
-            border.border_bottom_width.to_f32_px(),
-            border.border_left_width.to_f32_px(),
+            border_widths.top.px(),
+            border_widths.right.px(),
+            border_widths.bottom.px(),
+            border_widths.left.px(),
         );
         if widths == SideOffsets2D::zero() {
             return;
@@ -759,7 +765,8 @@ fn rgba(color: AbsoluteColor) -> wr::ColorF {
 
 fn glyphs(
     glyph_runs: &[Arc<GlyphStore>],
-    mut origin: PhysicalPoint<Length>,
+    mut baseline_origin: PhysicalPoint<Length>,
+    justification_adjustment: Length,
 ) -> Vec<wr::GlyphInstance> {
     use gfx_traits::ByteIndex;
     use range::Range;
@@ -770,8 +777,8 @@ fn glyphs(
             if !run.is_whitespace() {
                 let glyph_offset = glyph.offset().unwrap_or(Point2D::zero());
                 let point = units::LayoutPoint::new(
-                    origin.x.px() + glyph_offset.x.to_f32_px(),
-                    origin.y.px() + glyph_offset.y.to_f32_px(),
+                    baseline_origin.x.px() + glyph_offset.x.to_f32_px(),
+                    baseline_origin.y.px() + glyph_offset.y.to_f32_px(),
                 );
                 let glyph = wr::GlyphInstance {
                     index: glyph.id(),
@@ -779,7 +786,11 @@ fn glyphs(
                 };
                 glyphs.push(glyph);
             }
-            origin.x += Length::from(glyph.advance());
+
+            if glyph.char_is_word_separator() {
+                baseline_origin.x += justification_adjustment;
+            }
+            baseline_origin.x += Length::from(glyph.advance());
         }
     }
     glyphs
@@ -889,7 +900,7 @@ fn clip_for_radii(
     if radii.is_zero() {
         None
     } else {
-        let clip_chain_id = builder.current_clip_chain_id.clone();
+        let clip_chain_id = builder.current_clip_chain_id;
         let parent_space_and_clip = wr::SpaceAndClipInfo {
             spatial_id: builder.current_scroll_node_id.spatial_id,
             clip_id: ClipId::ClipChain(clip_chain_id),

@@ -17,19 +17,14 @@ use servo::compositing::windowing::{
 };
 use servo::embedder_traits::Cursor;
 use servo::keyboard_types::{Key, KeyState, KeyboardEvent};
+use servo::rendering_context::RenderingContext;
 use servo::script_traits::{TouchEventType, WheelDelta, WheelMode};
 use servo::servo_config::{opts, pref};
 use servo::servo_geometry::DeviceIndependentPixel;
 use servo::style_traits::DevicePixel;
 use servo::webrender_api::units::{DeviceIntPoint, DeviceIntRect, DeviceIntSize};
 use servo::webrender_api::ScrollLocation;
-use servo::webrender_surfman::WebrenderSurfman;
-use servo_media::player::context::{GlApi, GlContext as PlayerGLContext, NativeDisplay};
-#[cfg(target_os = "linux")]
-use surfman::platform::generic::multi::connection::NativeConnection;
-#[cfg(target_os = "linux")]
-use surfman::platform::generic::multi::context::NativeContext;
-use surfman::{Connection, Context, Device, GLApi, GLVersion, SurfaceType};
+use surfman::{Connection, Context, Device, SurfaceType};
 #[cfg(target_os = "windows")]
 use winapi;
 use winit::dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
@@ -41,12 +36,13 @@ use winit::event::{
 use winit::window::Icon;
 
 use crate::events_loop::{EventsLoop, WakerEvent};
+use crate::geometry::{winit_position_to_euclid_point, winit_size_to_euclid_size};
 use crate::keyutils::keyboard_event_from_winit;
 use crate::window_trait::{WindowPortsMethods, LINE_HEIGHT};
 
 pub struct Window {
     winit_window: winit::window::Window,
-    webrender_surfman: WebrenderSurfman,
+    rendering_context: RenderingContext,
     screen_size: Size2D<u32, DevicePixel>,
     inner_size: Cell<Size2D<u32, DevicePixel>>,
     toolbar_height: Cell<Length<f32, DeviceIndependentPixel>>,
@@ -132,16 +128,16 @@ impl Window {
             .expect("Failed to create adapter");
         let window_handle = winit_window.raw_window_handle();
         let native_widget = connection
-            .create_native_widget_from_rwh(window_handle)
+            .create_native_widget_from_raw_window_handle(window_handle, Size2D::new(width, height))
             .expect("Failed to create native widget");
         let surface_type = SurfaceType::Widget { native_widget };
-        let webrender_surfman = WebrenderSurfman::create(&connection, &adapter, surface_type)
+        let rendering_context = RenderingContext::create(&connection, &adapter, surface_type)
             .expect("Failed to create WR surfman");
 
         debug!("Created window {:?}", winit_window.id());
         Window {
             winit_window,
-            webrender_surfman,
+            rendering_context,
             event_queue: RefCell::new(vec![]),
             mouse_down_button: Cell::new(None),
             mouse_down_point: Cell::new(Point2D::new(0, 0)),
@@ -476,7 +472,7 @@ impl WindowPortsMethods for Window {
                 let new_size = Size2D::new(width, height);
                 if self.inner_size.get() != new_size {
                     let physical_size = Size2D::new(physical_size.width, physical_size.height);
-                    self.webrender_surfman
+                    self.rendering_context
                         .resize(physical_size.to_i32())
                         .expect("Failed to resize");
                     self.inner_size.set(new_size);
@@ -519,14 +515,6 @@ impl WindowPortsMethods for Window {
     }
 }
 
-fn winit_size_to_euclid_size<T>(size: PhysicalSize<T>) -> Size2D<T, DevicePixel> {
-    Size2D::new(size.width, size.height)
-}
-
-fn winit_position_to_euclid_point<T>(position: PhysicalPosition<T>) -> Point2D<T, DevicePixel> {
-    Point2D::new(position.x, position.y)
-}
-
 impl WindowMethods for Window {
     fn get_coordinates(&self) -> EmbedderCoordinates {
         let window_size = winit_size_to_euclid_size(self.winit_window.outer_size()).to_i32();
@@ -557,84 +545,8 @@ impl WindowMethods for Window {
         self.animation_state.set(state);
     }
 
-    fn webrender_surfman(&self) -> WebrenderSurfman {
-        self.webrender_surfman.clone()
-    }
-
-    fn get_gl_context(&self) -> PlayerGLContext {
-        if !pref!(media.glvideo.enabled) {
-            return PlayerGLContext::Unknown;
-        }
-
-        #[allow(unused_variables)]
-        let native_context = self.webrender_surfman.native_context();
-
-        #[cfg(target_os = "windows")]
-        return PlayerGLContext::Egl(native_context.egl_context as usize);
-
-        #[cfg(target_os = "linux")]
-        return match native_context {
-            NativeContext::Default(NativeContext::Default(native_context)) => {
-                PlayerGLContext::Egl(native_context.egl_context as usize)
-            },
-            NativeContext::Default(NativeContext::Alternate(native_context)) => {
-                PlayerGLContext::Egl(native_context.egl_context as usize)
-            },
-            NativeContext::Alternate(_) => unimplemented!(),
-        };
-
-        // @TODO(victor): https://github.com/servo/media/pull/315
-        #[cfg(target_os = "macos")]
-        #[allow(unreachable_code)]
-        return unimplemented!();
-
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-        return unimplemented!();
-    }
-
-    fn get_native_display(&self) -> NativeDisplay {
-        if !pref!(media.glvideo.enabled) {
-            return NativeDisplay::Unknown;
-        }
-
-        #[allow(unused_variables)]
-        let native_connection = self.webrender_surfman.connection().native_connection();
-        #[allow(unused_variables)]
-        let native_device = self.webrender_surfman.native_device();
-
-        #[cfg(target_os = "windows")]
-        return NativeDisplay::Egl(native_device.egl_display as usize);
-
-        #[cfg(target_os = "linux")]
-        return match native_connection {
-            NativeConnection::Default(NativeConnection::Default(conn)) => {
-                NativeDisplay::Egl(conn.0 as usize)
-            },
-            NativeConnection::Default(NativeConnection::Alternate(conn)) => {
-                NativeDisplay::X11(conn.x11_display as usize)
-            },
-            NativeConnection::Alternate(_) => unimplemented!(),
-        };
-
-        // @TODO(victor): https://github.com/servo/media/pull/315
-        #[cfg(target_os = "macos")]
-        #[allow(unreachable_code)]
-        return unimplemented!();
-
-        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-        return unimplemented!();
-    }
-
-    fn get_gl_api(&self) -> GlApi {
-        let api = self.webrender_surfman.connection().gl_api();
-        let attributes = self.webrender_surfman.context_attributes();
-        let GLVersion { major, minor } = attributes.version;
-        match api {
-            GLApi::GL if major >= 3 && minor >= 2 => GlApi::OpenGL3,
-            GLApi::GL => GlApi::OpenGL,
-            GLApi::GLES if major > 1 => GlApi::Gles2,
-            GLApi::GLES => GlApi::Gles1,
-        }
+    fn rendering_context(&self) -> RenderingContext {
+        self.rendering_context.clone()
     }
 }
 
@@ -678,9 +590,12 @@ impl webxr::glwindow::GlWindow for XRWindow {
         device: &mut Device,
         _context: &mut Context,
     ) -> webxr::glwindow::GlWindowRenderTarget {
+        let window_handle = self.winit_window.raw_window_handle();
+        let size = self.winit_window.inner_size();
+        let size = Size2D::new(size.width as i32, size.height as i32);
         let native_widget = device
             .connection()
-            .create_native_widget_from_winit_window(&self.winit_window)
+            .create_native_widget_from_raw_window_handle(window_handle, size)
             .expect("Failed to create native widget");
         webxr::glwindow::GlWindowRenderTarget::NativeWidget(native_widget)
     }

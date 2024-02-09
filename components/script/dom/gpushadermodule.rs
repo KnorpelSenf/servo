@@ -52,18 +52,18 @@ impl GPUShaderModule {
 }
 
 impl GPUShaderModuleMethods for GPUShaderModule {
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label>
     fn Label(&self) -> USVString {
         self.label.borrow().clone()
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpuobjectbase-label>
     fn SetLabel(&self, value: USVString) {
         *self.label.borrow_mut() = value;
     }
 
-    /// https://gpuweb.github.io/gpuweb/#dom-gpushadermodule-getcompilationinfo
-    fn CompilationInfo(&self) -> Fallible<Rc<Promise>> {
-        todo!()
+    /// <https://gpuweb.github.io/gpuweb/#dom-gpushadermodule-getcompilationinfo>
+    fn GetCompilationInfo(&self) -> Fallible<Rc<Promise>> {
+        todo!("Missing in wgpu: https://github.com/gfx-rs/wgpu/issues/2170")
     }
 }

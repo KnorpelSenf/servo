@@ -1,0 +1,53 @@
+[package]
+name = "simpleservo_jniapi"
+version = "0.0.1"
+authors = ["The Servo Project Developers"]
+license = "MPL-2.0"
+edition = "2018"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "simpleservo"
+crate-type = ["cdylib"]
+test = false
+bench = false
+
+[dependencies]
+android_logger = "0.13"
+getopts = { workspace = true }
+ipc-channel = { workspace = true }
+jni = "0.18.0"
+libc = { workspace = true }
+libloading = "0.8"
+libservo = { path = "../../components/servo" }
+log = { workspace = true }
+serde_json = { workspace = true }
+servo-media = { git = "https://github.com/servo/media" }
+surfman = { workspace = true, features = ["sm-angle-default"] }
+webxr = { git = "https://github.com/servo/webxr" }
+
+[build-dependencies]
+cc = "1.0"
+gl_generator = "0.14"
+serde_json = { workspace = true }
+vergen = { version = "8.0.0", features = ["git", "gitcl"] }
+
+[features]
+debugmozjs = ["libservo/debugmozjs"]
+# TODO: Once the native-bluetooth feature works for
+# Android, re-add it here.
+default = ["max_log_level", "webdriver"]
+googlevr = ["libservo/googlevr"]
+jitspew = ["libservo/jitspew"]
+js_backtrace = ["libservo/js_backtrace"]
+max_log_level = ["log/release_max_level_info"]
+media-gstreamer = ["libservo/media-gstreamer"]
+native-bluetooth = ["libservo/native-bluetooth"]
+no_static_freetype = ["libservo/no_static_freetype"]
+no-wgl = ["libservo/no-wgl"]
+profilemozjs = ["libservo/profilemozjs"]
+refcell_backtrace = ["libservo/refcell_backtrace"]
+webdriver = ["libservo/webdriver"]
+webgl_backtrace = ["libservo/webgl_backtrace"]
+xr-profile = ["libservo/xr-profile"]

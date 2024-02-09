@@ -119,7 +119,15 @@ builtinNames = {
     IDLType.Tags.unrestricted_float: 'f32',
     IDLType.Tags.float: 'Finite<f32>',
     IDLType.Tags.unrestricted_double: 'f64',
-    IDLType.Tags.double: 'Finite<f64>'
+    IDLType.Tags.double: 'Finite<f64>',
+    IDLType.Tags.int8array: 'Int8Array',
+    IDLType.Tags.uint8array: 'Uint8Array',
+    IDLType.Tags.int16array: 'Int16Array',
+    IDLType.Tags.uint16array: 'Uint16Array',
+    IDLType.Tags.int32array: 'Int32Array',
+    IDLType.Tags.uint32array: 'Uint32Array',
+    IDLType.Tags.float32array: 'Float32Array',
+    IDLType.Tags.float64array: 'Float64Array',
 }
 
 numericTags = [
@@ -1459,16 +1467,22 @@ def getConversionConfigForType(type, isEnforceRange, isClamp, treatNullAs):
     return "()"
 
 
+def builtin_return_type(returnType):
+    result = CGGeneric(builtinNames[returnType.tag()])
+    if returnType.nullable():
+        result = CGWrapper(result, pre="Option<", post=">")
+    return result
+
+
 # Returns a CGThing containing the type of the return value.
 def getRetvalDeclarationForType(returnType, descriptorProvider):
     if returnType is None or returnType.isUndefined():
         # Nothing to declare
         return CGGeneric("()")
     if returnType.isPrimitive() and returnType.tag() in builtinNames:
-        result = CGGeneric(builtinNames[returnType.tag()])
-        if returnType.nullable():
-            result = CGWrapper(result, pre="Option<", post=">")
-        return result
+        return builtin_return_type(returnType)
+    if returnType.isTypedArray() and returnType.tag() in builtinNames:
+        return builtin_return_type(returnType)
     if returnType.isDOMString():
         result = CGGeneric("DOMString")
         if returnType.nullable():
@@ -6494,6 +6508,14 @@ def generate_imports(config, cgthings, descriptors, callbacks=None, dictionaries
         'js::rust::define_properties',
         'js::rust::get_object_class',
         'js::typedarray',
+        'js::typedarray::Int8Array',
+        'js::typedarray::Uint8Array',
+        'js::typedarray::Int16Array',
+        'js::typedarray::Uint16Array',
+        'js::typedarray::Int32Array',
+        'js::typedarray::Uint32Array',
+        'js::typedarray::Float32Array',
+        'js::typedarray::Float64Array',
         'crate::dom',
         'crate::dom::bindings',
         'crate::dom::bindings::codegen::InterfaceObjectMap',

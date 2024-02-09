@@ -13,7 +13,8 @@ use std::{env, fs};
 use gleam::gl;
 use log::{info, trace, warn};
 use servo::compositing::windowing::EmbedderEvent;
-use servo::config::opts;
+use servo::compositing::CompositeTarget;
+use servo::config::{opts, set_pref};
 use servo::servo_config::pref;
 use servo::Servo;
 use surfman::GLApi;
@@ -22,17 +23,17 @@ use winit::event::WindowEvent;
 use winit::event_loop::EventLoopWindowTarget;
 use winit::window::WindowId;
 
-use crate::browser::Browser;
 use crate::embedder::EmbedderCallbacks;
 use crate::events_loop::{EventsLoop, WakerEvent};
 use crate::minibrowser::Minibrowser;
 use crate::parser::get_default_url;
+use crate::webview::WebViewManager;
 use crate::window_trait::WindowPortsMethods;
 use crate::{headed_window, headless_window};
 
 pub struct App {
     servo: Option<Servo<dyn WindowPortsMethods>>,
-    browser: RefCell<Browser<dyn WindowPortsMethods>>,
+    webviews: RefCell<WebViewManager<dyn WindowPortsMethods>>,
     event_queue: RefCell<Vec<EmbedderEvent>>,
     suspended: Cell<bool>,
     windows: HashMap<WindowId, Rc<dyn WindowPortsMethods>>,
@@ -66,6 +67,8 @@ impl App {
 
         // Implements window methods, used by compositor.
         let window = if opts::get().headless {
+            // GL video rendering is not supported on headless windows.
+            set_pref!(media.glvideo.enabled, false);
             headless_window::Window::new(
                 opts::get().initial_window_size,
                 device_pixel_ratio_override,
@@ -80,7 +83,7 @@ impl App {
         };
 
         // Handle browser state.
-        let browser = Browser::new(window.clone());
+        let webviews = WebViewManager::new(window.clone());
         let initial_url = get_default_url(
             url.as_ref().map(String::as_str),
             env::current_dir().unwrap(),
@@ -89,7 +92,7 @@ impl App {
 
         let mut app = App {
             event_queue: RefCell::new(vec![]),
-            browser: RefCell::new(browser),
+            webviews: RefCell::new(webviews),
             servo: None,
             suspended: Cell::new(false),
             windows: HashMap::new(),
@@ -98,21 +101,21 @@ impl App {
 
         if opts::get().minibrowser && window.winit_window().is_some() {
             // Make sure the gl context is made current.
-            let webrender_surfman = window.webrender_surfman();
-            let webrender_gl = match webrender_surfman.connection().gl_api() {
+            let rendering_context = window.rendering_context();
+            let webrender_gl = match rendering_context.connection().gl_api() {
                 GLApi::GL => unsafe {
-                    gl::GlFns::load_with(|s| webrender_surfman.get_proc_address(s))
+                    gl::GlFns::load_with(|s| rendering_context.get_proc_address(s))
                 },
                 GLApi::GLES => unsafe {
-                    gl::GlesFns::load_with(|s| webrender_surfman.get_proc_address(s))
+                    gl::GlesFns::load_with(|s| rendering_context.get_proc_address(s))
                 },
             };
-            webrender_surfman.make_gl_context_current().unwrap();
+            rendering_context.make_gl_context_current().unwrap();
             debug_assert_eq!(webrender_gl.get_error(), gleam::gl::NO_ERROR);
 
             app.minibrowser = Some(
                 Minibrowser::new(
-                    &webrender_surfman,
+                    &rendering_context,
                     &events_loop,
                     window.as_ref(),
                     initial_url.clone(),
@@ -122,8 +125,9 @@ impl App {
         }
 
         if let Some(mut minibrowser) = app.minibrowser() {
-            minibrowser.update(window.winit_window().unwrap(), "init");
-            window.set_toolbar_height(minibrowser.toolbar_height.get());
+            // Servo is not yet initialised, so there is no `servo_framebuffer_id`.
+            minibrowser.update(window.winit_window().unwrap(), None, "init");
+            window.set_toolbar_height(minibrowser.toolbar_height);
         }
 
         // Whether or not to recomposite during the next RedrawRequested event.
@@ -154,7 +158,7 @@ impl App {
             t = now;
             match event {
                 winit::event::Event::NewEvents(winit::event::StartCause::Init) => {
-                    let surfman = window.webrender_surfman();
+                    let surfman = window.rendering_context();
 
                     let xr_discovery = if pref!(dom.webxr.glwindow.enabled) && !opts::get().headless
                     {
@@ -185,10 +189,20 @@ impl App {
                     // Implements embedder methods, used by libservo and constellation.
                     let embedder = Box::new(EmbedderCallbacks::new(ev_waker.clone(), xr_discovery));
 
-                    let servo_data = Servo::new(embedder, window.clone(), user_agent.clone());
+                    let composite_target = if app.minibrowser.is_some() {
+                        CompositeTarget::Fbo
+                    } else {
+                        CompositeTarget::Window
+                    };
+                    let servo_data = Servo::new(
+                        embedder,
+                        window.clone(),
+                        user_agent.clone(),
+                        composite_target,
+                    );
                     let mut servo = servo_data.servo;
 
-                    servo.handle_events(vec![EmbedderEvent::NewBrowser(
+                    servo.handle_events(vec![EmbedderEvent::NewWebView(
                         initial_url.to_owned(),
                         servo_data.browser_id,
                     )]);
@@ -217,7 +231,11 @@ impl App {
                     app.servo.as_mut().unwrap().recomposite();
                 }
                 if let Some(mut minibrowser) = app.minibrowser() {
-                    minibrowser.update(window.winit_window().unwrap(), "RedrawRequested");
+                    minibrowser.update(
+                        window.winit_window().unwrap(),
+                        app.servo.as_ref().unwrap().offscreen_framebuffer_id(),
+                        "RedrawRequested",
+                    );
                     minibrowser.paint(window.winit_window().unwrap());
                 }
                 app.servo.as_mut().unwrap().present();
@@ -252,7 +270,7 @@ impl App {
                         window.winit_window().unwrap().request_redraw();
                     },
                     winit::event::Event::WindowEvent { ref event, .. } => {
-                        let response = minibrowser.context.on_event(&event);
+                        let response = minibrowser.on_event(&event);
                         if response.repaint {
                             // Request a winit redraw event, so we can recomposite, update and paint
                             // the minibrowser, and present the new frame.
@@ -281,9 +299,9 @@ impl App {
 
             // Consume and handle any events from the Minibrowser.
             if let Some(minibrowser) = app.minibrowser() {
-                let browser = &mut app.browser.borrow_mut();
+                let webviews = &mut app.webviews.borrow_mut();
                 let app_event_queue = &mut app.event_queue.borrow_mut();
-                minibrowser.queue_embedder_events_for_minibrowser_events(browser, app_event_queue);
+                minibrowser.queue_embedder_events_for_minibrowser_events(webviews, app_event_queue);
             }
 
             match app.handle_events() {
@@ -300,12 +318,13 @@ impl App {
                 } => {
                     if history_changed {
                         if let Some(mut minibrowser) = app.minibrowser() {
-                            let browser = &mut app.browser.borrow_mut();
-                            if minibrowser.update_location_in_toolbar(browser) {
+                            let webviews = &mut app.webviews.borrow_mut();
+                            if minibrowser.update_location_in_toolbar(webviews) {
                                 // Update the minibrowser immediately. While we could update by requesting a
                                 // redraw, doing so would delay the location update by two frames.
                                 minibrowser.update(
                                     window.winit_window().unwrap(),
+                                    app.servo.as_ref().unwrap().offscreen_framebuffer_id(),
                                     "update_location_in_toolbar",
                                 );
                             }
@@ -323,6 +342,7 @@ impl App {
                             if let Some(mut minibrowser) = app.minibrowser() {
                                 minibrowser.update(
                                     window.winit_window().unwrap(),
+                                    app.servo.as_ref().unwrap().offscreen_framebuffer_id(),
                                     "PumpResult::Present::Immediate",
                                 );
                                 minibrowser.paint(window.winit_window().unwrap());
@@ -404,18 +424,11 @@ impl App {
     /// towards Servo and embedder messages flow away from Servo, and also runs the compositor.
     ///
     /// As the embedder, we push embedder events through our event queues, from the App queue and
-    /// Window queues to the Browser queue, and from the Browser queue to Servo. We receive and
-    /// collect embedder messages from the various Servo components, then take them out of the
-    /// Servo interface so that the Browser can handle them.
+    /// Window queues to the WebViewManager queue, and from the WebViewManager queue to Servo. We
+    /// receive and collect embedder messages from the various Servo components, then take them out
+    /// of the Servo interface so that the WebViewManager can handle them.
     fn handle_events(&mut self) -> PumpResult {
-        let mut browser = self.browser.borrow_mut();
-
-        // FIXME:
-        // As of now, we support only one browser (self.browser)
-        // but have multiple windows (dom.webxr.glwindow). We forward
-        // the events of all the windows combined to that single
-        // browser instance. Pressing the "a" key on the glwindow
-        // will send a key event to the servo window.
+        let mut webviews = self.webviews.borrow_mut();
 
         // Take any outstanding embedder events from the App and its Windows.
         let mut embedder_events = self.get_events();
@@ -423,8 +436,8 @@ impl App {
             embedder_events.extend(window.get_events());
         }
 
-        // Catch some keyboard events, and push the rest onto the Browser event queue.
-        browser.handle_window_events(embedder_events);
+        // Catch some keyboard events, and push the rest onto the WebViewManager event queue.
+        webviews.handle_window_events(embedder_events);
 
         // Take any new embedder messages from Servo itself.
         let mut embedder_messages = self.servo.as_mut().unwrap().get_events();
@@ -433,25 +446,25 @@ impl App {
         let mut history_changed = false;
         loop {
             // Consume and handle those embedder messages.
-            let servo_event_response = browser.handle_servo_events(embedder_messages);
+            let servo_event_response = webviews.handle_servo_events(embedder_messages);
             need_present |= servo_event_response.need_present;
             history_changed |= servo_event_response.history_changed;
 
-            // Route embedder events from the Browser to the relevant Servo components,
+            // Route embedder events from the WebViewManager to the relevant Servo components,
             // receives and collects embedder messages from various Servo components,
             // and runs the compositor.
             need_resize |= self
                 .servo
                 .as_mut()
                 .unwrap()
-                .handle_events(browser.get_events());
-            if browser.shutdown_requested() {
+                .handle_events(webviews.get_events());
+            if webviews.shutdown_requested() {
                 return PumpResult::Shutdown;
             }
 
             // Take any new embedder messages from Servo itself.
             embedder_messages = self.servo.as_mut().unwrap().get_events();
-            if embedder_messages.is_empty() {
+            if embedder_messages.len() == 0 {
                 break;
             }
         }

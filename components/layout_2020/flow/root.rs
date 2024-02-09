@@ -34,7 +34,7 @@ pub struct BoxTree {
     /// There may be zero if that element has `display: none`.
     root: BlockFormattingContext,
 
-    /// https://drafts.csswg.org/css-backgrounds/#special-backgrounds
+    /// <https://drafts.csswg.org/css-backgrounds/#special-backgrounds>
     canvas_background: CanvasBackground,
 }
 
@@ -43,7 +43,7 @@ impl BoxTree {
     where
         Node: 'dom + Copy + LayoutNode<'dom> + Send + Sync,
     {
-        let boxes = construct_for_root_element(&context, root_element);
+        let boxes = construct_for_root_element(context, root_element);
 
         // Zero box for `:root { display: none }`, one for the root element otherwise.
         assert!(boxes.len() <= 1);
@@ -291,7 +291,7 @@ impl BoxTree {
         let mut root_fragments = independent_layout
             .fragments
             .into_iter()
-            .map(|fragment| ArcRefCell::new(fragment))
+            .map(ArcRefCell::new)
             .collect::<Vec<_>>();
 
         // Zero box for `:root { display: none }`, one for the root element otherwise.
@@ -338,7 +338,7 @@ impl BoxTree {
     }
 }
 
-/// https://drafts.csswg.org/css-backgrounds/#root-background
+/// <https://drafts.csswg.org/css-backgrounds/#root-background>
 #[derive(Clone, Serialize)]
 pub struct CanvasBackground {
     /// DOM node for the root element
@@ -346,7 +346,7 @@ pub struct CanvasBackground {
 
     /// The element whose style the canvas takes background properties from (see next field).
     /// This can be the root element (same as the previous field), or the HTML `<body>` element.
-    /// See https://drafts.csswg.org/css-backgrounds/#body-background
+    /// See <https://drafts.csswg.org/css-backgrounds/#body-background>
     pub from_element: OpaqueNode,
 
     /// The computed styles to take background properties from.

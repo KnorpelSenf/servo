@@ -31,13 +31,13 @@ pub struct FragmentTree {
     pub(crate) root_fragments: Vec<ArcRefCell<Fragment>>,
 
     /// The scrollable overflow rectangle for the entire tree
-    /// https://drafts.csswg.org/css-overflow/#scrollable
+    /// <https://drafts.csswg.org/css-overflow/#scrollable>
     pub(crate) scrollable_overflow: PhysicalRect<Length>,
 
     /// The containing block used in the layout of this fragment tree.
     pub(crate) initial_containing_block: PhysicalRect<Length>,
 
-    /// https://drafts.csswg.org/css-backgrounds/#special-backgrounds
+    /// <https://drafts.csswg.org/css-backgrounds/#special-backgrounds>
     #[serde(skip)]
     pub(crate) canvas_background: CanvasBackground,
 }
@@ -93,8 +93,9 @@ impl FragmentTree {
         });
     }
 
-    pub fn get_content_box_for_node(&self, requested_node: OpaqueNode) -> Rect<Au> {
+    pub fn get_content_box_for_node(&self, requested_node: OpaqueNode) -> Option<Rect<Au>> {
         let mut bounding_box = PhysicalRect::zero();
+        let mut found_any_nodes = false;
         let tag_to_find = Tag::new(requested_node);
         self.find(|fragment, _, containing_block| {
             if fragment.tag() != Some(tag_to_find) {
@@ -104,32 +105,37 @@ impl FragmentTree {
             let fragment_relative_rect = match fragment {
                 Fragment::Box(fragment) | Fragment::Float(fragment) => fragment
                     .border_rect()
-                    .to_physical(fragment.style.writing_mode, &containing_block),
+                    .to_physical(fragment.style.writing_mode, containing_block),
                 Fragment::Text(fragment) => fragment
                     .rect
-                    .to_physical(fragment.parent_style.writing_mode, &containing_block),
+                    .to_physical(fragment.parent_style.writing_mode, containing_block),
                 Fragment::AbsoluteOrFixedPositioned(_) |
                 Fragment::Image(_) |
                 Fragment::IFrame(_) |
                 Fragment::Anonymous(_) => return None,
             };
 
+            found_any_nodes = true;
             bounding_box = fragment_relative_rect
                 .translate(containing_block.origin.to_vector())
                 .union(&bounding_box);
             None::<()>
         });
 
-        Rect::new(
-            Point2D::new(
-                Au::from_f32_px(bounding_box.origin.x.px()),
-                Au::from_f32_px(bounding_box.origin.y.px()),
-            ),
-            Size2D::new(
-                Au::from_f32_px(bounding_box.size.width.px()),
-                Au::from_f32_px(bounding_box.size.height.px()),
-            ),
-        )
+        if found_any_nodes {
+            Some(Rect::new(
+                Point2D::new(
+                    Au::from_f32_px(bounding_box.origin.x.px()),
+                    Au::from_f32_px(bounding_box.origin.y.px()),
+                ),
+                Size2D::new(
+                    Au::from_f32_px(bounding_box.size.width.px()),
+                    Au::from_f32_px(bounding_box.size.height.px()),
+                ),
+            ))
+        } else {
+            None
+        }
     }
 
     pub fn get_border_dimensions_for_node(&self, requested_node: OpaqueNode) -> Rect<i32> {
@@ -156,18 +162,20 @@ impl FragmentTree {
                 return Some(Rect::zero());
             }
 
-            let padding_rect = padding_rect.to_physical(style.writing_mode, &containing_block);
             let border = style.get_border();
-            Some(Rect::new(
-                Point2D::new(
-                    border.border_left_width.to_px(),
-                    border.border_top_width.to_px(),
-                ),
-                Size2D::new(
-                    padding_rect.size.width.px() as i32,
-                    padding_rect.size.height.px() as i32,
-                ),
-            ))
+            let padding_rect = padding_rect.to_physical(style.writing_mode, containing_block);
+            Some(
+                Rect::new(
+                    Point2D::new(
+                        border.border_left_width.to_f32_px(),
+                        border.border_top_width.to_f32_px(),
+                    ),
+                    Size2D::new(padding_rect.size.width.px(), padding_rect.size.height.px()),
+                )
+                .round()
+                .to_i32()
+                .to_untyped(),
+            )
         })
         .unwrap_or_else(Rect::zero)
     }
@@ -187,7 +195,7 @@ impl FragmentTree {
         let tag_to_find = Tag::new(requested_node);
         let scroll_area = self.find(|fragment, _, containing_block| {
             if fragment.tag() == Some(tag_to_find) {
-                Some(fragment.scrolling_area(&containing_block))
+                Some(fragment.scrolling_area(containing_block))
             } else {
                 None
             }

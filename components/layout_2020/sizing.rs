@@ -2,8 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! https://drafts.csswg.org/css-sizing/
+//! <https://drafts.csswg.org/css-sizing/>
 
+use std::ops::{Add, AddAssign};
+
+use app_units::Au;
 use serde::Serialize;
 use style::logical_geometry::WritingMode;
 use style::properties::longhands::box_sizing::computed_value::T as BoxSizing;
@@ -11,24 +14,24 @@ use style::properties::ComputedValues;
 use style::values::computed::Length;
 use style::Zero;
 
-use crate::style_ext::ComputedValuesExt;
+use crate::style_ext::{Clamp, ComputedValuesExt};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct ContentSizes {
-    pub min_content: Length,
-    pub max_content: Length,
+    pub min_content: Au,
+    pub max_content: Au,
 }
 
-/// https://drafts.csswg.org/css-sizing/#intrinsic-sizes
+/// <https://drafts.csswg.org/css-sizing/#intrinsic-sizes>
 impl ContentSizes {
     pub fn zero() -> Self {
         Self {
-            min_content: Length::zero(),
-            max_content: Length::zero(),
+            min_content: Au::zero(),
+            max_content: Au::zero(),
         }
     }
 
-    pub fn map(&self, f: impl Fn(Length) -> Length) -> Self {
+    pub fn map(&self, f: impl Fn(Au) -> Au) -> Self {
         Self {
             min_content: f(self.min_content),
             max_content: f(self.max_content),
@@ -42,7 +45,11 @@ impl ContentSizes {
         }
     }
 
-    pub fn add(&self, other: &Self) -> Self {
+    pub fn max_assign(&mut self, other: Self) {
+        *self = self.max(other);
+    }
+
+    pub fn union(&self, other: &Self) -> Self {
         Self {
             min_content: self.min_content.max(other.min_content),
             max_content: self.max_content + other.max_content,
@@ -50,9 +57,26 @@ impl ContentSizes {
     }
 }
 
+impl Add for ContentSizes {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            min_content: self.min_content + rhs.min_content,
+            max_content: self.max_content + rhs.max_content,
+        }
+    }
+}
+
+impl AddAssign for ContentSizes {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self.add(rhs)
+    }
+}
+
 impl ContentSizes {
-    /// https://drafts.csswg.org/css2/visudet.html#shrink-to-fit-float
-    pub fn shrink_to_fit(&self, available_size: Length) -> Length {
+    /// <https://drafts.csswg.org/css2/visudet.html#shrink-to-fit-float>
+    pub fn shrink_to_fit(&self, available_size: Au) -> Au {
         available_size.max(self.min_content).min(self.max_content)
     }
 }
@@ -100,13 +124,15 @@ pub(crate) fn outer_inline(
         .inline
         // Percentages for 'max-width' are treated as 'none'
         .and_then(|lp| lp.to_length());
-    let clamp = |l: Length| l.clamp_between_extremums(min_inline_size, max_inline_size);
+    let clamp = |l: Au| {
+        l.clamp_between_extremums(min_inline_size.into(), max_inline_size.map(|t| t.into()))
+    };
 
     let border_box_sizes = match inline_size {
         Some(non_auto) => {
-            let clamped = clamp(non_auto);
+            let clamped = clamp(non_auto.into());
             let border_box_size = match box_sizing {
-                BoxSizing::ContentBox => clamped + pb_lengths,
+                BoxSizing::ContentBox => clamped + pb_lengths.into(),
                 BoxSizing::BorderBox => clamped,
             };
             ContentSizes {
@@ -117,11 +143,11 @@ pub(crate) fn outer_inline(
         None => get_content_size().map(|content_box_size| {
             match box_sizing {
                 // Clamp to 'min-width' and 'max-width', which are sizing the…
-                BoxSizing::ContentBox => clamp(content_box_size) + pb_lengths,
-                BoxSizing::BorderBox => clamp(content_box_size + pb_lengths),
+                BoxSizing::ContentBox => clamp(content_box_size) + pb_lengths.into(),
+                BoxSizing::BorderBox => clamp(content_box_size + pb_lengths.into()),
             }
         }),
     };
 
-    border_box_sizes.map(|s| s + m_lengths)
+    border_box_sizes.map(|s| s + m_lengths.into())
 }

@@ -31,11 +31,11 @@ cfg_if::cfg_if! {
 
         mod app;
         mod backtrace;
-        mod browser;
         mod crash_handler;
         mod egui_glue;
         mod embedder;
         mod events_loop;
+        mod geometry;
         mod headed_window;
         mod headless_window;
         mod keyutils;
@@ -44,6 +44,7 @@ cfg_if::cfg_if! {
         mod parser;
         mod prefs;
         mod resources;
+        mod webview;
         mod window_trait;
 
         pub mod platform {

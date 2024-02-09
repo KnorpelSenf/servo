@@ -346,7 +346,10 @@ mod gen {
                 asyncstack: {
                     enabled: bool,
                 },
-                baseline: {
+                baseline_interpreter: {
+                    enabled: bool,
+                },
+                baseline_jit: {
                     enabled: bool,
                     unsafe_eager_compilation: {
                         enabled: bool,
@@ -469,9 +472,11 @@ mod gen {
             },
             media: {
                 glvideo: {
+                    /// Enable hardware acceleration for video playback.
                     enabled: bool,
                 },
                 testing: {
+                    /// Enable a non-standard event handler for verifying behavior of media elements during tests.
                     enabled: bool,
                 }
             },

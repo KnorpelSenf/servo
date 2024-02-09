@@ -20,23 +20,22 @@ rand = [
 [ignore]
 # Ignored packages with duplicated versions
 packages = [
-    "ahash",
     "bitflags",
-    "cfg-if",
     "cookie",
     "futures",
     "libloading",
     "nix",
-    "num-rational",
     "redox_syscall",
-    "socket2",
+    "syn",
+    "synstructure",
     "time",
     "wasi",
     "wayland-sys",
 
-    # This dependency is for "hermit os" which Servo doesn't support.
-    # Theoretically, it's never fetched.
-    "hermit-abi",
+    # New versions of these dependencies is pulled in by GStreamer / GLib.
+    "itertools",
+    "proc-macro-crate",
+    "toml",
 
     # Duplicated by winit.
     "windows-sys",
@@ -53,14 +52,19 @@ packages = [
     "foreign-types",
     "foreign-types-shared",
     "metal",
-    "paste",
 
-    # Duplicated by Gecko crates that haven't been updated yet (style, shmem, derive_common, ...).
-    "syn",
-    "synstructure",
+    # Duplicated by indexmap.
+    "hashbrown",
 
-    # style/webxr (0.62) vs. mozjs_sys (0.66)
+    # Duplicated by style, cbindgen, clap, and GStreamer.
+    "indexmap",
+
+    # style (0.64) vs. webxr (0.66) vs. mozjs_sys (0.68).
     "bindgen",
+
+    # quickcheck (required by layout_2020 for tests) is
+    # stuck on 0.8.4 with no new releases.
+    "env_logger",
 ]
 # Files that are ignored for all tidy and lint checks.
 files = [

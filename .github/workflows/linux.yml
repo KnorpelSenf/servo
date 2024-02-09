@@ -6,10 +6,15 @@ on:
         required: false
         default: "release"
         type: string
-      wpt:
+      wpt-tests-to-run:
+        default: ""
         required: false
         type: string
-      layout:
+      wpt-sync-from-upstream:
+        required: false
+        default: false
+        type: boolean
+      wpt-layout:
         required: false
         type: string
       unit-tests:
@@ -30,12 +35,15 @@ on:
         default: "release"
         type: choice
         options: ["release", "debug", "production"]
-      wpt:
-        default: "test"
+      wpt-tests-to-run:
+        default: ""
         required: false
-        type: choice
-        options: ["test", "sync"]
-      layout:
+        type: string
+      wpt-sync-from-upstream:
+        default: false
+        required: false
+        type: boolean
+      wpt-layout:
         required: false
         type: choice
         options: ["none", "2013", "2020", "all"]
@@ -47,8 +55,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches: ["try-linux", "try-wpt", "try-wpt-2020"]
 
 env:
   RUST_BACKTRACE: 1
@@ -81,25 +87,31 @@ jobs:
       - name: Set LIBCLANG_PATH env # needed for bindgen in mozangle
         if: ${{ !inputs.upload  }} # not needed on ubuntu 20.04 used for nightly
         run: echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> $GITHUB_ENV
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
       - name: Install taplo
         uses: baptiste0928/cargo-install@v2
         with:
           crate: taplo-cli
           locked: true
+          cache-key: ${{ inputs.upload && '20.04' || '22.04' }}
       - name: Bootstrap Python
         run: python3 -m pip install --upgrade pip
       - name: Bootstrap dependencies
-        run: sudo apt update && python3 ./mach bootstrap
+        run: |
+          sudo apt update
+          python3 ./mach bootstrap
       - name: Tidy
         run: python3 ./mach test-tidy --no-progress --all
       - name: Build (${{ inputs.profile }})
         run: python3 ./mach build --${{ inputs.profile }}
       - name: Smoketest
-        run: xvfb-run python3 ./mach smoketest --${{ inputs.profile }}
+        run: xvfb-run python3 ./mach smoketest --${{ inputs.profile  }}
       - name: Script tests
         run: ./mach test-scripts
       - name: Unit tests
-        if: ${{ inputs.unit-tests || github.ref_name == 'try-linux' }}
+        if: ${{ inputs.unit-tests }}
         uses: nick-fields/retry@v2
         with:
           timeout_minutes: 20
@@ -141,42 +153,25 @@ jobs:
           path: target.tar.gz
 
   wpt-2020:
-    if: ${{ github.ref_name == 'try-wpt-2020' || inputs.layout == '2020' || inputs.layout == 'all' }}
+    if: ${{ inputs.wpt-layout == '2020' || inputs.wpt-layout == 'all' }}
     name: Linux WPT Tests 2020
     needs: ["build"]
     uses: ./.github/workflows/linux-wpt.yml
     with:
+      wpt-tests-to-run: ${{ inputs.wpt-tests-to-run }}
       profile: ${{ inputs.profile }}
-      wpt: ${{ inputs.wpt }}
-      layout: "layout-2020"
+      wpt-sync-from-upstream: ${{ inputs.wpt-sync-from-upstream }}
+      wpt-layout: "layout-2020"
     secrets: inherit
 
   wpt-2013:
-    if: ${{ github.ref_name == 'try-wpt' || inputs.layout == '2013' || inputs.layout == 'all' }}
+    if: ${{ inputs.wpt-layout == '2013' || inputs.wpt-layout == 'all' }}
     name: Linux WPT Tests 2013
     needs: ["build"]
     uses: ./.github/workflows/linux-wpt.yml
     with:
+      wpt-tests-to-run: ${{ inputs.wpt-tests-to-run }}
       profile: ${{ inputs.profile }}
-      wpt: ${{ inputs.wpt }}
-      layout: "layout-2013"
+      wpt-sync-from-upstream: ${{ inputs.wpt-sync-from-upstream }}
+      wpt-layout: "layout-2013"
     secrets: inherit
-
-  result:
-    name: Result
-    runs-on: ubuntu-latest
-    if: always()
-    # needs all build to detect cancellation
-    needs:
-      - "build"
-      - "wpt-2020"
-      - "wpt-2013"
-
-    steps:
-      - name: Mark the job as successful
-        run: exit 0
-        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-      - name: Mark the job as unsuccessful
-        run: exit 1
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-

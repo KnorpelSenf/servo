@@ -374,7 +374,7 @@ pub struct Window {
     #[ignore_malloc_size_of = "Rc is hard"]
     layout_marker: DomRefCell<Rc<Cell<bool>>>,
 
-    /// https://dom.spec.whatwg.org/#window-current-event
+    /// <https://dom.spec.whatwg.org/#window-current-event>
     current_event: DomRefCell<Option<Dom<Event>>>,
 }
 
@@ -393,6 +393,8 @@ impl Window {
 
     #[allow(unsafe_code)]
     pub fn clear_js_runtime_for_script_deallocation(&self) {
+        self.upcast::<GlobalScope>()
+            .remove_web_messaging_and_dedicated_workers_infra();
         unsafe {
             *self.js_runtime.borrow_for_script_deallocation() = None;
             self.window_proxy.set(None);
@@ -402,7 +404,7 @@ impl Window {
     }
 
     /// A convenience method for
-    /// https://html.spec.whatwg.org/multipage/#a-browsing-context-is-discarded
+    /// <https://html.spec.whatwg.org/multipage/#a-browsing-context-is-discarded>
     pub fn discard_browsing_context(&self) {
         let proxy = match self.window_proxy.get() {
             Some(proxy) => proxy,
@@ -788,13 +790,14 @@ impl WindowMethods for Window {
                     let window = this.root();
                     let document = window.Document();
                     // https://html.spec.whatwg.org/multipage/#closing-browsing-contexts
-                    // Step 1, prompt to unload.
+                    // Step 1, check if traversable is closing, was already done above.
+                    // Steps 2 and 3, prompt to unload for all inclusive descendant navigables.
+                    // TODO: We should be prompting for all inclusive descendant navigables,
+                    // but we pass false here, which suggests we are not doing that. Why?
                     if document.prompt_to_unload(false) {
-                        // Step 2, unload.
+                        // Step 4, unload.
                         document.unload(false);
-                        // Step 3, remove from the user interface
-                        let _ = window.send_to_embedder(EmbedderMsg::CloseBrowser);
-                        // Step 4, discard browsing context.
+
                         // https://html.spec.whatwg.org/multipage/#a-browsing-context-is-discarded
                         // which calls into https://html.spec.whatwg.org/multipage/#discard-a-document.
                         window.discard_browsing_context();
@@ -1591,7 +1594,7 @@ impl Window {
         current
     }
 
-    /// https://html.spec.whatwg.org/multipage/#window-post-message-steps
+    /// <https://html.spec.whatwg.org/multipage/#window-post-message-steps>
     fn post_message_impl(
         &self,
         target_origin: &USVString,
@@ -2210,7 +2213,7 @@ impl Window {
 
     /// Commence a new URL load which will either replace this window or scroll to a fragment.
     ///
-    /// https://html.spec.whatwg.org/multipage/#navigating-across-documents
+    /// <https://html.spec.whatwg.org/multipage/#navigating-across-documents>
     pub fn load_url(
         &self,
         replace: HistoryEntryReplacement,

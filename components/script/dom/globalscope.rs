@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Instant;
 use std::{mem, ptr};
 
 use content_security_policy::CspList;
@@ -54,7 +55,6 @@ use script_traits::{
     ScriptToConstellationChan, TimerEvent, TimerEventId, TimerSchedulerMsg, TimerSource,
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
-use time::{get_time, Timespec};
 use uuid::Uuid;
 use webgpu::identity::WebGPUOpResult;
 use webgpu::{ErrorScopeId, WebGPUDevice};
@@ -131,7 +131,7 @@ use crate::timers::{
 
 #[derive(JSTraceable)]
 pub struct AutoCloseWorker {
-    /// https://html.spec.whatwg.org/multipage/#dom-workerglobalscope-closing
+    /// <https://html.spec.whatwg.org/multipage/#dom-workerglobalscope-closing>
     closing: Arc<AtomicBool>,
     /// A handle to join on the worker thread.
     join_handle: Option<JoinHandle<()>>,
@@ -203,11 +203,11 @@ pub struct GlobalScope {
     /// live updates from the worker.
     devtools_wants_updates: Cell<bool>,
 
-    /// Timers used by the Console API.
-    console_timers: DomRefCell<HashMap<DOMString, u64>>,
+    /// Timers (milliseconds) used by the Console API.
+    console_timers: DomRefCell<HashMap<DOMString, Instant>>,
 
     /// module map is used when importing JavaScript modules
-    /// https://html.spec.whatwg.org/multipage/#concept-settings-object-module-map
+    /// <https://html.spec.whatwg.org/multipage/#concept-settings-object-module-map>
     #[ignore_malloc_size_of = "mozjs"]
     module_map: DomRefCell<HashMapTracedValues<ServoUrl, Rc<ModuleTree>>>,
 
@@ -257,7 +257,7 @@ pub struct GlobalScope {
     #[no_trace]
     origin: MutableOrigin,
 
-    /// https://html.spec.whatwg.org/multipage/#concept-environment-creation-url
+    /// <https://html.spec.whatwg.org/multipage/#concept-environment-creation-url>
     #[no_trace]
     creation_url: Option<ServoUrl>,
 
@@ -442,7 +442,7 @@ pub struct ManagedMessagePort {
 pub enum BroadcastChannelState {
     /// The broadcast-channel router id for this global, and a queue of managed channels.
     /// Step 9, "sort destinations"
-    /// of https://html.spec.whatwg.org/multipage/#dom-broadcastchannel-postmessage
+    /// of <https://html.spec.whatwg.org/multipage/#dom-broadcastchannel-postmessage>
     /// requires keeping track of creation order, hence the queue.
     Managed(
         #[no_trace] BroadcastChannelRouterId,
@@ -1339,7 +1339,7 @@ impl GlobalScope {
         }
     }
 
-    /// https://html.spec.whatwg.org/multipage/#ports-and-garbage-collection
+    /// <https://html.spec.whatwg.org/multipage/#ports-and-garbage-collection>
     pub fn perform_a_message_port_garbage_collection_checkpoint(&self) {
         let is_empty = if let MessagePortState::Managed(_id, message_ports) =
             &mut *self.message_port_state.borrow_mut()
@@ -1373,7 +1373,7 @@ impl GlobalScope {
 
     /// Remove broadcast-channels that are closed.
     /// TODO: Also remove them if they do not have an event-listener.
-    /// see https://github.com/servo/servo/issues/25772
+    /// see <https://github.com/servo/servo/issues/25772>
     pub fn perform_a_broadcast_channel_garbage_collection_checkpoint(&self) {
         let is_empty = if let BroadcastChannelState::Managed(router_id, ref mut channels) =
             &mut *self.broadcast_channel_state.borrow_mut()
@@ -1791,7 +1791,7 @@ impl GlobalScope {
         }
     }
 
-    /// https://w3c.github.io/FileAPI/#dfn-size
+    /// <https://w3c.github.io/FileAPI/#dfn-size>
     pub fn get_blob_size(&self, blob_id: &BlobId) -> u64 {
         let blob_state = self.blob_state.borrow();
         if let BlobState::Managed(blobs_map) = &*blob_state {
@@ -2262,7 +2262,7 @@ impl GlobalScope {
         }
         match timers.entry(label) {
             Entry::Vacant(entry) => {
-                entry.insert(timestamp_in_ms(get_time()));
+                entry.insert(Instant::now());
                 Ok(())
             },
             Entry::Occupied(_) => Err(()),
@@ -2274,7 +2274,7 @@ impl GlobalScope {
             .borrow_mut()
             .remove(label)
             .ok_or(())
-            .map(|start| timestamp_in_ms(get_time()) - start)
+            .map(|start| (Instant::now() - start).as_millis() as u64)
     }
 
     /// Get an `&IpcSender<ScriptToDevtoolsControlMsg>` to send messages
@@ -3055,7 +3055,7 @@ impl GlobalScope {
         false
     }
 
-    /// https://www.w3.org/TR/CSP/#get-csp-of-object
+    /// <https://www.w3.org/TR/CSP/#get-csp-of-object>
     pub fn get_csp_list(&self) -> Option<CspList> {
         if let Some(window) = self.downcast::<Window>() {
             return window.Document().get_csp_list().map(|c| c.clone());
@@ -3109,10 +3109,6 @@ impl GlobalScope {
     pub(crate) fn dynamic_module_list(&self) -> RefMut<DynamicModuleList> {
         self.dynamic_modules.borrow_mut()
     }
-}
-
-fn timestamp_in_ms(time: Timespec) -> u64 {
-    (time.sec * 1000 + (time.nsec / 1000000) as i64) as u64
 }
 
 /// Returns the Rust global scope from a JS global object.

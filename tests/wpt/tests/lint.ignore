@@ -234,6 +234,7 @@ SET TIMEOUT: png/apng/fcTL-dispose-previous-final.html
 SET TIMEOUT: png/apng/fcTL-dispose-previous-first.html
 SET TIMEOUT: png/apng/fcTL-dispose-previous.html
 SET TIMEOUT: png/apng/fdAT-16bit.html
+SET TIMEOUT: png/apng/fDAT-inherits-cICP.html
 SET TIMEOUT: png/apng/fdAT-1bit-PLTE-tRNS.html
 SET TIMEOUT: png/apng/fdAT-1bit-PLTE.html
 SET TIMEOUT: png/apng/fdAT-2bit-PLTE-tRNS.html
@@ -395,6 +396,7 @@ SET TIMEOUT: scheduler/tentative/current-task-signal-async-abort.any.js
 SET TIMEOUT: scheduler/tentative/current-task-signal-async-priority.any.js
 SET TIMEOUT: speculation-rules/prerender/resources/activation-start.html
 SET TIMEOUT: speculation-rules/prerender/resources/prerender-response-code.html
+SET TIMEOUT: speculation-rules/prerender/resources/prerender-while-prerender-outer.html
 SET TIMEOUT: speculation-rules/prerender/resources/deferred-promise-utils.js
 SET TIMEOUT: speculation-rules/prerender/resources/session-history-harness.js
 SET TIMEOUT: speculation-rules/prerender/resources/utils.js
@@ -743,5 +745,6 @@ HTML INVALID SYNTAX: domparsing/DOMParser-parseFromString-xml-doctype.html
 HTML INVALID SYNTAX: domparsing/DOMParser-parseFromString-xml-parsererror.html
 HTML INVALID SYNTAX: domparsing/XMLSerializer-serializeToString.html
 HTML INVALID SYNTAX: html/canvas/element/manual/unclosed-canvas-4.htm
+HTML INVALID SYNTAX: html/syntax/parsing/unclosed-svg-script.html
 HTML INVALID SYNTAX: quirks/percentage-height-calculation.html
 HTML INVALID SYNTAX: trusted-types/TrustedTypePolicyFactory-getAttributeType-namespace.html

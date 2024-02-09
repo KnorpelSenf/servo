@@ -443,6 +443,7 @@ impl DedicatedWorkerGlobalScope {
                                 TaskSourceName::DOMManipulation,
                             ))
                             .unwrap();
+                        scope.clear_js_runtime(context_for_interrupt);
                         return;
                     },
                     Ok((metadata, bytes)) => (metadata, bytes),
@@ -457,11 +458,13 @@ impl DedicatedWorkerGlobalScope {
                 }
 
                 if scope.is_closing() {
+                    scope.clear_js_runtime(context_for_interrupt);
                     return;
                 }
 
                 {
                     let _ar = AutoWorkerReset::new(&global, worker.clone());
+                    let _ac = enter_realm(&*scope);
                     scope.execute_script(DOMString::from(source));
                 }
 
@@ -646,7 +649,7 @@ unsafe extern "C" fn interrupt_callback(cx: *mut JSContext) -> bool {
 }
 
 impl DedicatedWorkerGlobalScopeMethods for DedicatedWorkerGlobalScope {
-    /// https://html.spec.whatwg.org/multipage/#dom-dedicatedworkerglobalscope-postmessage
+    /// <https://html.spec.whatwg.org/multipage/#dom-dedicatedworkerglobalscope-postmessage>
     fn PostMessage(
         &self,
         cx: SafeJSContext,
@@ -656,7 +659,7 @@ impl DedicatedWorkerGlobalScopeMethods for DedicatedWorkerGlobalScope {
         self.post_message_impl(cx, message, transfer)
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-dedicatedworkerglobalscope-postmessage
+    /// <https://html.spec.whatwg.org/multipage/#dom-dedicatedworkerglobalscope-postmessage>
     fn PostMessage_(
         &self,
         cx: SafeJSContext,
