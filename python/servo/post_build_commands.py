@@ -118,6 +118,7 @@ class PostBuildCommands(CommandBase):
                 "am start " + extra + " org.mozilla.servo/org.mozilla.servo.MainActivity",
                 "sleep 0.5",
                 "echo Servo PID: $(pidof org.mozilla.servo)",
+                "logcat --pid=$(pidof org.mozilla.servo)",
                 "exit"
             ]
             args = [self.android_adb_path(env)]
@@ -129,7 +130,7 @@ class PostBuildCommands(CommandBase):
             if usb:
                 args += ["-d"]
             shell = subprocess.Popen(args + ["shell"], stdin=subprocess.PIPE)
-            shell.communicate("\n".join(script) + "\n")
+            shell.communicate(bytes("\n".join(script) + "\n", "utf8"))
             return shell.wait()
 
         args = [bin or self.get_nightly_binary_path(nightly) or self.get_binary_path(build_type)]
@@ -265,6 +266,11 @@ class PostBuildCommands(CommandBase):
                         copytree(full_name, destination)
                     else:
                         copy2(full_name, destination)
+
+        # Documentation build errors shouldn't cause the entire build to fail. This
+        # prevents issues with dependencies from breaking our documentation build,
+        # with the downside that it hides documentation issues.
+        params.insert(0, "--keep-going")
 
         env = self.build_env()
         returncode = self.run_cargo_build_like_command("doc", params, env=env, **kwargs)

@@ -150,7 +150,7 @@ pub(crate) struct CanvasState {
     #[no_trace]
     image_cache: Arc<dyn ImageCache>,
     /// The base URL for resolving CSS image URL values.
-    /// Needed because of https://github.com/servo/servo/issues/17625
+    /// Needed because of <https://github.com/servo/servo/issues/17625>
     #[no_trace]
     base_url: ServoUrl,
     #[no_trace]
@@ -216,7 +216,14 @@ impl CanvasState {
     pub fn set_bitmap_dimensions(&self, size: Size2D<u64>) {
         self.reset_to_initial_state();
         self.ipc_renderer
-            .send(CanvasMsg::Recreate(size, self.get_canvas_id()))
+            .send(CanvasMsg::Recreate(Some(size), self.get_canvas_id()))
+            .unwrap();
+    }
+
+    pub fn reset(&self) {
+        self.reset_to_initial_state();
+        self.ipc_renderer
+            .send(CanvasMsg::Recreate(None, self.get_canvas_id()))
             .unwrap();
     }
 

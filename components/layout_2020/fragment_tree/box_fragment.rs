@@ -13,6 +13,7 @@ use style::Zero;
 
 use super::{BaseFragment, BaseFragmentInfo, CollapsedBlockMargins, Fragment};
 use crate::cell::ArcRefCell;
+use crate::formatting_contexts::Baselines;
 use crate::geom::{
     LengthOrAuto, LogicalRect, LogicalSides, PhysicalPoint, PhysicalRect, PhysicalSides,
     PhysicalSize,
@@ -29,7 +30,7 @@ pub(crate) struct BoxFragment {
 
     /// From the containing block’s start corner…?
     /// This might be broken when the containing block is in a different writing mode:
-    /// https://drafts.csswg.org/css-writing-modes/#orthogonal-flows
+    /// <https://drafts.csswg.org/css-writing-modes/#orthogonal-flows>
     pub content_rect: LogicalRect<Length>,
 
     pub padding: LogicalSides<Length>,
@@ -41,13 +42,13 @@ pub(crate) struct BoxFragment {
     /// so that the element doesn't overlap earlier floats in the same BFC.
     /// The presence of clearance prevents the top margin from collapsing with
     /// earlier margins or with the bottom margin of the parent block.
-    /// https://drafts.csswg.org/css2/#clearance
+    /// <https://drafts.csswg.org/css2/#clearance>
     pub clearance: Option<Length>,
 
-    /// When this box contains an inline formatting context, this tracks the baseline
-    /// offset of the last inflow line. This offset is used to propagate baselines to
-    /// ancestors of `display: inline-block` ancestors.
-    pub last_baseline_offset: Option<Length>,
+    /// When this [`BoxFragment`] is for content that has a baseline, this tracks
+    /// the first and last baselines of that content. This is used to propagate baselines
+    /// to things such as tables and inline formatting contexts.
+    pub baselines: Baselines,
 
     pub block_margins_collapsed_with_children: CollapsedBlockMargins,
 
@@ -73,7 +74,6 @@ impl BoxFragment {
         border: LogicalSides<Length>,
         margin: LogicalSides<Length>,
         clearance: Option<Length>,
-        last_inflow_baseline_offset: Option<Length>,
         block_margins_collapsed_with_children: CollapsedBlockMargins,
     ) -> BoxFragment {
         let position = style.get_box().position;
@@ -94,7 +94,6 @@ impl BoxFragment {
             border,
             margin,
             clearance,
-            last_inflow_baseline_offset,
             block_margins_collapsed_with_children,
             PhysicalSize::new(width_overconstrained, height_overconstrained),
         )
@@ -109,7 +108,6 @@ impl BoxFragment {
         border: LogicalSides<Length>,
         margin: LogicalSides<Length>,
         clearance: Option<Length>,
-        mut last_inflow_baseline_offset: Option<Length>,
         block_margins_collapsed_with_children: CollapsedBlockMargins,
         overconstrained: PhysicalSize<bool>,
     ) -> BoxFragment {
@@ -126,30 +124,45 @@ impl BoxFragment {
         // > value) a block-level or inline-level block container that is a scroll container
         // > always has a last baseline set, whose baselines all correspond to its block-end
         // > margin edge.
+        //
+        // This applies even if there is no baseline set, so we unconditionally set the value here
+        // and ignore anything that is set via [`Self::with_baselines`].
+        let mut baselines = Baselines::default();
         if style.establishes_scroll_container() {
-            last_inflow_baseline_offset = Some(
-                content_rect.size.block + padding.block_end + border.block_end + margin.block_end,
-            );
+            baselines.last = Some(
+                (content_rect.size.block + padding.block_end + border.block_end + margin.block_end)
+                    .into(),
+            )
         }
 
         BoxFragment {
             base: base_fragment_info.into(),
             style,
-            children: children
-                .into_iter()
-                .map(|fragment| ArcRefCell::new(fragment))
-                .collect(),
+            children: children.into_iter().map(ArcRefCell::new).collect(),
             content_rect,
             padding,
             border,
             margin,
             clearance,
-            last_baseline_offset: last_inflow_baseline_offset,
+            baselines,
             block_margins_collapsed_with_children,
             scrollable_overflow_from_children,
             overconstrained,
             resolved_sticky_insets: None,
         }
+    }
+
+    pub fn with_baselines(mut self, baselines: Baselines) -> Self {
+        // From the https://drafts.csswg.org/css-align-3/#baseline-export section on "block containers":
+        // > However, for legacy reasons if its baseline-source is auto (the initial
+        // > value) a block-level or inline-level block container that is a scroll container
+        // > always has a last baseline set, whose baselines all correspond to its block-end
+        // > margin edge.
+        if !self.style.establishes_scroll_container() {
+            self.baselines.last = baselines.last;
+        }
+        self.baselines.first = baselines.first;
+        self
     }
 
     pub fn scrollable_overflow(
@@ -221,7 +234,7 @@ impl BoxFragment {
 
         // https://www.w3.org/TR/css-overflow-3/#scrollable
         // Only include the scrollable overflow of a child box if it has overflow: visible.
-        let scrollable_overflow = self.scrollable_overflow(&containing_block);
+        let scrollable_overflow = self.scrollable_overflow(containing_block);
         let bottom_right = PhysicalPoint::new(
             overflow.max_x().max(scrollable_overflow.max_x()),
             overflow.max_y().max(scrollable_overflow.max_y()),
@@ -254,7 +267,7 @@ impl BoxFragment {
         let (cb_width, cb_height) = (containing_block.width(), containing_block.height());
         let content_rect = self
             .content_rect
-            .to_physical(self.style.writing_mode, &containing_block);
+            .to_physical(self.style.writing_mode, containing_block);
 
         if let Some(resolved_sticky_insets) = self.resolved_sticky_insets {
             return resolved_sticky_insets;

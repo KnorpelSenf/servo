@@ -4,7 +4,8 @@ on:
   workflow_call:
     inputs:
       profile:
-        required: true
+        required: false
+        default: "release"
         type: string
       unit-tests:
         required: false
@@ -46,7 +47,7 @@ env:
 jobs:
   build:
     name: Windows Build
-    runs-on: windows-2019
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v3
         if: github.event_name != 'pull_request_target'
@@ -70,11 +71,10 @@ jobs:
         run: |
           choco install wixtoolset
           echo "C:\\Program Files (x86)\\WiX Toolset v3.11\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
       - name: Bootstrap
-        env:
-          # We need to override the rustc set in cargo/config.toml, because at
-          # this point crown is not installed yet.
-          RUSTC: "rustc"
         run: |
           python -m pip install --upgrade pip
           python mach fetch
@@ -121,20 +121,3 @@ jobs:
           S3_UPLOAD_CREDENTIALS: ${{ secrets.S3_UPLOAD_CREDENTIALS }}
           NIGHTLY_REPO_TOKEN: ${{ secrets.NIGHTLY_REPO_TOKEN }}
           NIGHTLY_REPO: ${{ github.repository_owner }}/servo-nightly-builds
-
-  result:
-    name: Result
-    runs-on: ubuntu-latest
-    if: always()
-    # needs all build to detect cancellation
-    needs:
-      - "build"
-
-    steps:
-      - name: Mark the job as successful
-        run: exit 0
-        if: ${{ !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
-      - name: Mark the job as unsuccessful
-        run: exit 1
-        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
-

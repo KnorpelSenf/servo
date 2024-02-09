@@ -7,6 +7,8 @@ use std::convert::{TryFrom, TryInto};
 
 use log::warn;
 use script_layout_interface::wrapper_traits::ThreadSafeLayoutNode;
+use servo_arc::Arc;
+use style::properties::ComputedValues;
 use style::selector_parser::PseudoElement;
 use style::str::char_is_whitespace;
 use style::values::specified::TextDecorationLine;
@@ -20,13 +22,14 @@ use crate::formatting_contexts::{
     IndependentFormattingContext, NonReplacedFormattingContext,
     NonReplacedFormattingContextContents,
 };
+use crate::fragment_tree::{BaseFragmentInfo, FragmentFlags, Tag};
 use crate::style_ext::{DisplayGeneratingBox, DisplayLayoutInternal};
 
 /// A reference to a slot and its coordinates in the table
 #[derive(Clone, Copy, Debug)]
-struct ResolvedSlotAndLocation<'a> {
-    cell: &'a TableSlotCell,
-    coords: TableSlotCoordinates,
+pub(super) struct ResolvedSlotAndLocation<'a> {
+    pub cell: &'a TableSlotCell,
+    pub coords: TableSlotCoordinates,
 }
 
 impl<'a> ResolvedSlotAndLocation<'a> {
@@ -114,12 +117,15 @@ impl Table {
 
     /// Push a new slot into the last row of this table.
     fn push_new_slot_to_last_row(&mut self, slot: TableSlot) {
-        self.slots.last_mut().expect("Should have rows").push(slot)
-    }
+        let last_row = match self.slots.last_mut() {
+            Some(row) => row,
+            None => {
+                unreachable!("Should have some rows before calling `push_new_slot_to_last_row`")
+            },
+        };
 
-    /// Convenience method for get() that returns a SlotAndLocation
-    fn get_slot<'a>(&'a self, coords: TableSlotCoordinates) -> Option<&'a TableSlot> {
-        self.slots.get(coords.y)?.get(coords.x)
+        self.size.width = self.size.width.max(last_row.len() + 1);
+        last_row.push(slot);
     }
 
     /// Find [`ResolvedSlotAndLocation`] of all the slots that cover the slot at the given
@@ -127,20 +133,16 @@ impl Table {
     /// the target and returns a [`ResolvedSlotAndLocation`] for each of them. If there is
     /// no slot at the given coordinates or that slot is an empty space, an empty vector
     /// is returned.
-    fn resolve_slot_at<'a>(
-        &'a self,
+    pub(super) fn resolve_slot_at(
+        &self,
         coords: TableSlotCoordinates,
-    ) -> Vec<ResolvedSlotAndLocation<'a>> {
+    ) -> Vec<ResolvedSlotAndLocation<'_>> {
         let slot = self.get_slot(coords);
         match slot {
-            Some(TableSlot::Cell(cell)) => vec![ResolvedSlotAndLocation {
-                cell: &cell,
-                coords,
-            }],
+            Some(TableSlot::Cell(cell)) => vec![ResolvedSlotAndLocation { cell, coords }],
             Some(TableSlot::Spanned(ref offsets)) => offsets
                 .iter()
-                .map(|offset| self.resolve_slot_at(coords - *offset))
-                .flatten()
+                .flat_map(|offset| self.resolve_slot_at(coords - *offset))
                 .collect(),
             Some(TableSlot::Empty) | None => {
                 warn!("Tried to resolve an empty or nonexistant slot!");
@@ -164,12 +166,12 @@ impl Table {
 
         let coords_of_slots_that_cover_target: Vec<_> = slots_covering_slot_above
             .into_iter()
-            .filter(|ref slot| slot.covers_cell_at(target_coords))
+            .filter(|slot| slot.covers_cell_at(target_coords))
             .map(|slot| target_coords - slot.coords)
             .collect();
 
         if coords_of_slots_that_cover_target.is_empty() {
-            return None;
+            None
         } else {
             Some(TableSlot::Spanned(coords_of_slots_that_cover_target))
         }
@@ -191,7 +193,6 @@ impl TableSlot {
     }
 }
 
-#[derive(Default)]
 pub struct TableBuilder {
     /// The table that we are building.
     table: Table,
@@ -209,7 +210,22 @@ pub struct TableBuilder {
 }
 
 impl TableBuilder {
-    pub fn finish(self) -> Table {
+    pub(super) fn new(style: Arc<ComputedValues>) -> Self {
+        Self {
+            table: Table::new(style),
+            incoming_rowspans: Vec::new(),
+        }
+    }
+
+    pub fn new_for_tests() -> Self {
+        Self::new(ComputedValues::initial_values().to_arc())
+    }
+
+    pub fn finish(mut self) -> Table {
+        // Make sure that every row has the same number of cells.
+        for row in self.table.slots.iter_mut() {
+            row.resize_with(self.table.size.width, || TableSlot::Empty);
+        }
         self.table
     }
 
@@ -225,8 +241,9 @@ impl TableBuilder {
         TableSlotCoordinates::new(self.current_x(), self.current_y())
     }
 
-    pub fn start_row<'builder>(&'builder mut self) {
+    pub fn start_row(&mut self) {
         self.table.slots.push(Vec::new());
+        self.table.size.height += 1;
         self.create_slots_for_cells_above_with_rowspan(true);
     }
 
@@ -282,7 +299,7 @@ impl TableBuilder {
         }
     }
 
-    /// https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows
+    /// <https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows>
     /// Push a single cell onto the slot map, handling any colspans it may have, and
     /// setting up the outgoing rowspans.
     pub fn add_cell(&mut self, cell: TableSlotCell) {
@@ -385,7 +402,7 @@ where
             context,
             info,
             propagated_text_decoration_line,
-            builder: Default::default(),
+            builder: TableBuilder::new(info.style.clone()),
             current_anonymous_row_content: Vec::new(),
         }
     }
@@ -400,7 +417,7 @@ where
             return;
         }
 
-        let row_content = std::mem::replace(&mut self.current_anonymous_row_content, Vec::new());
+        let row_content = std::mem::take(&mut self.current_anonymous_row_content);
         let context = self.context;
         let anonymous_style = self
             .context
@@ -447,7 +464,7 @@ where
             .push(AnonymousTableContent::Text(info.clone(), text));
     }
 
-    /// https://html.spec.whatwg.org/multipage/#forming-a-table
+    /// <https://html.spec.whatwg.org/multipage/#forming-a-table>
     fn handle_element(
         &mut self,
         info: &NodeAndStyleInfo<Node>,
@@ -592,12 +609,22 @@ where
             }
         }
 
+        let tag = Tag::new_pseudo(
+            self.info.node.opaque(),
+            Some(PseudoElement::ServoAnonymousTableCell),
+        );
+        let base_fragment_info = BaseFragmentInfo {
+            tag,
+            flags: FragmentFlags::empty(),
+        };
+
         let block_container = builder.finish();
         self.table_traversal.builder.add_cell(TableSlotCell {
             contents: BlockFormattingContext::from_block_container(block_container),
             colspan: 1,
             rowspan: 1,
-            id: 0, // This is just an id used for testing purposes.
+            style: anonymous_info.style,
+            base_fragment_info,
         });
     }
 }
@@ -615,7 +642,7 @@ where
             .push(AnonymousTableContent::Text(info.clone(), text));
     }
 
-    /// https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows
+    /// <https://html.spec.whatwg.org/multipage/#algorithm-for-processing-rows>
     fn handle_element(
         &mut self,
         info: &NodeAndStyleInfo<Node>,
@@ -648,7 +675,7 @@ where
                             )
                         },
                         Err(_replaced) => {
-                            panic!("We don't handle this yet.");
+                            unreachable!("Replaced should not have a LayoutInternal display type.");
                         },
                     };
 
@@ -657,7 +684,8 @@ where
                         contents,
                         colspan,
                         rowspan,
-                        id: 0, // This is just an id used for testing purposes.
+                        style: info.style.clone(),
+                        base_fragment_info: info.into(),
                     });
 
                     // We are doing this until we have actually set a Box for this `BoxSlot`.

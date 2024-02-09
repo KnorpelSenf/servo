@@ -13,24 +13,22 @@ import re
 import sys
 import os
 import os.path as path
-import copy
-from collections import OrderedDict
-import time
 import shutil
 import subprocess
+import textwrap
 
 import wpt
 import wpt.manifestupdate
 import wpt.run
 import wpt.update
 
-from mach.registrar import Registrar
 from mach.decorators import (
     CommandArgument,
     CommandProvider,
     Command,
 )
 
+import servo.try_parser
 import tidy
 
 from servo.command_base import BuildType, CommandBase, call, check_call
@@ -40,18 +38,6 @@ SCRIPT_PATH = os.path.split(__file__)[0]
 PROJECT_TOPLEVEL_PATH = os.path.abspath(os.path.join(SCRIPT_PATH, "..", ".."))
 WEB_PLATFORM_TESTS_PATH = os.path.join("tests", "wpt", "tests")
 SERVO_TESTS_PATH = os.path.join("tests", "wpt", "mozilla", "tests")
-
-TEST_SUITES = OrderedDict([
-    ("wpt", {"kwargs": {"release": False},
-             "paths": [path.abspath(WEB_PLATFORM_TESTS_PATH),
-                       path.abspath(SERVO_TESTS_PATH)],
-             "include_arg": "include"}),
-    ("unit", {"kwargs": {},
-              "paths": [path.abspath(path.join("tests", "unit"))],
-              "include_arg": "test_name"}),
-])
-
-TEST_SUITES_BY_PREFIX = {path: k for k, v in TEST_SUITES.items() if "paths" in v for path in v["paths"]}
 
 
 def format_toml_files_with_taplo(check_only: bool = True) -> int:
@@ -75,72 +61,6 @@ class MachCommands(CommandBase):
         CommandBase.__init__(self, context)
         if not hasattr(self.context, "built_tests"):
             self.context.built_tests = False
-
-    @Command('test',
-             description='Run specified Servo tests',
-             category='testing')
-    @CommandArgument('params', default=None, nargs="...",
-                     help="Optionally select test based on "
-                          "test file directory")
-    @CommandArgument('--release', default=False, action="store_true",
-                     help="Run with a release build of servo")
-    @CommandArgument('--all', default=False, action="store_true", dest="all_suites",
-                     help="Run all test suites")
-    def test(self, params, release=False, all_suites=False):
-        suites = copy.deepcopy(TEST_SUITES)
-        suites["wpt"]["kwargs"] = {"release": release}
-        suites["unit"]["kwargs"] = {}
-
-        selected_suites = OrderedDict()
-
-        if params is None:
-            if all_suites:
-                params = suites.keys()
-            else:
-                print("Specify a test path or suite name, or pass --all to run all test suites.\n\nAvailable suites:")
-                for s in suites:
-                    print("    %s" % s)
-                return 1
-
-        for arg in params:
-            found = False
-            if arg in suites and arg not in selected_suites:
-                selected_suites[arg] = []
-                found = True
-            else:
-                suite = self.suite_for_path(arg)
-                if suite is not None:
-                    if suite not in selected_suites:
-                        selected_suites[suite] = []
-                    selected_suites[suite].append(arg)
-                    found = True
-                    break
-
-            if not found:
-                print("%s is not a valid test path or suite name" % arg)
-                return 1
-
-        test_start = time.time()
-        for suite, tests in selected_suites.items():
-            props = suites[suite]
-            kwargs = props.get("kwargs", {})
-            if tests:
-                kwargs[props["include_arg"]] = tests
-
-            Registrar.dispatch("test-%s" % suite, context=self.context, **kwargs)
-
-        elapsed = time.time() - test_start
-
-        print("Tests completed in %0.2fs" % elapsed)
-
-    # Helper to determine which test suite owns the path
-    def suite_for_path(self, path_arg):
-        if os.path.exists(path.abspath(path_arg)):
-            abs_path = path.abspath(path_arg)
-            for prefix, suite in TEST_SUITES_BY_PREFIX.items():
-                if abs_path.startswith(prefix):
-                    return suite
-        return None
 
     @Command('test-perf',
              description='Run the page load performance test',
@@ -220,6 +140,7 @@ class MachCommands(CommandBase):
             "servo_config",
             "servo_remutex",
             "crown",
+            "constellation",
         ]
         if not packages:
             packages = set(os.listdir(path.join(self.context.topdir, "tests", "unit"))) - set(['.DS_Store'])
@@ -299,7 +220,7 @@ class MachCommands(CommandBase):
         else:
             print("\r ✅ test-tidy reported no errors.")
 
-        tidy_failed
+        return tidy_failed
 
     @Command('test-scripts',
              description='Run tests for all build and support scripts.',
@@ -324,6 +245,10 @@ class MachCommands(CommandBase):
 
         print("Running tidy tests...")
         passed = tidy.run_tests() and passed
+
+        import python.servo.try_parser as try_parser
+        print("Running try_parser tests...")
+        passed = try_parser.run_tests() and passed
 
         print("Running WPT tests...")
         passed = wpt.run_tests() and passed
@@ -824,3 +749,51 @@ tests/wpt/mozilla/tests for Servo-only tests""" % reference_path)
         # of panics won't cause timeouts on CI.
         return self.context.commands.dispatch('run', self.context, build_type=build_type,
                                               params=params + ['-f', 'tests/html/close-on-load.html'])
+
+    @Command('try', description='Runs try jobs by force pushing to try branch', category='testing')
+    @CommandArgument('--remote', '-r', default="origin", help='A git remote to run the try job on')
+    @CommandArgument('try_strings', default=["full"], nargs='...',
+                     help="A list of try strings specifying what kind of job to run.")
+    def try_command(self, remote: str, try_strings: list[str]):
+        remote_url = subprocess.check_output(["git", "config", "--get", f"remote.{remote}.url"]).decode().strip()
+        if "github.com" not in remote_url:
+            print(f"The remote provided ({remote_url}) isn't a GitHub remote.")
+            return 1
+
+        try_string = " ".join(try_strings)
+        config = servo.try_parser.Config(try_string)
+        print(f"Trying on {remote} ({remote_url}) with following configuration:")
+        print()
+        print(textwrap.indent(config.to_json(indent=2), prefix="  "))
+        print()
+
+        # The commit message is composed of both the last commit message and the try string.
+        commit_message = subprocess.check_output(["git", "show", "-s", "--format=%s"]).decode().strip()
+        commit_message = f"{commit_message} ({try_string})"
+
+        result = call(["git", "commit", "--quiet", "--allow-empty", "-m", commit_message, "-m", f"{config.to_json()}"])
+        if result != 0:
+            return result
+
+        # From here on out, we need to always clean up the commit we added to the branch.
+        try:
+            result = call(["git", "push", "--quiet", remote, "--force", "HEAD:try"])
+            if result != 0:
+                return result
+
+            # TODO: This is a pretty naive approach to turning a GitHub remote URL (either SSH or HTTPS)
+            # into a URL to the Actions page. It might be better to create this action with the `gh`
+            # tool and get the real URL.
+            actions_url = remote_url.replace(".git", "/actions")
+            if not actions_url.startswith("https"):
+                actions_url = actions_url.replace(':', '/')
+                actions_url = actions_url.replace("git@", "")
+                actions_url = f"https://{actions_url}"
+            print(f"Actions available at: {actions_url}")
+
+        finally:
+            # Remove the last commit which only contains the try configuration.
+            result = call(["git", "reset", "--quiet", "--soft", "HEAD~1"])
+            if result != 0:
+                print("Could not clean up try commit. Sorry! Please try to reset to the previous commit.")
+            return result

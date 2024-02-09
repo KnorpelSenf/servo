@@ -6,9 +6,10 @@ use std::cmp::min;
 
 use dom_struct::dom_struct;
 use js::rust::{CustomAutoRooterGuard, HandleObject};
-use js::typedarray::Float32Array;
+use js::typedarray::{Float32, Float32Array};
 use servo_media::audio::buffer_source_node::AudioBuffer as ServoMediaAudioBuffer;
 
+use super::bindings::typedarrays::HeapTypedArray;
 use crate::dom::audionode::MAX_CHANNEL_COUNT;
 use crate::dom::bindings::cell::{DomRefCell, Ref};
 use crate::dom::bindings::codegen::Bindings::AudioBufferBinding::{
@@ -18,7 +19,6 @@ use crate::dom::bindings::error::{Error, Fallible};
 use crate::dom::bindings::num::Finite;
 use crate::dom::bindings::reflector::{reflect_dom_object_with_proto, Reflector};
 use crate::dom::bindings::root::DomRoot;
-use crate::dom::bindings::typedarrays::HeapFloat32Array;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::window::Window;
 use crate::realms::enter_realm;
@@ -34,7 +34,7 @@ pub const MAX_SAMPLE_RATE: f32 = 192000.;
 ///
 /// js_channels buffers are (re)attached right before calling GetChannelData
 /// and remain attached until its contents are needed by some other API
-/// implementation. Follow https://webaudio.github.io/web-audio-api/#acquire-the-content
+/// implementation. Follow <https://webaudio.github.io/web-audio-api/#acquire-the-content>
 /// to know in which situations js_channels buffers must be detached.
 ///
 #[dom_struct]
@@ -42,19 +42,19 @@ pub struct AudioBuffer {
     reflector_: Reflector,
     /// Float32Arrays returned by calls to GetChannelData.
     #[ignore_malloc_size_of = "mozjs"]
-    js_channels: DomRefCell<Vec<HeapFloat32Array>>,
+    js_channels: DomRefCell<Vec<HeapTypedArray<Float32>>>,
     /// Aggregates the data from js_channels.
     /// This is Some<T> iff the buffers in js_channels are detached.
     #[ignore_malloc_size_of = "servo_media"]
     #[no_trace]
     shared_channels: DomRefCell<Option<ServoMediaAudioBuffer>>,
-    /// https://webaudio.github.io/web-audio-api/#dom-audiobuffer-samplerate
+    /// <https://webaudio.github.io/web-audio-api/#dom-audiobuffer-samplerate>
     sample_rate: f32,
-    /// https://webaudio.github.io/web-audio-api/#dom-audiobuffer-length
+    /// <https://webaudio.github.io/web-audio-api/#dom-audiobuffer-length>
     length: u32,
-    /// https://webaudio.github.io/web-audio-api/#dom-audiobuffer-duration
+    /// <https://webaudio.github.io/web-audio-api/#dom-audiobuffer-duration>
     duration: f64,
-    /// https://webaudio.github.io/web-audio-api/#dom-audiobuffer-numberofchannels
+    /// <https://webaudio.github.io/web-audio-api/#dom-audiobuffer-numberofchannels>
     number_of_channels: u32,
 }
 
@@ -63,7 +63,7 @@ impl AudioBuffer {
     #[allow(unsafe_code)]
     pub fn new_inherited(number_of_channels: u32, length: u32, sample_rate: f32) -> AudioBuffer {
         let vec = (0..number_of_channels)
-            .map(|_| HeapFloat32Array::default())
+            .map(|_| HeapTypedArray::default())
             .collect();
         AudioBuffer {
             reflector_: Reflector::new(),
@@ -262,7 +262,7 @@ impl AudioBufferMethods for AudioBuffer {
         let cx = GlobalScope::get_cx();
         let channel_number = channel_number as usize;
         let offset = start_in_channel as usize;
-        let mut dest = Vec::with_capacity(destination.len());
+        let mut dest = vec![0.0_f32; bytes_to_copy];
 
         // We either copy form js_channels or shared_channels.
         let js_channel = &self.js_channels.borrow()[channel_number];

@@ -12,7 +12,11 @@ use crate::cell::ArcRefCell;
 use crate::context::LayoutContext;
 use crate::dom::{BoxSlot, LayoutBox, NodeExt};
 use crate::dom_traversal::{Contents, NodeAndStyleInfo, NonReplacedContents, TraversalHandler};
-use crate::formatting_contexts::IndependentFormattingContext;
+use crate::flow::BlockFormattingContext;
+use crate::formatting_contexts::{
+    IndependentFormattingContext, NonReplacedFormattingContext,
+    NonReplacedFormattingContextContents,
+};
 use crate::positioned::AbsolutelyPositionedBox;
 use crate::style_ext::DisplayGeneratingBox;
 
@@ -38,7 +42,7 @@ impl FlexContainer {
     }
 }
 
-/// https://drafts.csswg.org/css-flexbox/#flex-items
+/// <https://drafts.csswg.org/css-flexbox/#flex-items>
 struct FlexContainerBuilder<'a, 'dom, Node> {
     context: &'a LayoutContext<'a>,
     info: &'a NodeAndStyleInfo<Node>,
@@ -98,7 +102,7 @@ where
     }
 }
 
-/// https://drafts.csswg.org/css-text/#white-space
+/// <https://drafts.csswg.org/css-text/#white-space>
 fn is_only_document_white_space<Node>(run: &TextRun<'_, Node>) -> bool {
     // FIXME: is this the right definition? See
     // https://github.com/w3c/csswg-drafts/issues/5146
@@ -143,20 +147,29 @@ where
         let mut children = std::mem::take(&mut self.jobs)
             .into_par_iter()
             .map(|job| match job {
-                FlexLevelJob::TextRuns(runs) => ArcRefCell::new(FlexLevelBox::FlexItem(
-                    IndependentFormattingContext::construct_for_text_runs(
-                        &self
-                            .info
-                            .new_replacing_style(anonymous_style.clone().unwrap()),
-                        runs.into_iter().map(|run| crate::flow::inline::TextRun {
-                            base_fragment_info: (&run.info).into(),
-                            text: run.text.into(),
-                            parent_style: run.info.style,
-                            has_uncollapsible_content: false,
-                        }),
+                FlexLevelJob::TextRuns(runs) => ArcRefCell::new(FlexLevelBox::FlexItem({
+                    let runs = runs.into_iter().map(|run| crate::flow::text_run::TextRun {
+                        base_fragment_info: (&run.info).into(),
+                        text: run.text.into(),
+                        parent_style: run.info.style,
+                        has_uncollapsible_content: false,
+                        shaped_text: None,
+                    });
+                    let bfc = BlockFormattingContext::construct_for_text_runs(
+                        runs,
+                        self.context,
                         self.text_decoration_line,
-                    ),
-                )),
+                    );
+                    let info = &self
+                        .info
+                        .new_replacing_style(anonymous_style.clone().unwrap());
+                    IndependentFormattingContext::NonReplaced(NonReplacedFormattingContext {
+                        base_fragment_info: info.into(),
+                        style: info.style.clone(),
+                        content_sizes: None,
+                        contents: NonReplacedFormattingContextContents::Flow(bfc),
+                    })
+                })),
                 FlexLevelJob::Element {
                     info,
                     display,

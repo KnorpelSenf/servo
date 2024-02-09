@@ -6,6 +6,7 @@ use std::cell::Cell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use std::{f64, mem};
 
 use dom_struct::dom_struct;
@@ -33,7 +34,6 @@ use servo_media::player::video::{VideoFrame, VideoFrameRenderer};
 use servo_media::player::{PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, StreamType};
 use servo_media::{ClientContextId, ServoMedia, SupportsMediaType};
 use servo_url::ServoUrl;
-use time::{self, Duration, Timespec};
 use webrender_api::{
     ExternalImageData, ExternalImageId, ExternalImageType, ImageBufferKind, ImageData,
     ImageDescriptor, ImageDescriptorFlags, ImageFormat, ImageKey,
@@ -346,19 +346,19 @@ pub struct HTMLMediaElement {
     #[ignore_malloc_size_of = "Arc"]
     #[no_trace]
     audio_renderer: DomRefCell<Option<Arc<Mutex<dyn AudioRenderer>>>>,
-    /// https://html.spec.whatwg.org/multipage/#show-poster-flag
+    /// <https://html.spec.whatwg.org/multipage/#show-poster-flag>
     show_poster: Cell<bool>,
-    /// https://html.spec.whatwg.org/multipage/#dom-media-duration
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-duration>
     duration: Cell<f64>,
-    /// https://html.spec.whatwg.org/multipage/#official-playback-position
+    /// <https://html.spec.whatwg.org/multipage/#official-playback-position>
     playback_position: Cell<f64>,
-    /// https://html.spec.whatwg.org/multipage/#default-playback-start-position
+    /// <https://html.spec.whatwg.org/multipage/#default-playback-start-position>
     default_playback_start_position: Cell<f64>,
-    /// https://html.spec.whatwg.org/multipage/#dom-media-volume
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-volume>
     volume: Cell<f64>,
-    /// https://html.spec.whatwg.org/multipage/#dom-media-seeking
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-seeking>
     seeking: Cell<bool>,
-    /// https://html.spec.whatwg.org/multipage/#dom-media-muted
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-muted>
     muted: Cell<bool>,
     /// URL of the media resource, if any.
     #[no_trace]
@@ -367,19 +367,18 @@ pub struct HTMLMediaElement {
     /// is a blob.
     #[no_trace]
     blob_url: DomRefCell<Option<ServoUrl>>,
-    /// https://html.spec.whatwg.org/multipage/#dom-media-played
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-played>
     #[ignore_malloc_size_of = "Rc"]
     played: DomRefCell<TimeRangesContainer>,
     // https://html.spec.whatwg.org/multipage/#dom-media-audiotracks
     audio_tracks_list: MutNullableDom<AudioTrackList>,
     // https://html.spec.whatwg.org/multipage/#dom-media-videotracks
     video_tracks_list: MutNullableDom<VideoTrackList>,
-    /// https://html.spec.whatwg.org/multipage/#dom-media-texttracks
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-texttracks>
     text_tracks_list: MutNullableDom<TextTrackList>,
     /// Time of last timeupdate notification.
-    #[ignore_malloc_size_of = "Defined in time"]
-    #[no_trace]
-    next_timeupdate_event: Cell<Timespec>,
+    #[ignore_malloc_size_of = "Defined in std::time"]
+    next_timeupdate_event: Cell<Instant>,
     /// Latest fetch request context.
     current_fetch_context: DomRefCell<Option<HTMLMediaElementFetchContext>>,
     /// Player Id reported the player thread
@@ -452,7 +451,7 @@ impl HTMLMediaElement {
             audio_tracks_list: Default::default(),
             video_tracks_list: Default::default(),
             text_tracks_list: Default::default(),
-            next_timeupdate_event: Cell::new(time::get_time() + Duration::milliseconds(250)),
+            next_timeupdate_event: Cell::new(Instant::now() + Duration::from_millis(250)),
             current_fetch_context: DomRefCell::new(None),
             id: Cell::new(0),
             media_controls_id: DomRefCell::new(None),
@@ -499,17 +498,17 @@ impl HTMLMediaElement {
         }
     }
 
-    /// https://html.spec.whatwg.org/multipage/#time-marches-on
+    /// <https://html.spec.whatwg.org/multipage/#time-marches-on>
     fn time_marches_on(&self) {
         // Step 6.
-        if time::get_time() > self.next_timeupdate_event.get() {
+        if Instant::now() > self.next_timeupdate_event.get() {
             let window = window_from_node(self);
             window
                 .task_manager()
                 .media_element_task_source()
                 .queue_simple_event(self.upcast(), atom!("timeupdate"), &window);
             self.next_timeupdate_event
-                .set(time::get_time() + Duration::milliseconds(350));
+                .set(Instant::now() + Duration::from_millis(350));
         }
     }
 
@@ -1317,7 +1316,7 @@ impl HTMLMediaElement {
         task_source.queue_simple_event(self.upcast(), atom!("seeked"), &window);
     }
 
-    /// https://html.spec.whatwg.org/multipage/#poster-frame
+    /// <https://html.spec.whatwg.org/multipage/#poster-frame>
     pub fn process_poster_image_loaded(&self, image: Arc<Image>) {
         if !self.show_poster.get() {
             return;
@@ -2231,12 +2230,12 @@ impl HTMLMediaElementMethods for HTMLMediaElement {
         self.paused.get()
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-media-defaultplaybackrate
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-defaultplaybackrate>
     fn GetDefaultPlaybackRate(&self) -> Fallible<Finite<f64>> {
         Ok(Finite::wrap(self.defaultPlaybackRate.get()))
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-media-defaultplaybackrate
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-defaultplaybackrate>
     fn SetDefaultPlaybackRate(&self, value: Finite<f64>) -> ErrorResult {
         let min_allowed = -64.0;
         let max_allowed = 64.0;
@@ -2252,12 +2251,12 @@ impl HTMLMediaElementMethods for HTMLMediaElement {
         Ok(())
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-media-playbackrate
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-playbackrate>
     fn GetPlaybackRate(&self) -> Fallible<Finite<f64>> {
         Ok(Finite::wrap(self.playbackRate.get()))
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-media-playbackrate
+    /// <https://html.spec.whatwg.org/multipage/#dom-media-playbackrate>
     fn SetPlaybackRate(&self, value: Finite<f64>) -> ErrorResult {
         let min_allowed = -64.0;
         let max_allowed = 64.0;
@@ -2602,7 +2601,7 @@ struct HTMLMediaElementFetchListener {
     /// The generation of the media element when this fetch started.
     generation_id: u32,
     /// Time of last progress notification.
-    next_progress_event: Timespec,
+    next_progress_event: Instant,
     /// Timing data for this resource.
     resource_timing: ResourceFetchTiming,
     /// Url for the resource.
@@ -2751,13 +2750,13 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
 
         // https://html.spec.whatwg.org/multipage/#concept-media-load-resource step 4,
         // => "If mode is remote" step 2
-        if time::get_time() > self.next_progress_event {
+        if Instant::now() > self.next_progress_event {
             let window = window_from_node(&*elem);
             window
                 .task_manager()
                 .media_element_task_source()
                 .queue_simple_event(elem.upcast(), atom!("progress"), &window);
-            self.next_progress_event = time::get_time() + Duration::milliseconds(350);
+            self.next_progress_event = Instant::now() + Duration::from_millis(350);
         }
     }
 
@@ -2886,7 +2885,7 @@ impl HTMLMediaElementFetchListener {
             elem: Trusted::new(elem),
             metadata: None,
             generation_id: elem.generation_id.get(),
-            next_progress_event: time::get_time() + Duration::milliseconds(350),
+            next_progress_event: Instant::now() + Duration::from_millis(350),
             resource_timing: ResourceFetchTiming::new(ResourceTimingType::Resource),
             url,
             expected_content_length: None,

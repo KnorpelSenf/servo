@@ -1,6 +1,9 @@
 # This provides a shell with all the necesarry packages required to run mach and build servo
 # NOTE: This does not work offline or for nix-build
 
+{
+  buildAndroid ? false
+}:
 with import (builtins.fetchTarball {
   url = "https://github.com/NixOS/nixpkgs/archive/46ae0210ce163b3cba6c7da08840c1d63de9c701.tar.gz";
 }) {
@@ -10,6 +13,10 @@ with import (builtins.fetchTarball {
       url = "https://github.com/oxalica/rust-overlay/archive/a0df72e106322b67e9c6e591fe870380bd0da0d5.tar.gz";
     }))
   ];
+  config = {
+    android_sdk.accept_license = buildAndroid;
+    allowUnfree = buildAndroid;
+  };
 };
 let
     rustToolchain = rust-bin.fromRustupToolchainFile ../rust-toolchain.toml;
@@ -27,8 +34,33 @@ let
     # - glibc 2.38 (#31054)
     llvmPackages = llvmPackages_14;
     stdenv = llvmPackages.stdenv;
+
+    buildToolsVersion = "33.0.2";
+    androidComposition = androidenv.composeAndroidPackages {
+      buildToolsVersions = [ buildToolsVersion ];
+      includeEmulator = true;
+      platformVersions = [ "33" ];
+      includeSources = false;
+      includeSystemImages = true;
+      systemImageTypes = [ "google_apis" ];
+      abiVersions = [ "x86" "armeabi-v7a" ];
+      includeNDK = true;
+      ndkVersion = "25.2.9519653";
+      useGoogleAPIs = false;
+      useGoogleTVAddOns = false;
+      includeExtras = [
+        "extras;google;gcm"
+      ];
+  };
+  androidSdk = androidComposition.androidsdk;
+  # Required by ./mach build --android
+  androidEnvironment = lib.optionalAttrs buildAndroid rec {
+    ANDROID_SDK_ROOT = "${androidSdk}/libexec/android-sdk";
+    ANDROID_NDK_ROOT = "${ANDROID_SDK_ROOT}/ndk-bundle";
+    GRADLE_OPTS = "-Dorg.gradle.project.android.aapt2FromMavenOverride=${ANDROID_SDK_ROOT}/build-tools/${buildToolsVersion}/aapt2";
+  };
 in
-stdenv.mkDerivation rec {
+stdenv.mkDerivation (androidEnvironment // rec {
   name = "servo-env";
 
   buildInputs = [
@@ -113,6 +145,10 @@ stdenv.mkDerivation rec {
     }))
   ] ++ (lib.optionals stdenv.isDarwin [
     darwin.apple_sdk.frameworks.AppKit
+  ]) ++ (lib.optionals buildAndroid [
+    # for android builds
+    openjdk17_headless
+    androidSdk
   ]);
 
   LIBCLANG_PATH = llvmPackages.clang-unwrapped.lib + "/lib/";
@@ -123,10 +159,11 @@ stdenv.mkDerivation rec {
   # Enable colored cargo and rustc output
   TERMINFO = "${ncurses.out}/share/terminfo";
 
+
   # Provide libraries that aren’t linked against but somehow required
   LD_LIBRARY_PATH = lib.makeLibraryPath [
     # Fixes missing library errors
-    xorg.libXcursor xorg.libXrandr xorg.libXi libxkbcommon
+    zlib xorg.libXcursor xorg.libXrandr xorg.libXi libxkbcommon
 
     # [WARN  script::dom::gpu] Could not get GPUAdapter ("NotFound")
     # TLA Err: Error: Couldn't request WebGPU adapter.
@@ -183,4 +220,4 @@ stdenv.mkDerivation rec {
       export RUSTUP_HOME=$repo_root/.rustup
     fi
   '';
-}
+})

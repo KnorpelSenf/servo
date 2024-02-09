@@ -15,7 +15,7 @@ pub(crate) struct ContainingBlockManager<'a, T> {
     /// position is 'relative' or 'static', the containing block is formed by the
     /// content edge of the nearest block container ancestor box." This is also
     /// the case for 'position: sticky' elements.
-    /// https://www.w3.org/TR/CSS2/visudet.html#containing-block-details
+    /// <https://www.w3.org/TR/CSS2/visudet.html#containing-block-details>
     pub for_non_absolute_descendants: &'a T,
 
     /// The containing block for absolute descendants. "If the element has
@@ -29,7 +29,7 @@ pub(crate) struct ContainingBlockManager<'a, T> {
     ///      undefined.
     ///   2. Otherwise, the containing block is formed by the padding edge of the
     ///      ancestor."
-    /// https://www.w3.org/TR/CSS2/visudet.html#containing-block-details
+    /// <https://www.w3.org/TR/CSS2/visudet.html#containing-block-details>
     /// If the ancestor forms a containing block for all descendants (see below),
     /// this value will be None and absolute descendants will use the containing
     /// block for fixed descendants.
@@ -41,7 +41,7 @@ pub(crate) struct ContainingBlockManager<'a, T> {
     /// establish a containing block for all descendants. Its padding box will be
     /// used to layout for all of its absolute-position descendants,
     /// fixed-position descendants, and descendant fixed background attachments."
-    /// https://w3c.github.io/csswg-drafts/css-transforms-1/#containing-block-for-all-descendants
+    /// <https://w3c.github.io/csswg-drafts/css-transforms-1/#containing-block-for-all-descendants>
     /// See `ComputedValues::establishes_containing_block_for_all_descendants`
     /// for a list of conditions where an element forms a containing block for
     /// all descendants.
@@ -67,11 +67,11 @@ impl<'a, T> ContainingBlockManager<'a, T> {
         &self,
         for_non_absolute_descendants: &'a T,
     ) -> Self {
-        return ContainingBlockManager {
+        ContainingBlockManager {
             for_non_absolute_descendants,
             for_absolute_descendants: self.for_absolute_descendants,
             for_absolute_and_fixed_descendants: self.for_absolute_and_fixed_descendants,
-        };
+        }
     }
 
     pub(crate) fn new_for_absolute_descendants(
@@ -79,11 +79,11 @@ impl<'a, T> ContainingBlockManager<'a, T> {
         for_non_absolute_descendants: &'a T,
         for_absolute_descendants: &'a T,
     ) -> Self {
-        return ContainingBlockManager {
+        ContainingBlockManager {
             for_non_absolute_descendants,
             for_absolute_descendants: Some(for_absolute_descendants),
             for_absolute_and_fixed_descendants: self.for_absolute_and_fixed_descendants,
-        };
+        }
     }
 
     pub(crate) fn new_for_absolute_and_fixed_descendants(
@@ -91,10 +91,10 @@ impl<'a, T> ContainingBlockManager<'a, T> {
         for_non_absolute_descendants: &'a T,
         for_absolute_and_fixed_descendants: &'a T,
     ) -> Self {
-        return ContainingBlockManager {
+        ContainingBlockManager {
             for_non_absolute_descendants,
             for_absolute_descendants: None,
             for_absolute_and_fixed_descendants,
-        };
+        }
     }
 }

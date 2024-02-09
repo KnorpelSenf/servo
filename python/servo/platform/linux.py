@@ -27,7 +27,6 @@ APT_PKGS = [
     'build-essential', 'ccache', 'clang', 'cmake', 'curl', 'g++', 'git',
     'gperf', 'libdbus-1-dev', 'libfreetype6-dev', 'libgl1-mesa-dri',
     'libgles2-mesa-dev', 'libglib2.0-dev',
-    'libgstreamer-plugins-base1.0-dev',
     'gstreamer1.0-plugins-good', 'libgstreamer-plugins-good1.0-dev',
     'gstreamer1.0-plugins-bad', 'libgstreamer-plugins-bad1.0-dev',
     'gstreamer1.0-plugins-ugly',
@@ -81,9 +80,6 @@ class Linux(Base):
         super().__init__(*args, **kwargs)
         self.is_linux = True
         (self.distro, self.version) = Linux.get_distro_and_version()
-
-    def library_path_variable_name(self):
-        return "LD_LIBRARY_PATH"
 
     @staticmethod
     def get_distro_and_version() -> Tuple[str, str]:
@@ -146,6 +142,7 @@ class Linux(Base):
             'nixos',
             'ubuntu',
             'void',
+            'fedora linux asahi remix'
         ]:
             raise NotImplementedError("mach bootstrap does not support "
                                       f"{self.distro}, please file a bug")
@@ -157,12 +154,20 @@ class Linux(Base):
         install = False
         pkgs = []
         if self.distro in ['Ubuntu', 'Debian GNU/Linux', 'Raspbian GNU/Linux']:
-            command = ['apt-get', 'install']
+            command = ['apt-get', 'install', "-m"]
             pkgs = APT_PKGS
+
+            # Try to filter out unknown packages from the list. This is important for Debian
+            # as it does not ship all of the packages we want.
+            installable = subprocess.check_output(['apt-cache', '--generate', 'pkgnames'])
+            if installable:
+                installable = installable.decode("ascii").splitlines()
+                pkgs = list(filter(lambda pkg: pkg in installable, pkgs))
+
             if subprocess.call(['dpkg', '-s'] + pkgs, shell=True,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE) != 0:
                 install = True
-        elif self.distro in ['CentOS', 'CentOS Linux', 'Fedora', 'Fedora Linux']:
+        elif self.distro in ['CentOS', 'CentOS Linux', 'Fedora', 'Fedora Linux', 'Fedora Linux Asahi Remix']:
             installed_pkgs = str(subprocess.check_output(['rpm', '-qa'])).replace('\n', '|')
             pkgs = DNF_PKGS
             for pkg in pkgs:

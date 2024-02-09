@@ -2,8 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use std::convert::TryInto;
+
 use dom_struct::dom_struct;
 use js::jsval::JSVal;
+use lazy_static::lazy_static;
 
 use crate::dom::bindings::codegen::Bindings::NavigatorBinding::NavigatorMethods;
 use crate::dom::bindings::reflector::{reflect_dom_object, DomObject, Reflector};
@@ -23,6 +26,13 @@ use crate::dom::serviceworkercontainer::ServiceWorkerContainer;
 use crate::dom::window::Window;
 use crate::dom::xrsystem::XRSystem;
 use crate::script_runtime::JSContext;
+
+pub(super) fn hardware_concurrency() -> u64 {
+    lazy_static! {
+        static ref CPUS: u64 = num_cpus::get().try_into().unwrap_or(1);
+    }
+    *CPUS
+}
 
 #[dom_struct]
 pub struct Navigator {
@@ -174,19 +184,19 @@ impl NavigatorMethods for Navigator {
             .or_init(|| Permissions::new(&self.global()))
     }
 
-    /// https://immersive-web.github.io/webxr/#dom-navigator-xr
+    /// <https://immersive-web.github.io/webxr/#dom-navigator-xr>
     fn Xr(&self) -> DomRoot<XRSystem> {
         self.xr
             .or_init(|| XRSystem::new(&self.global().as_window()))
     }
 
-    /// https://w3c.github.io/mediacapture-main/#dom-navigator-mediadevices
+    /// <https://w3c.github.io/mediacapture-main/#dom-navigator-mediadevices>
     fn MediaDevices(&self) -> DomRoot<MediaDevices> {
         self.mediadevices
             .or_init(|| MediaDevices::new(&self.global()))
     }
 
-    /// https://w3c.github.io/mediasession/#dom-navigator-mediasession
+    /// <https://w3c.github.io/mediasession/#dom-navigator-mediasession>
     fn MediaSession(&self) -> DomRoot<MediaSession> {
         self.mediasession.or_init(|| {
             // There is a single MediaSession instance per Pipeline
@@ -205,5 +215,10 @@ impl NavigatorMethods for Navigator {
     // https://gpuweb.github.io/gpuweb/#dom-navigator-gpu
     fn Gpu(&self) -> DomRoot<GPU> {
         self.gpu.or_init(|| GPU::new(&self.global()))
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-navigator-hardwareconcurrency>
+    fn HardwareConcurrency(&self) -> u64 {
+        hardware_concurrency()
     }
 }

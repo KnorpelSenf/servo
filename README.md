@@ -22,6 +22,7 @@ manually, try the [manual build setup][manual-build].
 
 ### macOS
 
+- Ensure that the version showed by `python --version` is >= 3.10:
 - Install [Xcode](https://developer.apple.com/xcode/)
 - Install [Homebrew](https://brew.sh/)
 - Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
@@ -31,7 +32,7 @@ manually, try the [manual build setup][manual-build].
 ### Linux
 
 - Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Install Python
+- Install Python (version >= 3.10):
     - **Debian-like:** Run `sudo apt install python3-pip python3-venv`
     - **Fedora:** Run `sudo dnf install python3 python3-pip python3-devel`
     - **Arch:** Run `sudo pacman -S --needed python python-pip`
@@ -40,17 +41,47 @@ manually, try the [manual build setup][manual-build].
 
 ### Windows
 
- - Download and run [`rustup-init.exe`](https://win.rustup.rs/) then follow the onscreen instructions.
+ - Download and run [`rustup-init.exe`](https://win.rustup.rs/)
+  - Make sure to select *Quick install via the Visual Studio Community
+    installer* or otherwise install Visual Studio 2022.
+ - In the *Visual Studio Installer* ensure the following components are installed for Visual Studio 2022:
+    - **Windows 10 SDK (10.0.19041.0)** (`Microsoft.VisualStudio.Component.Windows10SDK.19041`)
+    - **MSVC v143 - VS 2022 C++ x64/x86 build tools (Latest)** (`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`)
+    - **C++ ATL for latest v143 build tools (x86 & x64)** (`Microsoft.VisualStudio.Component.VC.ATL`)
+    - **C++ MFC for latest v143 build tools (x86 & x64)** (`Microsoft.VisualStudio.Component.VC.ATLMFC`)
  - Install [chocolatey](https://chocolatey.org/)
- - Install [Python 3.11](https://apps.microsoft.com/detail/9NRWMJP3717K?hl=en-US&gl=US)
+ - Install [Python 3.11](https://www.python.org/downloads/windows/)
  - Run `mach bootstrap`
-  - *This will install CMake, Git, Ninja, and the Visual Studio 2019 Build Tools
-     via choco in an Administrator console. It can take quite a while.*
-  - *If you already have Visual Studio 2019 installed, this may not install all necessary components.
-     Please follow the Visual Studio 2019 installation instructions in the [manual setup][manual-build].*
+    - *This will install CMake, Git, Ninja, via choco in an
+    + *This will install CMake, Git, and Ninja via choco in an
+       Administrator console. Allow the scripts to run and once
+       the operation finishes, close the new console.*
 - Run `refreshenv`
 
 See also [Windows Troubleshooting Tips][windows-tips].
+
+### Android
+
+- Ensure that the following environment variables are set:
+  - `ANDROID_SDK_ROOT`
+  - `ANDROID_NDK_ROOT`: `$ANDROID_SDK_ROOT/ndk/25.2.9519653/`
+ `ANDROID_SDK_ROOT` can be any directory (such as `~/android-sdk`).
+  All of the Android build dependencies will be installed there.
+- Install the latest version of the [Android command-line
+  tools](https://developer.android.com/studio#command-tools) to
+  `$ANDROID_SDK_ROOT/cmdline-tools/latest`.
+- Run the following command to install the necessary components and the path t
+  ```shell
+  sudo $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install
+   "build-tools;33.0.2" \
+   "emulator" \
+   "ndk;25.2.9519653" \
+   "platform-tools" \
+   "platforms;android-33" \
+   "system-images;android-33;google_apis;x86_64"
+  ```
+For information about building and running the Android build, see
+the [Android documentation][android-docs].
 
 ### Cloning the Repo
 Your CARGO_HOME needs to point to (or be in) the same drive as your Servo repository (See [#28530](https://github.com/servo/servo/issues/28530)).
@@ -100,6 +131,14 @@ Add the `--release` flag to create an optimized build:
 ./mach run --release tests/html/about-mozilla.html
 ```
 
+### Android build
+
+For an armv7 Android build run the following command.
+
+```shell
+./mach build --android
+```
+
 ### Checking for build errors, without building
 
 If you’re making changes to one crate that cause build errors in another crate,
@@ -113,22 +152,6 @@ It will run `cargo check`, which runs the analysis phase of the compiler
 (and so shows build errors if any) but skips the code generation phase.
 This can be a lot faster than a full build,
 though of course it doesn’t produce a binary you can run.
-
-### Building for Android target
-
-For ARM (`armv7-linux-androideabi`, most phones):
-
-``` sh
-./mach build --release --android
-./mach package --release --android
-```
-
-For x86 (typically for the emulator):
-
-```sh
-./mach build --release --target i686-linux-android
-./mach package --release --target i686-linux-android
-```
 
 ## Running
 
@@ -164,8 +187,8 @@ Run Servo with the command:
 
 #### Linux
 
-* `GStreamer` >=1.16
-* `gst-plugins-bad` >=1.16
+* `GStreamer` >=1.18
+* `gst-plugins-bad` >=1.18
 * `libXcursor`
 * `libXrandr`
 * `libXi`
@@ -182,3 +205,4 @@ The generated documentation can be found on https://doc.servo.org/servo/index.ht
 
 [manual-build]: https://github.com/servo/servo/wiki/Building#manual-build-setup
 [windows-tips]: https://github.com/servo/servo/wiki/Building#troubleshooting-the-windows-build
+[android-docs]: https://github.com/servo/servo/wiki/Android

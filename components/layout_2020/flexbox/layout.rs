@@ -25,12 +25,12 @@ use super::geom::{
 use super::{FlexContainer, FlexLevelBox};
 use crate::cell::ArcRefCell;
 use crate::context::LayoutContext;
-use crate::formatting_contexts::{IndependentFormattingContext, IndependentLayout};
+use crate::formatting_contexts::{Baselines, IndependentFormattingContext, IndependentLayout};
 use crate::fragment_tree::{BoxFragment, CollapsedBlockMargins, Fragment};
 use crate::geom::{AuOrAuto, LengthOrAuto, LogicalRect, LogicalSides, LogicalVec2};
 use crate::positioned::{AbsolutelyPositionedBox, PositioningContext, PositioningContextLength};
 use crate::sizing::ContentSizes;
-use crate::style_ext::ComputedValuesExt;
+use crate::style_ext::{Clamp, ComputedValuesExt};
 use crate::ContainingBlock;
 
 // FIMXE: “Flex items […] `z-index` values other than `auto` create a stacking context
@@ -69,10 +69,10 @@ struct FlexItem<'a> {
     /// This is the difference between an outer and inner size.
     pbm_auto_is_zero: FlexRelativeVec2<Length>,
 
-    /// https://drafts.csswg.org/css-flexbox/#algo-main-item
+    /// <https://drafts.csswg.org/css-flexbox/#algo-main-item>
     flex_base_size: Length,
 
-    /// https://drafts.csswg.org/css-flexbox/#algo-main-item
+    /// <https://drafts.csswg.org/css-flexbox/#algo-main-item>
     hypothetical_main_size: Length,
     /// This is `align-self`, defaulting to `align-items` if `auto`
     align_self: AlignItems,
@@ -153,7 +153,7 @@ impl FlexContainer {
         ContentSizes::zero() // Return an incorrect result rather than panic
     }
 
-    /// https://drafts.csswg.org/css-flexbox/#layout-algorithm
+    /// <https://drafts.csswg.org/css-flexbox/#layout-algorithm>
     pub(crate) fn layout(
         &self,
         layout_context: &LayoutContext,
@@ -373,8 +373,7 @@ impl FlexContainer {
                     fragment.content_rect.start_corner += &flow_relative_line_position
                 }
                 line.item_fragments
-            })
-            .into_iter();
+            });
 
         let fragments = absolutely_positioned_items_with_original_order
             .into_iter()
@@ -410,8 +409,8 @@ impl FlexContainer {
 
         IndependentLayout {
             fragments,
-            content_block_size,
-            last_inflow_baseline_offset: None,
+            content_block_size: content_block_size.into(),
+            baselines: Baselines::default(),
         }
     }
 }
@@ -419,29 +418,29 @@ impl FlexContainer {
 impl<'a> FlexItem<'a> {
     fn new(flex_context: &FlexContext, box_: &'a mut IndependentFormattingContext) -> Self {
         let containing_block = flex_context.containing_block;
-        let box_style = box_.style();
 
         // https://drafts.csswg.org/css-writing-modes/#orthogonal-flows
         assert_eq!(
-            containing_block.style.writing_mode, box_style.writing_mode,
+            containing_block.style.writing_mode,
+            box_.style().writing_mode,
             "Mixed writing modes are not supported yet"
         );
 
         let container_is_horizontal = containing_block.style.writing_mode.is_horizontal();
-        let item_is_horizontal = box_style.writing_mode.is_horizontal();
+        let item_is_horizontal = box_.style().writing_mode.is_horizontal();
         let item_is_orthogonal = item_is_horizontal != container_is_horizontal;
         let container_is_row = flex_context.flex_axis == FlexAxis::Row;
         let cross_axis_is_item_block_axis = container_is_row ^ item_is_orthogonal;
 
-        let pbm = box_style.padding_border_margin(containing_block);
-        let content_box_size = box_style.content_box_size(containing_block, &pbm);
-        let max_size = box_style.content_max_box_size(containing_block, &pbm);
-        let min_size = box_style.content_min_box_size(containing_block, &pbm);
+        let pbm = box_.style().padding_border_margin(containing_block);
+        let content_box_size = box_.style().content_box_size(containing_block, &pbm);
+        let max_size = box_.style().content_max_box_size(containing_block, &pbm);
+        let min_size = box_.style().content_min_box_size(containing_block, &pbm);
 
         // https://drafts.csswg.org/css-flexbox/#min-size-auto
         let automatic_min_size = || {
             // FIXME(stshine): Consider more situations when auto min size is not needed.
-            if box_style.get_box().overflow_x.is_scrollable() {
+            if box_.style().get_box().overflow_x.is_scrollable() {
                 return Length::zero();
             }
 
@@ -453,12 +452,12 @@ impl<'a> FlexItem<'a> {
                     IndependentFormattingContext::Replaced(ref bfc) => {
                         match (
                             bfc.contents
-                                .inline_size_over_block_size_intrinsic_ratio(box_style),
+                                .inline_size_over_block_size_intrinsic_ratio(box_.style()),
                             content_box_size.block,
                         ) {
                             (Some(ratio), LengthOrAuto::LengthPercentage(block_size)) => {
                                 let block_size = block_size.clamp_between_extremums(
-                                    min_size.block.auto_is(|| Length::zero()),
+                                    min_size.block.auto_is(Length::zero),
                                     max_size.block,
                                 );
                                 Some(block_size * ratio)
@@ -469,18 +468,18 @@ impl<'a> FlexItem<'a> {
                 };
 
                 let inline_content_size = box_
-                    .inline_content_sizes(&flex_context.layout_context)
+                    .inline_content_sizes(flex_context.layout_context)
                     .min_content;
                 let content_size_suggestion = match box_ {
                     IndependentFormattingContext::NonReplaced(_) => inline_content_size,
                     IndependentFormattingContext::Replaced(ref replaced) => {
                         if let Some(ratio) = replaced
                             .contents
-                            .inline_size_over_block_size_intrinsic_ratio(box_style)
+                            .inline_size_over_block_size_intrinsic_ratio(box_.style())
                         {
                             inline_content_size.clamp_between_extremums(
-                                min_size.block.auto_is(|| Length::zero()) * ratio,
-                                max_size.block.map(|l| l * ratio),
+                                (min_size.block.auto_is(Length::zero) * ratio).into(),
+                                max_size.block.map(|l| (l * ratio).into()),
                             )
                         } else {
                             inline_content_size
@@ -489,12 +488,12 @@ impl<'a> FlexItem<'a> {
                 };
 
                 let result = match specified_size_suggestion {
-                    LengthOrAuto::LengthPercentage(l) => l.min(content_size_suggestion),
+                    LengthOrAuto::LengthPercentage(l) => l.min(content_size_suggestion.into()),
                     LengthOrAuto::Auto => {
                         if let Some(l) = transferred_size_suggestion {
-                            l.min(content_size_suggestion)
+                            l.min(content_size_suggestion.into())
                         } else {
-                            content_size_suggestion
+                            content_size_suggestion.into()
                         }
                     },
                 };
@@ -507,7 +506,7 @@ impl<'a> FlexItem<'a> {
 
         let min_size = LogicalVec2 {
             inline: min_size.inline.auto_is(automatic_min_size),
-            block: min_size.block.auto_is(|| Length::zero()),
+            block: min_size.block.auto_is(Length::zero),
         };
         let margin_auto_is_zero = pbm.margin.auto_is(Length::zero);
 
@@ -515,12 +514,12 @@ impl<'a> FlexItem<'a> {
         let content_max_size = flex_context.vec2_to_flex_relative(max_size);
         let content_min_size = flex_context.vec2_to_flex_relative(min_size);
         let margin_auto_is_zero = flex_context.sides_to_flex_relative(margin_auto_is_zero);
-        let padding = flex_context.sides_to_flex_relative(pbm.padding.clone());
-        let border = flex_context.sides_to_flex_relative(pbm.border.clone());
+        let padding = flex_context.sides_to_flex_relative(pbm.padding);
+        let border = flex_context.sides_to_flex_relative(pbm.border);
         let padding_border = padding.sum_by_axis() + border.sum_by_axis();
         let pbm_auto_is_zero = padding_border + margin_auto_is_zero.sum_by_axis();
 
-        let align_self = flex_context.align_for(&box_style.clone_align_self());
+        let align_self = flex_context.align_for(&box_.style().clone_align_self());
 
         let flex_base_size = flex_base_size(
             flex_context,
@@ -541,8 +540,8 @@ impl<'a> FlexItem<'a> {
             content_box_size,
             content_min_size,
             content_max_size,
-            padding: flex_relative_slides(flex_context.sides_to_flex_relative(pbm.padding)),
-            border: flex_relative_slides(flex_context.sides_to_flex_relative(pbm.border)),
+            padding: padding.map(|t| (*t).into()),
+            border: border.map(|t| (*t).into()),
             margin,
             pbm_auto_is_zero,
             flex_base_size,
@@ -552,7 +551,7 @@ impl<'a> FlexItem<'a> {
     }
 }
 
-/// https://drafts.csswg.org/css-flexbox/#algo-main-item
+/// <https://drafts.csswg.org/css-flexbox/#algo-main-item>
 fn flex_base_size(
     flex_context: &FlexContext,
     flex_item: &mut IndependentFormattingContext,
@@ -625,6 +624,7 @@ fn flex_base_size(
                 flex_item
                     .inline_content_sizes(flex_context.layout_context)
                     .max_content
+                    .into()
             } else {
                 // FIXME: block-axis content sizing requires another pass
                 // of "full" layout
@@ -652,7 +652,7 @@ fn collect_flex_lines<'items, LineResult>(
                 .sum(),
             items,
         };
-        return vec![each(flex_context, line)];
+        vec![each(flex_context, line)]
     } else {
         let mut lines = Vec::new();
         let mut line_size_so_far = Length::zero();
@@ -708,7 +708,7 @@ impl FlexLine<'_> {
             .collect::<Vec<_>>();
 
         // https://drafts.csswg.org/css-flexbox/#algo-cross-line
-        let line_cross_size = self.cross_size(&item_layout_results, &flex_context);
+        let line_cross_size = self.cross_size(&item_layout_results, flex_context);
         let line_size = FlexRelativeVec2 {
             main: container_main_size,
             cross: line_cross_size,
@@ -790,7 +790,7 @@ impl FlexLine<'_> {
         let item_cross_margins = self.items.iter().zip(&item_used_cross_sizes).map(
             |(item, &item_cross_content_size)| {
                 item.resolve_auto_cross_margins(
-                    &flex_context,
+                    flex_context,
                     line_cross_size,
                     item_cross_content_size,
                 )
@@ -848,17 +848,16 @@ impl FlexLine<'_> {
                 let margin = flex_context.sides_to_flow_relative(*margin);
                 let collapsed_margin = CollapsedBlockMargins::from_margin(&margin);
                 (
+                    // TODO: We should likely propagate baselines from `display: flex`.
                     BoxFragment::new(
                         item.box_.base_fragment_info(),
                         item.box_.style().clone(),
                         item_result.fragments,
                         content_rect,
-                        logical_slides(flex_context, item.padding),
-                        logical_slides(flex_context, item.border),
+                        flex_context.sides_to_flow_relative(item.padding.map(|t| (*t).into())),
+                        flex_context.sides_to_flow_relative(item.border.map(|t| (*t).into())),
                         margin,
                         None, /* clearance */
-                        // TODO: We should likely propagate baselines from `display: flex`.
-                        None, /* last_inflow_baseline_offset */
                         collapsed_margin,
                     ),
                     item_result.positioning_context,
@@ -872,7 +871,7 @@ impl FlexLine<'_> {
     }
 
     /// Return the *main size* of each item, and the line’s remainaing free space
-    /// https://drafts.csswg.org/css-flexbox/#resolve-flexible-lengths
+    /// <https://drafts.csswg.org/css-flexbox/#resolve-flexible-lengths>
     fn resolve_flexible_lengths(&self, container_main_size: Length) -> (Vec<Length>, Length) {
         let mut frozen = vec![false; self.items.len()];
         let mut target_main_sizes_vec = self
@@ -1082,7 +1081,7 @@ impl<'a> FlexItem<'a> {
                         let cross_size = flex_context.vec2_to_flex_relative(size.clone()).cross;
                         let fragments = replaced.contents.make_fragments(&replaced.style, size);
                         FlexItemLayoutResult {
-                            hypothetical_cross_size: cross_size,
+                            hypothetical_cross_size: cross_size.into(),
                             fragments,
                             positioning_context,
                         }
@@ -1111,7 +1110,7 @@ impl<'a> FlexItem<'a> {
                         let hypothetical_cross_size = self
                             .content_box_size
                             .cross
-                            .auto_is(|| content_block_size)
+                            .auto_is(|| content_block_size.into())
                             .clamp_between_extremums(
                                 self.content_min_size.cross,
                                 self.content_max_size.cross,
@@ -1135,7 +1134,7 @@ impl<'a> FlexItem<'a> {
 }
 
 impl<'items> FlexLine<'items> {
-    /// https://drafts.csswg.org/css-flexbox/#algo-cross-line
+    /// <https://drafts.csswg.org/css-flexbox/#algo-cross-line>
     fn cross_size(
         &self,
         item_layout_results: &[FlexItemLayoutResult],
@@ -1238,7 +1237,7 @@ impl<'items> FlexLine<'items> {
 
 impl FlexItem<'_> {
     /// Return the cross-start and cross-end margin, with `auto` values resolved.
-    /// https://drafts.csswg.org/css-flexbox/#algo-cross-margins
+    /// <https://drafts.csswg.org/css-flexbox/#algo-cross-margins>
     fn resolve_auto_cross_margins(
         &self,
         flex_context: &FlexContext,
@@ -1321,30 +1320,5 @@ impl FlexItem<'_> {
             margin.cross_start +
             self.border.cross_start.into() +
             self.padding.cross_start.into()
-    }
-}
-
-// TODO(#29819): Check if this function can be removed after we convert everything to Au.
-fn logical_slides(
-    flex_context: &mut FlexContext<'_>,
-    item: FlexRelativeSides<Au>,
-) -> LogicalSides<Length> {
-    let value = flex_context.sides_to_flow_relative(item);
-
-    LogicalSides::<Length> {
-        inline_start: value.inline_start.into(),
-        inline_end: value.inline_end.into(),
-        block_start: value.block_start.into(),
-        block_end: value.block_end.into(),
-    }
-}
-
-// TODO(#29819): Check if this function can be removed after we convert everything to Au.
-fn flex_relative_slides(value: FlexRelativeSides<Length>) -> FlexRelativeSides<Au> {
-    FlexRelativeSides::<Au> {
-        cross_start: value.cross_start.into(),
-        cross_end: value.cross_end.into(),
-        main_start: value.main_start.into(),
-        main_end: value.main_end.into(),
     }
 }

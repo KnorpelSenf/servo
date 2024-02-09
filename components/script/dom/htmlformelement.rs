@@ -4,6 +4,7 @@
 
 use std::borrow::ToOwned;
 use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 use dom_struct::dom_struct;
 use encoding_rs::{Encoding, UTF_8};
@@ -20,7 +21,6 @@ use servo_rand::random;
 use style::attr::AttrValue;
 use style::str::split_html_space_chars;
 use style_traits::dom::ElementState;
-use time::{now, Duration, Tm};
 
 use super::bindings::trace::{HashMapTracedValues, NoTrace};
 use crate::body::Extractable;
@@ -89,12 +89,12 @@ pub struct GenerationId(u32);
 pub struct HTMLFormElement {
     htmlelement: HTMLElement,
     marked_for_reset: Cell<bool>,
-    /// https://html.spec.whatwg.org/multipage/#constructing-entry-list
+    /// <https://html.spec.whatwg.org/multipage/#constructing-entry-list>
     constructing_entry_list: Cell<bool>,
     elements: DomOnceCell<HTMLFormControlsCollection>,
     generation_id: Cell<GenerationId>,
     controls: DomRefCell<Vec<Dom<Element>>>,
-    past_names_map: DomRefCell<HashMapTracedValues<Atom, (Dom<Element>, NoTrace<Tm>)>>,
+    past_names_map: DomRefCell<HashMapTracedValues<Atom, (Dom<Element>, NoTrace<Instant>)>>,
     firing_submission_events: Cell<bool>,
     rel_list: MutNullableDom<DOMTokenList>,
 }
@@ -442,7 +442,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
             name,
             (
                 Dom::from_ref(&*element_node.downcast::<Element>().unwrap()),
-                NoTrace(now()),
+                NoTrace(Instant::now()),
             ),
         );
 
@@ -556,7 +556,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
             let entry = SourcedName {
                 name: key.clone(),
                 element: DomRoot::from_ref(&*val.0),
-                source: SourcedNameSource::Past(now() - val.1 .0), // calculate difference now()-val.1 to find age
+                source: SourcedNameSource::Past(Instant::now().duration_since(val.1 .0)),
             };
             sourced_names_vec.push(entry);
         }
@@ -615,12 +615,12 @@ impl HTMLFormElementMethods for HTMLFormElement {
         return names_vec;
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-form-checkvalidity
+    /// <https://html.spec.whatwg.org/multipage/#dom-form-checkvalidity>
     fn CheckValidity(&self) -> bool {
         self.static_validation().is_ok()
     }
 
-    /// https://html.spec.whatwg.org/multipage/#dom-form-reportvalidity
+    /// <https://html.spec.whatwg.org/multipage/#dom-form-reportvalidity>
     fn ReportValidity(&self) -> bool {
         self.interactive_validation().is_ok()
     }

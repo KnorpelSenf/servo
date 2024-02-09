@@ -17,12 +17,13 @@
 //! `Servo` is fed events from a generic type that implements the
 //! `WindowMethods` trait.
 
-use std::borrow::Cow;
+use std::borrow::{BorrowMut, Cow};
 use std::cmp::max;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::vec::Drain;
 
 use bluetooth::BluetoothThreadFactory;
 use bluetooth_traits::BluetoothRequest;
@@ -60,11 +61,13 @@ use euclid::Scale;
 ))]
 use gaol::sandbox::{ChildSandbox, ChildSandboxMethods};
 use gfx::font_cache_thread::FontCacheThread;
+pub use gfx::rendering_context;
+use gfx::rendering_context::RenderingContext;
 pub use gleam::gl;
 use ipc_channel::ipc::{self, IpcSender};
 use log::{error, trace, warn, Log, Metadata, Record};
-use media::{GLPlayerThreads, WindowGLContext};
-pub use msg::constellation_msg::TopLevelBrowsingContextId as BrowserId;
+use media::{GLPlayerThreads, GlApi, NativeDisplay, WindowGLContext};
+pub use msg::constellation_msg::TopLevelBrowsingContextId;
 use msg::constellation_msg::{PipelineNamespace, PipelineNamespaceId};
 use net::resource_thread::new_resource_threads;
 use net_traits::IpcSend;
@@ -76,7 +79,13 @@ use script_traits::{ScriptToConstellationChan, WindowSizeData};
 use servo_config::{opts, pref, prefs};
 use servo_media::player::context::GlContext;
 use servo_media::ServoMedia;
-use surfman::GLApi;
+#[cfg(target_os = "linux")]
+use surfman::platform::generic::multi::connection::NativeConnection as LinuxNativeConnection;
+#[cfg(target_os = "linux")]
+use surfman::platform::generic::multi::context::NativeContext as LinuxNativeContext;
+use surfman::{GLApi, GLVersion};
+#[cfg(target_os = "linux")]
+use surfman::{NativeConnection, NativeContext};
 use webrender::{RenderApiSender, ShaderPrecacheFlags};
 use webrender_api::{DocumentId, FontInstanceKey, FontKey, ImageKey};
 use webrender_traits::{
@@ -88,7 +97,7 @@ pub use {
     keyboard_types, layout_thread_2013, layout_thread_2020, media, msg, net, net_traits, profile,
     profile_traits, script, script_layout_interface, script_traits, servo_config as config,
     servo_config, servo_geometry, servo_url as url, servo_url, style, style_traits, webgpu,
-    webrender_api, webrender_surfman, webrender_traits,
+    webrender_api, webrender_traits,
 };
 
 #[cfg(feature = "webdriver")]
@@ -162,7 +171,7 @@ pub struct Servo<Window: WindowMethods + 'static + ?Sized> {
     compositor: IOCompositor<Window>,
     constellation_chan: Sender<ConstellationMsg>,
     embedder_receiver: EmbedderReceiver,
-    messages_for_embedder: Vec<(Option<BrowserId>, EmbedderMsg)>,
+    messages_for_embedder: Vec<(Option<TopLevelBrowsingContextId>, EmbedderMsg)>,
     profiler_enabled: bool,
     /// For single-process Servo instances, this field controls the initialization
     /// and deinitialization of the JS Engine. Multiprocess Servo instances have their
@@ -213,7 +222,7 @@ impl webrender_api::RenderNotifier for RenderNotifier {
 
 pub struct InitializedServo<Window: WindowMethods + 'static + ?Sized> {
     pub servo: Servo<Window>,
-    pub browser_id: BrowserId,
+    pub browser_id: TopLevelBrowsingContextId,
 }
 
 impl<Window> Servo<Window>
@@ -258,22 +267,22 @@ where
         };
 
         // Initialize surfman
-        let webrender_surfman = window.webrender_surfman();
+        let rendering_context = window.rendering_context();
 
         // Get GL bindings
-        let webrender_gl = match webrender_surfman.connection().gl_api() {
-            GLApi::GL => unsafe { gl::GlFns::load_with(|s| webrender_surfman.get_proc_address(s)) },
+        let webrender_gl = match rendering_context.connection().gl_api() {
+            GLApi::GL => unsafe { gl::GlFns::load_with(|s| rendering_context.get_proc_address(s)) },
             GLApi::GLES => unsafe {
-                gl::GlesFns::load_with(|s| webrender_surfman.get_proc_address(s))
+                gl::GlesFns::load_with(|s| rendering_context.get_proc_address(s))
             },
         };
 
         // Make sure the gl context is made current.
-        webrender_surfman.make_gl_context_current().unwrap();
+        rendering_context.make_gl_context_current().unwrap();
         debug_assert_eq!(webrender_gl.get_error(), gleam::gl::NO_ERROR,);
 
         // Bind the webrender framebuffer
-        let framebuffer_object = webrender_surfman
+        let framebuffer_object = rendering_context
             .context_surface_info()
             .unwrap_or(None)
             .map(|info| info.framebuffer_object)
@@ -282,7 +291,7 @@ where
 
         // Reserving a namespace to create TopLevelBrowsingContextId.
         PipelineNamespace::install(PipelineNamespaceId(0));
-        let top_level_browsing_context_id = BrowserId::new();
+        let top_level_browsing_context_id = TopLevelBrowsingContextId::new();
 
         // Get both endpoints of a special channel for communication between
         // the client window and the compositor. This channel is unique because
@@ -368,7 +377,7 @@ where
             webxr_layer_grand_manager,
             image_handler,
         } = WebGLComm::new(
-            webrender_surfman.clone(),
+            rendering_context.clone(),
             webrender_api.create_sender(),
             webrender_document,
             external_images.clone(),
@@ -386,17 +395,6 @@ where
             embedder.register_webxr(&mut webxr_main_thread, embedder_proxy.clone());
         }
 
-        let glplayer_threads = match window.get_gl_context() {
-            GlContext::Unknown => None,
-            _ => {
-                let (glplayer_threads, image_handler) =
-                    GLPlayerThreads::new(external_images.clone());
-                external_image_handlers
-                    .set_handler(image_handler, WebrenderImageHandlerType::Media);
-                Some(glplayer_threads)
-            },
-        };
-
         let wgpu_image_handler = webgpu::WGPUExternalImages::new();
         let wgpu_image_map = wgpu_image_handler.images.clone();
         external_image_handlers.set_handler(
@@ -404,12 +402,11 @@ where
             WebrenderImageHandlerType::WebGPU,
         );
 
-        let player_context = WindowGLContext {
-            gl_context: window.get_gl_context(),
-            native_display: window.get_native_display(),
-            gl_api: window.get_gl_api(),
-            glplayer_chan: glplayer_threads.as_ref().map(GLPlayerThreads::pipeline),
-        };
+        let (player_context, glplayer_threads) = Self::create_media_window_gl_context(
+            external_image_handlers.borrow_mut(),
+            external_images.clone(),
+            &rendering_context,
+        );
 
         webrender.set_external_image_handler(external_image_handlers);
 
@@ -467,7 +464,7 @@ where
                 webrender,
                 webrender_document,
                 webrender_api,
-                webrender_surfman,
+                rendering_context,
                 webrender_gl,
                 webxr_main_thread,
             },
@@ -492,6 +489,108 @@ where
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn get_native_media_display_and_gl_context(
+        rendering_context: &RenderingContext,
+    ) -> Option<(NativeDisplay, GlContext)> {
+        let gl_context = match rendering_context.native_context() {
+            NativeContext::Default(LinuxNativeContext::Default(native_context)) => {
+                GlContext::Egl(native_context.egl_context as usize)
+            },
+            NativeContext::Default(LinuxNativeContext::Alternate(native_context)) => {
+                GlContext::Egl(native_context.egl_context as usize)
+            },
+            NativeContext::Alternate(_) => return None,
+        };
+
+        let native_display = match rendering_context.connection().native_connection() {
+            NativeConnection::Default(LinuxNativeConnection::Default(connection)) => {
+                NativeDisplay::Egl(connection.0 as usize)
+            },
+            NativeConnection::Default(LinuxNativeConnection::Alternate(connection)) => {
+                NativeDisplay::X11(connection.x11_display as usize)
+            },
+            NativeConnection::Alternate(_) => return None,
+        };
+        Some((native_display, gl_context))
+    }
+
+    // @TODO(victor): https://github.com/servo/media/pull/315
+    #[cfg(target_os = "windows")]
+    fn get_native_media_display_and_gl_context(
+        rendering_context: &RenderingContext,
+    ) -> Option<(NativeDisplay, GlContext)> {
+        let gl_context = GlContext::Egl(rendering_context.native_context().egl_context as usize);
+        let native_display =
+            NativeDisplay::Egl(rendering_context.native_device().egl_display as usize);
+        Some((native_display, gl_context))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    fn get_native_media_display_and_gl_context(
+        _rendering_context: &RenderingContext,
+    ) -> Option<(NativeDisplay, GlContext)> {
+        None
+    }
+
+    fn create_media_window_gl_context(
+        external_image_handlers: &mut WebrenderExternalImageHandlers,
+        external_images: Arc<Mutex<WebrenderExternalImageRegistry>>,
+        rendering_context: &RenderingContext,
+    ) -> (WindowGLContext, Option<GLPlayerThreads>) {
+        if !pref!(media.glvideo.enabled) {
+            return (
+                WindowGLContext {
+                    gl_context: GlContext::Unknown,
+                    gl_api: GlApi::None,
+                    native_display: NativeDisplay::Unknown,
+                    glplayer_chan: None,
+                },
+                None,
+            );
+        }
+
+        let (native_display, gl_context) =
+            match Self::get_native_media_display_and_gl_context(rendering_context) {
+                Some((native_display, gl_context)) => (native_display, gl_context),
+                None => {
+                    return (
+                        WindowGLContext {
+                            gl_context: GlContext::Unknown,
+                            gl_api: GlApi::None,
+                            native_display: NativeDisplay::Unknown,
+                            glplayer_chan: None,
+                        },
+                        None,
+                    );
+                },
+            };
+
+        let api = rendering_context.connection().gl_api();
+        let attributes = rendering_context.context_attributes();
+        let GLVersion { major, minor } = attributes.version;
+        let gl_api = match api {
+            GLApi::GL if major >= 3 && minor >= 2 => GlApi::OpenGL3,
+            GLApi::GL => GlApi::OpenGL,
+            GLApi::GLES if major > 1 => GlApi::Gles2,
+            GLApi::GLES => GlApi::Gles1,
+        };
+
+        assert!(!matches!(gl_context, GlContext::Unknown));
+        let (glplayer_threads, image_handler) = GLPlayerThreads::new(external_images.clone());
+        external_image_handlers.set_handler(image_handler, WebrenderImageHandlerType::Media);
+
+        (
+            WindowGLContext {
+                gl_context,
+                native_display,
+                gl_api,
+                glplayer_chan: Some(GLPlayerThreads::pipeline(&glplayer_threads)),
+            },
+            Some(glplayer_threads),
+        )
+    }
+
     fn handle_window_event(&mut self, event: EmbedderEvent) -> bool {
         match event {
             EmbedderEvent::Idle => {},
@@ -503,7 +602,14 @@ where
             EmbedderEvent::Resize => {
                 return self.compositor.on_resize_window_event();
             },
-
+            EmbedderEvent::InvalidateNativeSurface => {
+                self.compositor.invalidate_native_surface();
+            },
+            EmbedderEvent::ReplaceNativeSurface(native_widget, coords) => {
+                self.compositor
+                    .replace_native_surface(native_widget, coords);
+                self.compositor.composite();
+            },
             EmbedderEvent::AllowNavigationResponse(pipeline_id, allowed) => {
                 let msg = ConstellationMsg::AllowNavigationResponse(pipeline_id, allowed);
                 if let Err(e) = self.constellation_chan.send(msg) {
@@ -626,8 +732,8 @@ where
                 self.compositor.capture_webrender();
             },
 
-            EmbedderEvent::NewBrowser(url, top_level_browsing_context_id) => {
-                let msg = ConstellationMsg::NewBrowser(url, top_level_browsing_context_id);
+            EmbedderEvent::NewWebView(url, top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::NewWebView(url, top_level_browsing_context_id);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
                         "Sending NewBrowser message to constellation failed ({:?}).",
@@ -636,18 +742,18 @@ where
                 }
             },
 
-            EmbedderEvent::SelectBrowser(top_level_browsing_context_id) => {
-                let msg = ConstellationMsg::SelectBrowser(top_level_browsing_context_id);
+            EmbedderEvent::FocusWebView(top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::FocusWebView(top_level_browsing_context_id);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
-                        "Sending SelectBrowser message to constellation failed ({:?}).",
+                        "Sending FocusBrowser message to constellation failed ({:?}).",
                         e
                     );
                 }
             },
 
-            EmbedderEvent::CloseBrowser(top_level_browsing_context_id) => {
-                let msg = ConstellationMsg::CloseBrowser(top_level_browsing_context_id);
+            EmbedderEvent::CloseWebView(top_level_browsing_context_id) => {
+                let msg = ConstellationMsg::CloseWebView(top_level_browsing_context_id);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
                         "Sending CloseBrowser message to constellation failed ({:?}).",
@@ -676,14 +782,11 @@ where
                 }
             },
 
-            EmbedderEvent::ChangeBrowserVisibility(top_level_browsing_context_id, visible) => {
-                let msg = ConstellationMsg::ChangeBrowserVisibility(
-                    top_level_browsing_context_id,
-                    visible,
-                );
+            EmbedderEvent::WebViewVisibilityChanged(webview_id, visible) => {
+                let msg = ConstellationMsg::WebViewVisibilityChanged(webview_id, visible);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
-                        "Sending ChangeBrowserVisibility to constellation failed ({:?}).",
+                        "Sending WebViewVisibilityChanged to constellation failed ({:?}).",
                         e
                     );
                 }
@@ -718,8 +821,8 @@ where
         }
     }
 
-    pub fn get_events(&mut self) -> Vec<(Option<BrowserId>, EmbedderMsg)> {
-        ::std::mem::replace(&mut self.messages_for_embedder, Vec::new())
+    pub fn get_events(&mut self) -> Drain<'_, (Option<TopLevelBrowsingContextId>, EmbedderMsg)> {
+        self.messages_for_embedder.drain(..)
     }
 
     pub fn handle_events(&mut self, events: impl IntoIterator<Item = EmbedderEvent>) -> bool {
@@ -1090,6 +1193,9 @@ fn default_user_agent_string_for(agent: UserAgent) -> &'static str {
     #[cfg(target_os = "macos")]
     const DESKTOP_UA_STRING: &'static str =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Servo/1.0 Firefox/111.0";
+
+    #[cfg(target_os = "android")]
+    const DESKTOP_UA_STRING: &'static str = "";
 
     match agent {
         UserAgent::Desktop => DESKTOP_UA_STRING,

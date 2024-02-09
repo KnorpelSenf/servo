@@ -195,14 +195,12 @@ impl PositioningContext {
             }
         };
 
-        self.for_nearest_positioned_ancestor
-            .as_mut()
-            .map(|hoisted_boxes| {
-                hoisted_boxes
-                    .iter_mut()
-                    .skip(index.for_nearest_positioned_ancestor)
-                    .for_each(update_fragment_if_needed);
-            });
+        if let Some(hoisted_boxes) = self.for_nearest_positioned_ancestor.as_mut() {
+            hoisted_boxes
+                .iter_mut()
+                .skip(index.for_nearest_positioned_ancestor)
+                .for_each(update_fragment_if_needed);
+        }
         self.for_nearest_containing_block_for_all_descendants
             .iter_mut()
             .skip(index.for_nearest_containing_block_for_all_descendants)
@@ -367,9 +365,9 @@ impl PositioningContext {
     pub(crate) fn clear(&mut self) {
         self.for_nearest_containing_block_for_all_descendants
             .clear();
-        self.for_nearest_positioned_ancestor
-            .as_mut()
-            .map(|v| v.clear());
+        if let Some(v) = self.for_nearest_positioned_ancestor.as_mut() {
+            v.clear()
+        }
     }
 
     /// Get the length of this [PositioningContext].
@@ -490,8 +488,8 @@ impl HoistedAbsolutelyPositionedBox {
                     &pbm,
                 );
                 LogicalVec2 {
-                    inline: LengthOrAuto::LengthPercentage(used_size.inline),
-                    block: LengthOrAuto::LengthPercentage(used_size.block),
+                    inline: LengthOrAuto::LengthPercentage(used_size.inline.into()),
+                    block: LengthOrAuto::LengthPercentage(used_size.block.into()),
                 }
             },
             IndependentFormattingContext::NonReplaced(non_replaced) => non_replaced
@@ -538,7 +536,7 @@ impl HoistedAbsolutelyPositionedBox {
                     content_size = computed_size.auto_is(|| unreachable!());
                     fragments = replaced
                         .contents
-                        .make_fragments(style, content_size.clone());
+                        .make_fragments(style, content_size.clone().into());
                 },
                 IndependentFormattingContext::NonReplaced(non_replaced) => {
                     // https://drafts.csswg.org/css2/#min-max-widths
@@ -546,7 +544,7 @@ impl HoistedAbsolutelyPositionedBox {
                     let min_size = non_replaced
                         .style
                         .content_min_box_size(&containing_block.into(), &pbm)
-                        .auto_is(|| Length::zero());
+                        .auto_is(Length::zero);
                     let max_size = non_replaced
                         .style
                         .content_max_box_size(&containing_block.into(), &pbm);
@@ -563,7 +561,8 @@ impl HoistedAbsolutelyPositionedBox {
                             cbis - anchor - pbm.padding_border_sums.inline - margin_sum;
                         non_replaced
                             .inline_content_sizes(layout_context)
-                            .shrink_to_fit(available_size)
+                            .shrink_to_fit(available_size.into())
+                            .into()
                     });
 
                     // If the tentative used inline size is greater than ‘max-inline-size’,
@@ -622,7 +621,8 @@ impl HoistedAbsolutelyPositionedBox {
                             &mut positioning_context,
                             &containing_block_for_children,
                         );
-                        let block_size = size.auto_is(|| independent_layout.content_block_size);
+                        let block_size =
+                            size.auto_is(|| independent_layout.content_block_size.into());
                         Result {
                             content_size: LogicalVec2 {
                                 inline: inline_size,
@@ -706,7 +706,6 @@ impl HoistedAbsolutelyPositionedBox {
                 None, /* clearance */
                 // We do not set the baseline offset, because absolutely positioned
                 // elements are not inflow.
-                None, /* last_inflow_baseline_offset */
                 CollapsedBlockMargins::zero(),
                 physical_overconstrained,
             )
@@ -754,13 +753,13 @@ struct AbsoluteAxisSolver<'a> {
 impl<'a> AbsoluteAxisSolver<'a> {
     /// This unifies some of the parts in common in:
     ///
-    /// * https://drafts.csswg.org/css2/visudet.html#abs-non-replaced-width
-    /// * https://drafts.csswg.org/css2/visudet.html#abs-non-replaced-height
+    /// * <https://drafts.csswg.org/css2/visudet.html#abs-non-replaced-width>
+    /// * <https://drafts.csswg.org/css2/visudet.html#abs-non-replaced-height>
     ///
     /// … and:
     ///
-    /// * https://drafts.csswg.org/css2/visudet.html#abs-replaced-width
-    /// * https://drafts.csswg.org/css2/visudet.html#abs-replaced-height
+    /// * <https://drafts.csswg.org/css2/visudet.html#abs-replaced-width>
+    /// * <https://drafts.csswg.org/css2/visudet.html#abs-replaced-height>
     ///
     /// In the replaced case, `size` is never `Auto`.
     fn solve_for_size(&self, computed_size: LengthOrAuto) -> AxisResult {
@@ -858,7 +857,7 @@ fn vec_append_owned<T>(a: &mut Vec<T>, mut b: Vec<T>) {
     }
 }
 
-/// https://drafts.csswg.org/css2/visuren.html#relative-positioning
+/// <https://drafts.csswg.org/css2/visuren.html#relative-positioning>
 pub(crate) fn relative_adjustement(
     style: &ComputedValues,
     containing_block: &ContainingBlock,
