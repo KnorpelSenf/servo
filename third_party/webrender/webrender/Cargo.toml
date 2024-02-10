@@ -43,6 +43,7 @@ png = { optional = true, version = "0.16" }
 rayon = "1"
 ron = { optional = true, version = "0.8" }
 serde = { optional = true, version = "1.0", features = ["serde_derive"] }
+serde_json = "1.0"
 smallvec = "1"
 time = "0.1"
 api = { version = "0.61.0", path = "../webrender_api", package = "webrender_api" }

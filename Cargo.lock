@@ -6833,6 +6833,7 @@ dependencies = [
  "rayon",
  "ron",
  "serde",
+ "serde_json",
  "smallvec",
  "svg_fmt",
  "time 0.1.45",

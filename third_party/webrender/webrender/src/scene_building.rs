@@ -1059,8 +1059,9 @@ impl<'a> SceneBuilder<'a> {
         item: DisplayItemRef,
         pipeline_id: PipelineId,
     ) {
-        println!(" == Debug Item {:?}", item.item());
-        match *item.item() {
+        let it = item.item();
+        println!("{}", serde_json::to_string(it).expect("could not stringify"));
+        match *it {
             DisplayItem::Image(ref info) => {
                 profile_scope!("image");
 
