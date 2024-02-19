@@ -13,6 +13,7 @@ use style::computed_values::float::T as Float;
 use style::logical_geometry::WritingMode;
 use style::properties::ComputedValues;
 use style::values::computed::{Length, LengthOrAuto};
+use style::values::specified::Display;
 use style::Zero;
 
 use crate::cell::ArcRefCell;
@@ -125,7 +126,7 @@ impl BlockLevelBox {
             _ => return false,
         };
 
-        if pbm.padding.block_start != Length::zero() || pbm.border.block_start != Length::zero() {
+        if pbm.padding.block_start != Au::zero() || pbm.border.block_start != Au::zero() {
             return false;
         }
 
@@ -141,7 +142,7 @@ impl BlockLevelBox {
                 let margin_inline_start = pbm.margin.inline_start.auto_is(Length::zero);
                 let margin_inline_end = pbm.margin.inline_end.auto_is(Length::zero);
                 containing_block.inline_size -
-                    pbm.padding_border_sums.inline -
+                    pbm.padding_border_sums.inline.into() -
                     margin_inline_start -
                     margin_inline_end
             })
@@ -168,10 +169,7 @@ impl BlockLevelBox {
             style.content_block_size().is_definitely_zero() || style.content_block_size().is_auto();
         let min_block_size_zero =
             style.min_block_size().is_definitely_zero() || style.min_block_size().is_auto();
-        if !min_block_size_zero ||
-            !block_size_zero ||
-            pbm.padding_border_sums.block != Length::zero()
-        {
+        if !min_block_size_zero || !block_size_zero || pbm.padding_border_sums.block != Au::zero() {
             return false;
         }
 
@@ -418,22 +416,33 @@ fn layout_block_level_children(
     mut sequential_layout_state: Option<&mut SequentialLayoutState>,
     collapsible_with_parent_start_margin: CollapsibleWithParentStartMargin,
 ) -> FlowLayout {
-    match sequential_layout_state {
+    let mut placement_state =
+        PlacementState::new(collapsible_with_parent_start_margin, containing_block.style);
+
+    let fragments = match sequential_layout_state {
         Some(ref mut sequential_layout_state) => layout_block_level_children_sequentially(
             layout_context,
             positioning_context,
             child_boxes,
             containing_block,
             sequential_layout_state,
-            collapsible_with_parent_start_margin,
+            &mut placement_state,
         ),
         None => layout_block_level_children_in_parallel(
             layout_context,
             positioning_context,
             child_boxes,
             containing_block,
-            collapsible_with_parent_start_margin,
+            &mut placement_state,
         ),
+    };
+
+    let (content_block_size, collapsible_margins_in_children, baselines) = placement_state.finish();
+    FlowLayout {
+        fragments,
+        content_block_size,
+        collapsible_margins_in_children,
+        baselines,
     }
 }
 
@@ -442,8 +451,8 @@ fn layout_block_level_children_in_parallel(
     positioning_context: &mut PositioningContext,
     child_boxes: &[ArcRefCell<BlockLevelBox>],
     containing_block: &ContainingBlock,
-    collapsible_with_parent_start_margin: CollapsibleWithParentStartMargin,
-) -> FlowLayout {
+    placement_state: &mut PlacementState,
+) -> Vec<Fragment> {
     let collects_for_nearest_positioned_ancestor =
         positioning_context.collects_for_nearest_positioned_ancestor();
     let layout_results: Vec<(Fragment, PositioningContext)> = child_boxes
@@ -462,8 +471,7 @@ fn layout_block_level_children_in_parallel(
         })
         .collect();
 
-    let mut placement_state = PlacementState::new(collapsible_with_parent_start_margin);
-    let fragments = layout_results
+    layout_results
         .into_iter()
         .map(|(mut fragment, mut child_positioning_context)| {
             placement_state.place_fragment_and_update_baseline(&mut fragment, None);
@@ -474,15 +482,7 @@ fn layout_block_level_children_in_parallel(
             positioning_context.append(child_positioning_context);
             fragment
         })
-        .collect();
-
-    let (content_block_size, collapsible_margins_in_children, baselines) = placement_state.finish();
-    FlowLayout {
-        fragments,
-        content_block_size,
-        collapsible_margins_in_children,
-        baselines,
-    }
+        .collect()
 }
 
 fn layout_block_level_children_sequentially(
@@ -491,14 +491,12 @@ fn layout_block_level_children_sequentially(
     child_boxes: &[ArcRefCell<BlockLevelBox>],
     containing_block: &ContainingBlock,
     sequential_layout_state: &mut SequentialLayoutState,
-    collapsible_with_parent_start_margin: CollapsibleWithParentStartMargin,
-) -> FlowLayout {
-    let mut placement_state = PlacementState::new(collapsible_with_parent_start_margin);
-
+    placement_state: &mut PlacementState,
+) -> Vec<Fragment> {
     // Because floats are involved, we do layout for this block formatting context in tree
     // order without parallelism. This enables mutable access to a `SequentialLayoutState` that
     // tracks every float encountered so far (again in tree order).
-    let fragments = child_boxes
+    child_boxes
         .iter()
         .map(|child_box| {
             let positioning_context_length_before_layout = positioning_context.len();
@@ -521,15 +519,7 @@ fn layout_block_level_children_sequentially(
 
             fragment
         })
-        .collect();
-
-    let (content_block_size, collapsible_margins_in_children, baselines) = placement_state.finish();
-    FlowLayout {
-        fragments,
-        content_block_size,
-        collapsible_margins_in_children,
-        baselines,
-    }
+        .collect()
 }
 
 impl BlockLevelBox {
@@ -644,9 +634,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
 
     let computed_block_size = style.content_block_size();
     let start_margin_can_collapse_with_children =
-        pbm.padding.block_start == Length::zero() && pbm.border.block_start == Length::zero();
-    let end_margin_can_collapse_with_children = pbm.padding.block_end == Length::zero() &&
-        pbm.border.block_end == Length::zero() &&
+        pbm.padding.block_start == Au::zero() && pbm.border.block_start == Au::zero();
+    let end_margin_can_collapse_with_children = pbm.padding.block_end == Au::zero() &&
+        pbm.border.block_end == Au::zero() &&
         computed_block_size.is_auto();
 
     let mut clearance = None;
@@ -695,10 +685,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
             // NB: This will be a no-op if we're collapsing margins with our children since that
             // can only happen if we have no block-start padding and border.
             sequential_layout_state.advance_block_position(
-                (pbm.padding.block_start +
+                pbm.padding.block_start +
                     pbm.border.block_start +
-                    clearance.unwrap_or_else(Au::zero).into())
-                .into(),
+                    clearance.unwrap_or_else(Au::zero),
             );
 
             // We are about to lay out children. Update the offset between the block formatting
@@ -710,8 +699,8 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
                 .floats
                 .containing_block_info
                 .inline_start +
-                pbm.padding.inline_start.into() +
-                pbm.border.inline_start.into() +
+                pbm.padding.inline_start +
+                pbm.border.inline_start +
                 margin.inline_start.into();
             let new_cb_offsets = ContainingBlockPositionInfo {
                 block_start: sequential_layout_state.bfc_relative_block_position,
@@ -761,7 +750,7 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
     let computed_min_block_size = style.min_block_size();
     block_margins_collapsed_with_children.collapsed_through = collapsible_margins_in_children
         .collapsed_through &&
-        pbm.padding_border_sums.block == Length::zero() &&
+        pbm.padding_border_sums.block == Au::zero() &&
         (computed_block_size.is_definitely_zero() || computed_block_size.is_auto()) &&
         (computed_min_block_size.is_definitely_zero() || computed_min_block_size.is_auto());
 
@@ -785,7 +774,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
         // the block direction. In that case, the ceiling for floats is effectively raised
         // as long as no floats in the overflowing content lowered it.
         sequential_layout_state.advance_block_position(
-            (block_size - content_block_size + pbm.padding.block_end + pbm.border.block_end).into(),
+            Au::from(block_size - content_block_size) +
+                pbm.padding.block_end +
+                pbm.border.block_end,
         );
 
         if !end_margin_can_collapse_with_children {
@@ -798,12 +789,12 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
         start_corner: LogicalVec2 {
             block: (pbm.padding.block_start +
                 pbm.border.block_start +
-                clearance.unwrap_or_else(Au::zero).into()),
-            inline: pbm.padding.inline_start + pbm.border.inline_start + margin.inline_start,
+                clearance.unwrap_or_else(Au::zero)),
+            inline: pbm.padding.inline_start + pbm.border.inline_start + margin.inline_start.into(),
         },
         size: LogicalVec2 {
-            block: block_size,
-            inline: containing_block_for_children.inline_size,
+            block: block_size.into(),
+            inline: containing_block_for_children.inline_size.into(),
         },
     };
 
@@ -811,9 +802,9 @@ fn layout_in_flow_non_replaced_block_level_same_formatting_context(
         base_fragment_info,
         style.clone(),
         flow_layout.fragments,
-        content_rect,
-        pbm.padding,
-        pbm.border,
+        content_rect.into(),
+        pbm.padding.into(),
+        pbm.border.into(),
         margin,
         clearance.map(|t| t.into()),
         block_margins_collapsed_with_children,
@@ -873,22 +864,25 @@ impl NonReplacedFormattingContext {
         let content_rect = LogicalRect {
             start_corner: LogicalVec2 {
                 block: pbm.padding.block_start + pbm.border.block_start,
-                inline: pbm.padding.inline_start + pbm.border.inline_start + margin.inline_start,
+                inline: pbm.padding.inline_start +
+                    pbm.border.inline_start +
+                    margin.inline_start.into(),
             },
             size: LogicalVec2 {
-                block: block_size,
-                inline: containing_block_for_children.inline_size,
+                block: block_size.into(),
+                inline: containing_block_for_children.inline_size.into(),
             },
         };
 
         let block_margins_collapsed_with_children = CollapsedBlockMargins::from_margin(&margin);
+
         BoxFragment::new(
             self.base_fragment_info,
             self.style.clone(),
             layout.fragments,
-            content_rect,
-            pbm.padding,
-            pbm.border,
+            content_rect.into(),
+            pbm.padding.into(),
+            pbm.border.into(),
             margin,
             None, /* clearance */
             block_margins_collapsed_with_children,
@@ -968,7 +962,7 @@ impl NonReplacedFormattingContext {
                     containing_block,
                     &collapsed_margin_block_start,
                     &pbm,
-                    &content_size + &pbm.padding_border_sums,
+                    &content_size + &pbm.padding_border_sums.clone().into(),
                     &self.style,
                 );
         } else {
@@ -987,11 +981,13 @@ impl NonReplacedFormattingContext {
             let minimum_size_of_block = &LogicalVec2 {
                 inline: min_box_size.inline,
                 block: block_size.auto_is(|| min_box_size.block),
-            } + &pbm.padding_border_sums;
+            }
+            .into() +
+                &pbm.padding_border_sums;
             let mut placement = PlacementAmongFloats::new(
                 &sequential_layout_state.floats,
                 ceiling,
-                minimum_size_of_block.into(),
+                minimum_size_of_block,
                 &pbm,
             );
             let mut placement_rect;
@@ -999,10 +995,9 @@ impl NonReplacedFormattingContext {
             loop {
                 // First try to place the block using the minimum size as the object size.
                 placement_rect = placement.place();
-                let proposed_inline_size = Length::from(
-                    placement_rect.size.inline - pbm.padding_border_sums.inline.into(),
-                )
-                .clamp_between_extremums(min_box_size.inline, max_box_size.inline);
+                let proposed_inline_size =
+                    Length::from(placement_rect.size.inline - pbm.padding_border_sums.inline)
+                        .clamp_between_extremums(min_box_size.inline, max_box_size.inline);
 
                 // Now lay out the block using the inline size we calculated from the placement.
                 // Later we'll check to see if the resulting block size is compatible with the
@@ -1034,7 +1029,7 @@ impl NonReplacedFormattingContext {
                 // size of auto. Try to fit it into our precalculated placement among the
                 // floats. If it fits, then we can stop trying layout candidates.
                 if placement.try_to_expand_for_auto_block_size(
-                    (content_size.block + pbm.padding_border_sums.block).into(),
+                    Au::from(content_size.block) + pbm.padding_border_sums.block,
                     &placement_rect.size,
                 ) {
                     break;
@@ -1064,7 +1059,7 @@ impl NonReplacedFormattingContext {
                 sequential_layout_state,
                 containing_block,
                 &pbm,
-                content_size.inline + pbm.padding_border_sums.inline,
+                content_size.inline + pbm.padding_border_sums.inline.into(),
                 placement_rect.into(),
             );
         }
@@ -1086,10 +1081,8 @@ impl NonReplacedFormattingContext {
         // Margins can never collapse into independent formatting contexts.
         sequential_layout_state.collapse_margins();
         sequential_layout_state.advance_block_position(
-            (pbm.padding_border_sums.block +
-                content_size.block +
-                clearance.unwrap_or_else(Length::zero))
-            .into(),
+            pbm.padding_border_sums.block +
+                (content_size.block + clearance.unwrap_or_else(Length::zero)).into(),
         );
         sequential_layout_state.adjoin_assign(&CollapsedMargin::new(margin.block_end));
 
@@ -1097,19 +1090,22 @@ impl NonReplacedFormattingContext {
             start_corner: LogicalVec2 {
                 block: pbm.padding.block_start +
                     pbm.border.block_start +
-                    clearance.unwrap_or_else(Length::zero),
-                inline: pbm.padding.inline_start + pbm.border.inline_start + margin.inline_start,
+                    clearance.unwrap_or_else(Length::zero).into(),
+                inline: pbm.padding.inline_start +
+                    pbm.border.inline_start +
+                    margin.inline_start.into(),
             },
-            size: content_size,
+            size: content_size.into(),
         };
         let block_margins_collapsed_with_children = CollapsedBlockMargins::from_margin(&margin);
+
         BoxFragment::new(
             self.base_fragment_info,
             self.style.clone(),
             layout.fragments,
-            content_rect,
-            pbm.padding,
-            pbm.border,
+            content_rect.into(),
+            pbm.padding.into(),
+            pbm.border.into(),
             margin,
             clearance,
             block_margins_collapsed_with_children,
@@ -1149,7 +1145,7 @@ fn layout_in_flow_replaced_block_level<'a>(
         //  than defined by section 10.3.3. CSS 2 does not define when a UA may put said
         //  element next to the float or by how much said element may become narrower."
         let collapsed_margin_block_start = CollapsedMargin::new(margin_block_start);
-        let size = &content_size + &pbm.padding_border_sums.clone().into();
+        let size = &content_size + &pbm.padding_border_sums.clone();
         (clearance, (margin_inline_start, margin_inline_end)) =
             solve_clearance_and_inline_margins_avoiding_floats(
                 sequential_layout_state,
@@ -1191,22 +1187,23 @@ fn layout_in_flow_replaced_block_level<'a>(
     let start_corner = LogicalVec2 {
         block: pbm.padding.block_start +
             pbm.border.block_start +
-            clearance.unwrap_or_else(Length::zero),
-        inline: pbm.padding.inline_start + pbm.border.inline_start + margin.inline_start,
+            clearance.unwrap_or_else(Length::zero).into(),
+        inline: pbm.padding.inline_start + pbm.border.inline_start + margin.inline_start.into(),
     };
 
     let content_rect = LogicalRect {
         start_corner,
-        size: content_size.into(),
+        size: content_size,
     };
     let block_margins_collapsed_with_children = CollapsedBlockMargins::from_margin(&margin);
+
     BoxFragment::new(
         base_fragment_info,
         style.clone(),
         fragments,
-        content_rect,
-        pbm.padding,
-        pbm.border,
+        content_rect.into(),
+        pbm.padding.into(),
+        pbm.border.into(),
         margin,
         clearance,
         block_margins_collapsed_with_children,
@@ -1245,7 +1242,7 @@ fn solve_containing_block_padding_border_and_margin_for_in_flow_box<'a>(
             let margin_inline_start = pbm.margin.inline_start.auto_is(Length::zero);
             let margin_inline_end = pbm.margin.inline_end.auto_is(Length::zero);
             containing_block.inline_size -
-                pbm.padding_border_sums.inline -
+                pbm.padding_border_sums.inline.into() -
                 margin_inline_start -
                 margin_inline_end
         })
@@ -1355,7 +1352,8 @@ fn solve_inline_margins_for_in_flow_block_level(
     pbm: &PaddingBorderMargin,
     inline_size: Length,
 ) -> (Length, Length) {
-    let free_space = containing_block.inline_size - pbm.padding_border_sums.inline - inline_size;
+    let free_space =
+        containing_block.inline_size - pbm.padding_border_sums.inline.into() - inline_size;
     let margin_inline_start = match (pbm.margin.inline_start, pbm.margin.inline_end) {
         (LengthOrAuto::Auto, LengthOrAuto::Auto) => Length::zero().max(free_space / 2.),
         (LengthOrAuto::Auto, LengthOrAuto::LengthPercentage(end)) => {
@@ -1387,12 +1385,16 @@ struct PlacementState {
     current_margin: CollapsedMargin,
     current_block_direction_position: Length,
     inflow_baselines: Baselines,
+    is_inline_block_context: bool,
 }
 
 impl PlacementState {
     fn new(
         collapsible_with_parent_start_margin: CollapsibleWithParentStartMargin,
+        containing_block_style: &ComputedValues,
     ) -> PlacementState {
+        let is_inline_block_context =
+            containing_block_style.get_box().clone_display() == Display::InlineBlock;
         PlacementState {
             next_in_flow_margin_collapses_with_parent_start_margin:
                 collapsible_with_parent_start_margin.0,
@@ -1401,6 +1403,7 @@ impl PlacementState {
             current_margin: CollapsedMargin::zero(),
             current_block_direction_position: Length::zero(),
             inflow_baselines: Baselines::default(),
+            is_inline_block_context,
         }
     }
 
@@ -1411,15 +1414,27 @@ impl PlacementState {
     ) {
         self.place_fragment(fragment, sequential_layout_state);
 
-        if let Fragment::Box(box_fragment) = fragment {
-            let box_block_offset = box_fragment.content_rect.start_corner.block.into();
-            match (self.inflow_baselines.first, box_fragment.baselines.first) {
-                (None, Some(first)) => self.inflow_baselines.first = Some(first + box_block_offset),
-                _ => {},
-            }
-            if let Some(last) = box_fragment.baselines.last {
-                self.inflow_baselines.last = Some(last + box_block_offset);
-            }
+        let box_fragment = match fragment {
+            Fragment::Box(box_fragment) => box_fragment,
+            _ => return,
+        };
+
+        // From <https://drafts.csswg.org/css-align-3/#baseline-export>:
+        // > When finding the first/last baseline set of an inline-block, any baselines
+        // > contributed by table boxes must be skipped. (This quirk is a legacy behavior from
+        // > [CSS2].)
+        let display = box_fragment.style.clone_display();
+        let is_table = display == Display::Table;
+        if self.is_inline_block_context && is_table {
+            return;
+        }
+
+        let box_block_offset = box_fragment.content_rect.start_corner.block.into();
+        if let (None, Some(first)) = (self.inflow_baselines.first, box_fragment.baselines.first) {
+            self.inflow_baselines.first = Some(first + box_block_offset);
+        }
+        if let Some(last) = box_fragment.baselines.last {
+            self.inflow_baselines.last = Some(last + box_block_offset);
         }
     }
 
