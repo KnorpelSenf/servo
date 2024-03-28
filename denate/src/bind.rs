@@ -1,23 +1,20 @@
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex};
 
-use background_hang_monitor::HangMonitorRegister;
 use compositing_traits::{
     CompositorMsg, CompositorProxy, FontToCompositorMsg, ForwardedToCompositorMsg,
 };
 use crossbeam_channel::unbounded;
 use embedder_traits::EmbedderProxy;
 use euclid::{Point2D, Rect, Scale, Size2D};
-use fxhash::{FxBuildHasher, FxHashMap};
+use fxhash::FxBuildHasher;
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc;
-use layout_thread_2020::LayoutThread;
+use layout_thread_2020::LayoutFactoryImpl;
 use libc::c_void;
 use metrics::PaintTimeMetrics;
 use msg::constellation_msg::{
     PipelineId, PipelineNamespace, PipelineNamespaceId, PipelineNamespaceInstaller,
-    TopLevelBrowsingContextId,
 };
 use net::image_cache::ImageCacheImpl;
 use net::resource_thread::new_resource_threads;
@@ -26,10 +23,10 @@ use net_traits::IpcSend;
 use parking_lot::RwLock;
 use profile::{mem as profile_mem, time as profile_time};
 use script_layout_interface::message::{Msg, Reflow, ReflowGoal, ScriptReflow};
-use script_layout_interface::TrustedNodeAddress;
+use script_layout_interface::{LayoutConfig, LayoutFactory, TrustedNodeAddress};
 use script_traits::WindowSizeData;
 use servo_url::ServoUrl;
-use style::animation::{AnimationSetKey, DocumentAnimationSet, ElementAnimationSet};
+use style::animation::DocumentAnimationSet;
 use url::Url;
 use webrender_api::units::Au;
 use webrender_api::{FontInstanceKey, FontKey};
@@ -61,7 +58,6 @@ impl gfx_traits::WebrenderApi for FontCacheWR {
 
 pub fn main() {
     println!("main");
-    let layout_pair = unbounded::<Msg>();
     let namespace_request_chan = ipc::channel().expect("ipc channel failure");
     println!("setting up pipeline namespace");
     let mut pipeline_namespace = PipelineNamespaceInstaller::default();
@@ -83,16 +79,9 @@ pub fn main() {
 
     println!("creating script channels");
     let script_chan = ipc::channel().expect("ipc channel failure");
-    let pipeline_port = ipc::channel().expect("ipc channel failure");
 
     println!("creating background hang monitor register");
     let constellation_chan = ipc::channel().expect("ipc channel failure");
-    let constellation_chan_2 = ipc::channel().expect("ipc channel failure");
-    let control_chan = ipc::channel().expect("ipc channel failure");
-    let background_hang_monitor_register =
-        HangMonitorRegister::init(constellation_chan.0.clone(), control_chan.1, false);
-
-    let layout_chan = ipc::channel().expect("ipc channel failure");
 
     println!("creating webrender ipc sender");
     let webrender_chan = ipc::channel().expect("ipc channel failure");
@@ -138,42 +127,29 @@ pub fn main() {
     let url = ServoUrl::from_url(Url::parse("about:blank").unwrap());
 
     println!("creating layout thread");
-    LayoutThread::create(
-        pipeline_id,
-        TopLevelBrowsingContextId::new(),
-        url.clone(),
-        false,
-        layout_pair.clone(),
-        pipeline_port.1,
-        background_hang_monitor_register,
-        layout_chan.0,
-        script_chan.0.clone(),
+    let mut layout = LayoutFactoryImpl().create(LayoutConfig {
+        id: pipeline_id,
+        url: url.clone(),
+        is_iframe: false,
+        constellation_chan: constellation_chan.0.clone(),
+        script_chan: script_chan.0.clone(),
         image_cache,
         font_cache_thread,
-        time_profiler_chan.clone(),
-        mem_profiler_chan,
+        time_profiler_chan: time_profiler_chan.clone(),
         webrender_api_sender,
-        PaintTimeMetrics::new(
+        paint_time_metrics: PaintTimeMetrics::new(
             pipeline_id,
             time_profiler_chan,
-            constellation_chan_2.0,
+            constellation_chan.0,
             script_chan.0,
             url.clone(),
             0,
         ),
-        Arc::new(AtomicBool::new(false)),
-        WindowSizeData {
+        window_size: WindowSizeData {
             initial_viewport: Size2D::new(800.0f32, 600.0f32),
             device_pixel_ratio: Scale::new(1.0),
         },
-    );
-
-    let send = move |msg: Msg| match layout_pair.0.send(msg) {
-        Ok(()) => println!("sent"),
-        Err(e) => println!("err {:?}", e),
-    };
-
-    send(Msg::SetFinalUrl(url));
+    });
 
     let reflow_complete_sender = unbounded();
     let reflow = ScriptReflow {
@@ -204,9 +180,7 @@ pub fn main() {
             sets: servo_arc::Arc::new(RwLock::new(HashMap::with_hasher(FxBuildHasher::default()))),
         },
     };
-    send(Msg::Reflow(reflow));
-
-    let ev = reflow_complete_sender.1.recv().expect("reflow err");
+    layout.process(Msg::Reflow(reflow));
 
     println!("DONE OMG");
 }
