@@ -188,5 +188,5 @@ pub fn main() {
     };
 
     println!("processing reflow event");
-    layout.process(Msg::Reflow(reflow));
+    let display_list = layout.process(Msg::Reflow(reflow));
 }
