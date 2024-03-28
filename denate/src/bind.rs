@@ -27,6 +27,7 @@ use script_layout_interface::{LayoutConfig, LayoutFactory, TrustedNodeAddress};
 use script_traits::WindowSizeData;
 use servo_url::ServoUrl;
 use style::animation::DocumentAnimationSet;
+use style::thread_state::initialize_layout_worker_thread;
 use url::Url;
 use webrender_api::units::Au;
 use webrender_api::{FontInstanceKey, FontKey};
@@ -58,6 +59,10 @@ impl gfx_traits::WebrenderApi for FontCacheWR {
 
 pub fn main() {
     println!("main");
+    
+    println!("initializing layout worker thread");
+    initialize_layout_worker_thread();
+
     let namespace_request_chan = ipc::channel().expect("ipc channel failure");
     println!("setting up pipeline namespace");
     let mut pipeline_namespace = PipelineNamespaceInstaller::default();
