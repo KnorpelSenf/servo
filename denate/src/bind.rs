@@ -150,6 +150,7 @@ pub fn main() {
             device_pixel_ratio: Scale::new(1.0),
         },
     });
+    println!("creating reflow event");
 
     let reflow_complete_sender = unbounded();
     let reflow = ScriptReflow {
@@ -180,7 +181,7 @@ pub fn main() {
             sets: servo_arc::Arc::new(RwLock::new(HashMap::with_hasher(FxBuildHasher::default()))),
         },
     };
-    layout.process(Msg::Reflow(reflow));
 
-    println!("DONE OMG");
+    println!("processing reflow event");
+    layout.process(Msg::Reflow(reflow));
 }
