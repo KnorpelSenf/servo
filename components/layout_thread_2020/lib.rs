@@ -599,8 +599,10 @@ impl LayoutThread {
     ) {
         println!("handle reflow");
         let document = unsafe { ServoLayoutNode::<DOMLayoutData>::new(&data.document) };
+        println!("-4");
+        let document = document.as_document();
         println!("-3");
-        let document = document.as_document().unwrap();
+        let document = document.unwrap();
 
         println!("-2");
 
