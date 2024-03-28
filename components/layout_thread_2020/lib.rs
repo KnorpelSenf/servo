@@ -599,12 +599,18 @@ impl LayoutThread {
     ) {
         println!("handle reflow");
         let document = unsafe { ServoLayoutNode::<DOMLayoutData>::new(&data.document) };
+        println!("-3");
         let document = document.as_document().unwrap();
+
+        println!("-2");
 
         let mut rw_data = possibly_locked_rw_data.lock();
 
+        println!("-1");
+
         let root_element = match document.root_element() {
             None => {
+                println!("reflow with missing root");
                 // Since we cannot compute anything, give spec-required placeholders.
                 debug!("layout: No root node: bailing");
                 match data.reflow_goal {
@@ -660,10 +666,14 @@ impl LayoutThread {
             Some(x) => x,
         };
 
+        println!("0");
+
         // Calculate the actual viewport as per DEVICE-ADAPT § 6
         // If the entire flow tree is invalid, then it will be reflowed anyhow.
         let document_shared_lock = document.style_shared_lock();
         let author_guard = document_shared_lock.read();
+
+        println!("1");
 
         let ua_stylesheets = &*UA_STYLESHEETS;
         let ua_or_user_guard = ua_stylesheets.shared_lock.read();
@@ -672,6 +682,8 @@ impl LayoutThread {
             ua_or_user: &ua_or_user_guard,
         };
 
+        println!("2");
+
         let had_used_viewport_units = self.stylist.device().used_viewport_units();
         let viewport_size_changed = self.handle_viewport_change(data.window_size, &guards);
         if viewport_size_changed && had_used_viewport_units {
@@ -679,6 +691,8 @@ impl LayoutThread {
                 data.hint.insert(RestyleHint::recascade_subtree());
             }
         }
+
+        println!("3");
 
         if self.first_reflow.get() {
             for stylesheet in &ua_stylesheets.user_or_user_agent_stylesheets {
@@ -702,16 +716,24 @@ impl LayoutThread {
             }
         }
 
+        println!("4");
+
         if data.stylesheets_changed {
             self.stylist
                 .force_stylesheet_origins_dirty(Origin::Author.into());
         }
 
+        println!("5");
+
         // Flush shadow roots stylesheets if dirty.
         document.flush_shadow_roots_stylesheets(&mut self.stylist, guards.author);
 
+        println!("6");
+
         let restyles = std::mem::take(&mut data.pending_restyles);
         debug!("Draining restyles: {}", restyles.len());
+
+        println!("7");
 
         let mut map = SnapshotMap::new();
         let elements_with_snapshot: Vec<_> = restyles
@@ -723,6 +745,8 @@ impl LayoutThread {
                     .unwrap()
             })
             .collect();
+
+        println!("8");
 
         for (el, restyle) in restyles {
             let el = unsafe {
@@ -752,11 +776,15 @@ impl LayoutThread {
             debug!("Noting restyle for {:?}: {:?}", el, style_data);
         }
 
+        println!("9");
+
         self.stylist.flush(&guards, Some(root_element), Some(&map));
 
         let rayon_pool = STYLE_THREAD_POOL.lock().unwrap();
         let rayon_pool = rayon_pool.pool();
         let rayon_pool = rayon_pool.as_ref();
+
+        println!("creating layout context");
 
         // Create a layout context for use throughout the following passes.
         let mut layout_context = self.build_layout_context(
