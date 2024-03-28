@@ -51,7 +51,7 @@ fn get_placeholder_image(webrender_api: &WebrenderIpcSender, data: &[u8]) -> Arc
     println!("go get");
     let mut image = load_from_memory(&data, CorsStatus::Unsafe).unwrap();
     println!("loaded");
-    set_webrender_image_key(webrender_api, &mut image);
+    set_webrender_image_key(webrender_api, &mut image, Some(webrender_api::ImageKey(IdNamespace(0), 0)));
     println!("set");
     Arc::new(image)
 }

@@ -1187,7 +1187,6 @@ dependencies = [
  "gfx_traits",
  "ipc-channel",
  "layout_thread_2020",
- "layout_traits",
  "libc",
  "log",
  "metrics",

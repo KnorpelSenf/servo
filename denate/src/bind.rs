@@ -13,7 +13,6 @@ use fxhash::{FxBuildHasher, FxHashMap};
 use gfx::font_cache_thread::FontCacheThread;
 use ipc_channel::ipc;
 use layout_thread_2020::LayoutThread;
-use layout_traits::LayoutThreadFactory;
 use libc::c_void;
 use metrics::PaintTimeMetrics;
 use msg::constellation_msg::{
@@ -65,7 +64,7 @@ pub fn main() {
     let layout_pair = unbounded::<Msg>();
     let namespace_request_chan = ipc::channel().expect("ipc channel failure");
     println!("setting up pipeline namespace");
-    let mut pipeline_namespace = PipelineNamespaceInstaller::new();
+    let mut pipeline_namespace = PipelineNamespaceInstaller::default();
     println!("setting sender");
     pipeline_namespace.set_sender(namespace_request_chan.0);
     println!("installing namespace");
@@ -160,6 +159,7 @@ pub fn main() {
             constellation_chan_2.0,
             script_chan.0,
             url.clone(),
+            0,
         ),
         Arc::new(AtomicBool::new(false)),
         WindowSizeData {
