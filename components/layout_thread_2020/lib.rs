@@ -462,6 +462,7 @@ impl LayoutThread {
 
     /// Receives and dispatches messages from the script and constellation threads
     fn handle_request<'a, 'b>(&mut self, request: Request) {
+        println!("handle request");
         let rw_data = self.rw_data.clone();
         let mut possibly_locked_rw_data = Some(rw_data.lock().unwrap());
         let mut rw_data = RwData {
@@ -494,6 +495,7 @@ impl LayoutThread {
         request: Msg,
         possibly_locked_rw_data: &mut RwData<'a, 'b>,
     ) {
+        println!("handle_request_helper");
         match request {
             Msg::SetQuirksMode(mode) => self.handle_set_quirks_mode(mode),
             Msg::GetRPC(response_chan) => {
@@ -595,6 +597,7 @@ impl LayoutThread {
         data: &mut ScriptReflowResult,
         possibly_locked_rw_data: &mut RwData<'a, 'b>,
     ) {
+        println!("handle reflow");
         let document = unsafe { ServoLayoutNode::<DOMLayoutData>::new(&data.document) };
         let document = document.as_document().unwrap();
 
