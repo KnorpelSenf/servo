@@ -53,7 +53,7 @@ pub struct Promise {
     permanent_js_root: Heap<JSVal>,
 }
 
-/// Private helper to enable adding new methods to Rc<Promise>.
+/// Private helper to enable adding new methods to `Rc<Promise>`.
 trait PromiseHelper {
     fn initialize(&self, cx: SafeJSContext);
 }
@@ -88,7 +88,7 @@ impl Drop for Promise {
 
 impl Promise {
     pub fn new(global: &GlobalScope) -> Rc<Promise> {
-        let realm = enter_realm(&*global);
+        let realm = enter_realm(global);
         let comp = InRealm::Entered(&realm);
         Promise::new_in_current_realm(comp)
     }
@@ -175,7 +175,7 @@ impl Promise {
         T: ToJSValConvertible,
     {
         let cx = GlobalScope::get_cx();
-        let _ac = enter_realm(&*self);
+        let _ac = enter_realm(self);
         rooted!(in(*cx) let mut v = UndefinedValue());
         unsafe {
             val.to_jsval(*cx, v.handle_mut());
@@ -198,7 +198,7 @@ impl Promise {
         T: ToJSValConvertible,
     {
         let cx = GlobalScope::get_cx();
-        let _ac = enter_realm(&*self);
+        let _ac = enter_realm(self);
         rooted!(in(*cx) let mut v = UndefinedValue());
         unsafe {
             val.to_jsval(*cx, v.handle_mut());
@@ -209,7 +209,7 @@ impl Promise {
     #[allow(unsafe_code)]
     pub fn reject_error(&self, error: Error) {
         let cx = GlobalScope::get_cx();
-        let _ac = enter_realm(&*self);
+        let _ac = enter_realm(self);
         rooted!(in(*cx) let mut v = UndefinedValue());
         unsafe {
             error.to_jsval(*cx, &self.global(), v.handle_mut());
@@ -229,10 +229,7 @@ impl Promise {
     #[allow(unsafe_code)]
     pub fn is_fulfilled(&self) -> bool {
         let state = unsafe { GetPromiseState(self.promise_obj()) };
-        match state {
-            PromiseState::Rejected | PromiseState::Fulfilled => true,
-            _ => false,
-        }
+        matches!(state, PromiseState::Rejected | PromiseState::Fulfilled)
     }
 
     #[allow(unsafe_code)]
@@ -246,7 +243,7 @@ impl Promise {
 
     #[allow(unsafe_code)]
     pub fn append_native_handler(&self, handler: &PromiseNativeHandler, _comp: InRealm) {
-        let _ais = AutoEntryScript::new(&*handler.global());
+        let _ais = AutoEntryScript::new(&handler.global());
         let cx = GlobalScope::get_cx();
         rooted!(in(*cx) let resolve_func =
                 create_native_handler_function(*cx,

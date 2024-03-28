@@ -15,6 +15,7 @@ use script_layout_interface::wrapper_traits::{
 };
 use script_layout_interface::{LayoutNodeType, StyleAndOpaqueLayoutData, StyleData};
 use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
+use selectors::bloom::{BloomFilter, BLOOM_HASH_MASK};
 use selectors::matching::{ElementSelectorFlags, MatchingContext, VisitedHandlingMode};
 use selectors::sink::Push;
 use servo_arc::{Arc, ArcBorrow};
@@ -22,6 +23,7 @@ use servo_atoms::Atom;
 use style::animation::AnimationSetKey;
 use style::applicable_declarations::ApplicableDeclarationBlock;
 use style::attr::AttrValue;
+use style::bloom::each_relevant_element_hash;
 use style::context::SharedStyleContext;
 use style::data::ElementData;
 use style::dom::{DomChildren, LayoutIterator, TDocument, TElement, TNode, TShadowRoot};
@@ -355,8 +357,8 @@ impl<'dom, LayoutDataType: LayoutDataTrait> style::dom::TElement
 
     fn has_animations(&self, context: &SharedStyleContext) -> bool {
         // This is not used for pseudo elements currently so we can pass None.
-        return self.has_css_animations(context, /* pseudo_element = */ None) ||
-            self.has_css_transitions(context, /* pseudo_element = */ None);
+        self.has_css_animations(context, /* pseudo_element = */ None) ||
+            self.has_css_transitions(context, /* pseudo_element = */ None)
     }
 
     fn has_css_animations(
@@ -407,7 +409,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> style::dom::TElement
             Some(None) => AtomString::default(),
             None => AtomString::from(&*self.element.get_lang_for_layout()),
         };
-        extended_filtering(&element_lang, &*value)
+        extended_filtering(&element_lang, value)
     }
 
     fn is_html_document_body_element(&self) -> bool {
@@ -583,7 +585,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
             NonTSPseudoClass::Link | NonTSPseudoClass::AnyLink => self.is_link(),
             NonTSPseudoClass::Visited => false,
 
-            NonTSPseudoClass::Lang(ref lang) => self.match_element_lang(None, &*lang),
+            NonTSPseudoClass::Lang(ref lang) => self.match_element_lang(None, lang),
 
             NonTSPseudoClass::ServoNonZeroBorder => {
                 match self
@@ -682,6 +684,11 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
             }
         }
     }
+
+    fn add_element_unique_hashes(&self, filter: &mut BloomFilter) -> bool {
+        each_relevant_element_hash(*self, |hash| filter.insert_hash(hash & BLOOM_HASH_MASK));
+        true
+    }
 }
 
 /// A wrapper around elements that ensures layout can only
@@ -724,7 +731,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ThreadSafeLayoutElement<'dom>
     fn as_node(&self) -> ServoThreadSafeLayoutNode<'dom, LayoutDataType> {
         ServoThreadSafeLayoutNode {
             node: self.element.as_node(),
-            pseudo: self.pseudo.clone(),
+            pseudo: self.pseudo,
         }
     }
 
@@ -734,7 +741,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ThreadSafeLayoutElement<'dom>
 
     fn with_pseudo(&self, pseudo: PseudoElementType) -> Self {
         ServoThreadSafeLayoutElement {
-            element: self.element.clone(),
+            element: self.element,
             pseudo,
         }
     }
@@ -745,6 +752,10 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ThreadSafeLayoutElement<'dom>
 
     unsafe fn unsafe_get(self) -> ServoLayoutElement<'dom, LayoutDataType> {
         self.element
+    }
+
+    fn get_local_name(&self) -> &LocalName {
+        self.element.local_name()
     }
 
     fn get_attr_enum(&self, namespace: &Namespace, name: &LocalName) -> Option<&AttrValue> {
@@ -936,6 +947,13 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ::selectors::Element
                 p.element.insert_selector_flags(flags);
             }
         }
+    }
+
+    fn add_element_unique_hashes(&self, filter: &mut BloomFilter) -> bool {
+        each_relevant_element_hash(self.element, |hash| {
+            filter.insert_hash(hash & BLOOM_HASH_MASK)
+        });
+        true
     }
 }
 

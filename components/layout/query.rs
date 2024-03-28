@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Utilities for querying the layout, as needed by the layout thread.
+//! Utilities for querying the layout, as needed by layout.
 
 use std::cmp::{max, min};
 use std::ops::Deref;
@@ -988,10 +988,10 @@ fn process_resolved_style_request_internal<'dom>(
         },
     };
 
-    let positioned = match style.get_box().position {
-        Position::Relative | Position::Sticky | Position::Fixed | Position::Absolute => true,
-        _ => false,
-    };
+    let positioned = matches!(
+        style.get_box().position,
+        Position::Relative | Position::Sticky | Position::Fixed | Position::Absolute
+    );
 
     //TODO: determine whether requested property applies to the element.
     //      eg. width does not apply to non-replaced inline elements.

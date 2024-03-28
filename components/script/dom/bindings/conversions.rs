@@ -228,8 +228,8 @@ pub unsafe fn jsstring_to_str(cx: *mut JSContext, s: *mut JSString) -> DOMString
         let mut length = 0;
         let chars = JS_GetTwoByteStringCharsAndLength(cx, ptr::null(), s, &mut length);
         assert!(!chars.is_null());
-        let potentially_ill_formed_utf16 = slice::from_raw_parts(chars, length as usize);
-        let mut s = String::with_capacity(length as usize);
+        let potentially_ill_formed_utf16 = slice::from_raw_parts(chars, length);
+        let mut s = String::with_capacity(length);
         for item in char::decode_utf16(potentially_ill_formed_utf16.iter().cloned()) {
             match item {
                 Ok(c) => s.push(c),
@@ -282,7 +282,7 @@ impl FromJSValConvertible for USVString {
         let mut length = 0;
         let chars = JS_GetTwoByteStringCharsAndLength(cx, ptr::null(), jsstr, &mut length);
         assert!(!chars.is_null());
-        let char_vec = slice::from_raw_parts(chars as *const u16, length as usize);
+        let char_vec = slice::from_raw_parts(chars, length);
         Ok(ConversionResult::Success(USVString(
             String::from_utf16_lossy(char_vec),
         )))
@@ -324,7 +324,7 @@ impl FromJSValConvertible for ByteString {
             let chars = JS_GetLatin1StringCharsAndLength(cx, ptr::null(), string, &mut length);
             assert!(!chars.is_null());
 
-            let char_slice = slice::from_raw_parts(chars as *mut u8, length as usize);
+            let char_slice = slice::from_raw_parts(chars as *mut u8, length);
             return Ok(ConversionResult::Success(ByteString::new(
                 char_slice.to_vec(),
             )));
@@ -332,7 +332,7 @@ impl FromJSValConvertible for ByteString {
 
         let mut length = 0;
         let chars = JS_GetTwoByteStringCharsAndLength(cx, ptr::null(), string, &mut length);
-        let char_vec = slice::from_raw_parts(chars, length as usize);
+        let char_vec = slice::from_raw_parts(chars, length);
 
         if char_vec.iter().any(|&c| c > 0xFF) {
             throw_type_error(cx, "Invalid ByteString");
@@ -395,7 +395,7 @@ pub unsafe fn get_dom_class(obj: *mut JSObject) -> Result<&'static DOMClass, ()>
     if is_dom_class(&*clasp) {
         trace!("plain old dom object");
         let domjsclass: *const DOMJSClass = clasp as *const DOMJSClass;
-        return Ok(&(&*domjsclass).dom_class);
+        return Ok(&(*domjsclass).dom_class);
     }
     if is_dom_proxy(obj) {
         trace!("proxy dom object");

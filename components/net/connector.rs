@@ -18,8 +18,8 @@ use log::warn;
 use rustls::client::WebPkiVerifier;
 use rustls::{Certificate, ClientConfig, OwnedTrustAnchor, RootCertStore, ServerName};
 
+use crate::async_runtime::HANDLE;
 use crate::hosts::replace_host;
-use crate::http_loader::HANDLE;
 
 pub const BUF_SIZE: usize = 32768;
 
@@ -54,7 +54,7 @@ impl Service<Destination> for ServoHttpConnector {
             let authority = if let Some(port) = auth.port() {
                 format!("{}:{}", host, port.as_str())
             } else {
-                format!("{}", &*host)
+                (*host).to_string()
             };
 
             if let Ok(authority) = Authority::from_maybe_shared(authority) {

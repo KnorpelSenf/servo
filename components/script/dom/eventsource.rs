@@ -234,7 +234,7 @@ impl EventSourceContext {
                     .to_jsval(*GlobalScope::get_cx(), data.handle_mut())
             };
             MessageEvent::new(
-                &*event_source.global(),
+                &event_source.global(),
                 type_,
                 false,
                 false,
@@ -258,7 +258,7 @@ impl EventSourceContext {
             task!(dispatch_the_event_source_event: move || {
                 let event_source = event_source.root();
                 if event_source.ready_state.get() != ReadyState::Closed {
-                    event.root().upcast::<Event>().fire(&event_source.upcast());
+                    event.root().upcast::<Event>().fire(event_source.upcast());
                 }
             }),
             &global,
@@ -387,7 +387,7 @@ impl FetchResponseListener for EventSourceContext {
         }
 
         while !input.is_empty() {
-            match utf8::decode(&input) {
+            match utf8::decode(input) {
                 Ok(s) => {
                     self.parse(s.chars());
                     return;
@@ -414,7 +414,7 @@ impl FetchResponseListener for EventSourceContext {
     }
 
     fn process_response_eof(&mut self, _response: Result<ResourceFetchTiming, NetworkError>) {
-        if let Some(_) = self.incomplete_utf8.take() {
+        if self.incomplete_utf8.take().is_some() {
             self.parse("\u{FFFD}".chars());
         }
         self.reestablish_the_connection();
@@ -453,14 +453,14 @@ impl EventSource {
     fn new_inherited(url: ServoUrl, with_credentials: bool) -> EventSource {
         EventSource {
             eventtarget: EventTarget::new_inherited(),
-            url: url,
+            url,
             request: DomRefCell::new(None),
             last_event_id: DomRefCell::new(DOMString::from("")),
             reconnection_time: Cell::new(DEFAULT_RECONNECTION_TIME),
             generation_id: Cell::new(GenerationId(0)),
 
             ready_state: Cell::new(ReadyState::Connecting),
-            with_credentials: with_credentials,
+            with_credentials,
             canceller: DomRefCell::new(Default::default()),
         }
     }
@@ -520,7 +520,7 @@ impl EventSource {
         // TODO: Step 2 relevant settings object
         // Step 3
         let base_url = global.api_base_url();
-        let url_record = match base_url.join(&*url) {
+        let url_record = match base_url.join(&url) {
             Ok(u) => u,
             //  Step 4
             Err(_) => return Err(Error::Syntax),

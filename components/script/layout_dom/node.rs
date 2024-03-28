@@ -82,12 +82,10 @@ impl<'dom, LayoutDataType: LayoutDataTrait> fmt::Debug for ServoLayoutNode<'dom,
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(el) = self.as_element() {
             el.fmt(f)
+        } else if self.is_text_node() {
+            write!(f, "<text node> ({:#x})", self.opaque().0)
         } else {
-            if self.is_text_node() {
-                write!(f, "<text node> ({:#x})", self.opaque().0)
-            } else {
-                write!(f, "<non-text node> ({:#x})", self.opaque().0)
-            }
+            write!(f, "<non-text node> ({:#x})", self.opaque().0)
         }
     }
 }
@@ -211,7 +209,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> LayoutNode<'dom>
     unsafe fn initialize_data(&self) {
         if self.get_style_and_opaque_layout_data().is_none() {
             let opaque = StyleAndOpaqueLayoutData::new(
-                StyleData::new(),
+                StyleData::default(),
                 AtomicRefCell::new(LayoutDataType::default()),
             );
             self.init_style_and_opaque_layout_data(opaque);
@@ -285,7 +283,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ServoThreadSafeLayoutNode<'dom, Layo
     /// Creates a new `ServoThreadSafeLayoutNode` from the given `ServoLayoutNode`.
     pub fn new(node: ServoLayoutNode<'dom, LayoutDataType>) -> Self {
         ServoThreadSafeLayoutNode {
-            node: node.clone(),
+            node,
             pseudo: PseudoElementType::Normal,
         }
     }
@@ -465,7 +463,16 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ThreadSafeLayoutNode<'dom>
         this.iframe_pipeline_id()
     }
 
-    fn get_colspan(&self) -> u32 {
+    fn get_span(&self) -> Option<u32> {
+        unsafe {
+            self.get_jsmanaged()
+                .downcast::<Element>()
+                .unwrap()
+                .get_span()
+        }
+    }
+
+    fn get_colspan(&self) -> Option<u32> {
         unsafe {
             self.get_jsmanaged()
                 .downcast::<Element>()
@@ -474,7 +481,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> ThreadSafeLayoutNode<'dom>
         }
     }
 
-    fn get_rowspan(&self) -> u32 {
+    fn get_rowspan(&self) -> Option<u32> {
         unsafe {
             self.get_jsmanaged()
                 .downcast::<Element>()
@@ -520,7 +527,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> Iterator
             PseudoElementType::Before | PseudoElementType::After => None,
 
             PseudoElementType::DetailsSummary => {
-                let mut current_node = self.current_node.clone();
+                let mut current_node = self.current_node;
                 loop {
                     let next_node = if let Some(ref node) = current_node {
                         if let Some(element) = node.as_element() {
@@ -528,7 +535,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> Iterator
                                 element.has_namespace(&ns!(html))
                             {
                                 self.current_node = None;
-                                return Some(node.clone());
+                                return Some(*node);
                             }
                         }
                         unsafe { node.dangerous_next_sibling() }
@@ -541,7 +548,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> Iterator
             },
 
             PseudoElementType::DetailsContent => {
-                let node = self.current_node.clone();
+                let node = self.current_node;
                 let node = node.and_then(|node| {
                     if node.is_element() &&
                         node.as_element()
@@ -559,7 +566,7 @@ impl<'dom, LayoutDataType: LayoutDataTrait> Iterator
             },
 
             PseudoElementType::Normal => {
-                let node = self.current_node.clone();
+                let node = self.current_node;
                 if let Some(ref node) = node {
                     self.current_node = match node.get_pseudo_element_type() {
                         PseudoElementType::Before => self

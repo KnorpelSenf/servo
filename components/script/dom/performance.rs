@@ -29,7 +29,7 @@ use crate::dom::performancenavigationtiming::PerformanceNavigationTiming;
 use crate::dom::performanceobserver::PerformanceObserver as DOMPerformanceObserver;
 use crate::dom::window::Window;
 
-const INVALID_ENTRY_NAMES: &'static [&'static str] = &[
+const INVALID_ENTRY_NAMES: &[&str] = &[
     "navigationStart",
     "unloadEventStart",
     "unloadEventEnd",
@@ -80,7 +80,7 @@ impl PerformanceEntryList {
                         .as_ref()
                         .map_or(true, |type_| *e.entry_type() == *type_)
             })
-            .map(|e| e.clone())
+            .cloned()
             .collect::<Vec<DomRoot<PerformanceEntry>>>();
         res.sort_by(|a, b| {
             a.start_time()
@@ -469,7 +469,7 @@ impl PerformanceMethods for Performance {
         // Steps 2 to 6.
         let entry = PerformanceMark::new(&global, mark_name, self.now(), 0.);
         // Steps 7 and 8.
-        self.queue_entry(&entry.upcast::<PerformanceEntry>());
+        self.queue_entry(entry.upcast::<PerformanceEntry>());
 
         // Step 9.
         Ok(())
@@ -516,7 +516,7 @@ impl PerformanceMethods for Performance {
         );
 
         // Step 9 and 10.
-        self.queue_entry(&entry.upcast::<PerformanceEntry>());
+        self.queue_entry(entry.upcast::<PerformanceEntry>());
 
         // Step 11.
         Ok(())

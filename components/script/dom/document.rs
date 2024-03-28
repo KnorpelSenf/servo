@@ -9,7 +9,6 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::default::Default;
 use std::mem;
-use std::ptr::NonNull;
 use std::rc::Rc;
 use std::slice::from_ref;
 use std::time::{Duration, Instant};
@@ -26,7 +25,6 @@ use euclid::default::{Point2D, Rect, Size2D};
 use html5ever::{local_name, namespace_url, ns, LocalName, Namespace, QualName};
 use hyper_serde::Serde;
 use ipc_channel::ipc::{self, IpcSender};
-use js::jsapi::JSObject;
 use js::rust::HandleObject;
 use keyboard_types::{Code, Key, KeyState};
 use lazy_static::lazy_static;
@@ -80,7 +78,7 @@ use crate::dom::bindings::callback::ExceptionHandling;
 use crate::dom::bindings::cell::{ref_filter_map, DomRefCell, Ref, RefMut};
 use crate::dom::bindings::codegen::Bindings::BeforeUnloadEventBinding::BeforeUnloadEvent_Binding::BeforeUnloadEventMethods;
 use crate::dom::bindings::codegen::Bindings::DocumentBinding::{
-    DocumentMethods, DocumentReadyState,
+    DocumentMethods, DocumentReadyState, NamedPropertyValue,
 };
 use crate::dom::bindings::codegen::Bindings::EventBinding::Event_Binding::EventMethods;
 use crate::dom::bindings::codegen::Bindings::HTMLIFrameElementBinding::HTMLIFrameElement_Binding::HTMLIFrameElementMethods;
@@ -140,6 +138,7 @@ use crate::dom::htmlhtmlelement::HTMLHtmlElement;
 use crate::dom::htmliframeelement::HTMLIFrameElement;
 use crate::dom::htmlimageelement::HTMLImageElement;
 use crate::dom::htmlinputelement::HTMLInputElement;
+use crate::dom::htmlmetaelement::RefreshRedirectDue;
 use crate::dom::htmlscriptelement::{HTMLScriptElement, ScriptResult};
 use crate::dom::htmltextareaelement::HTMLTextAreaElement;
 use crate::dom::htmltitleelement::HTMLTitleElement;
@@ -175,7 +174,7 @@ use crate::dom::window::{ReflowReason, Window};
 use crate::dom::windowproxy::WindowProxy;
 use crate::fetch::FetchCanceller;
 use crate::realms::{AlreadyInRealm, InRealm};
-use crate::script_runtime::{CommonScriptMsg, JSContext, ScriptThreadEventCategory};
+use crate::script_runtime::{CommonScriptMsg, ScriptThreadEventCategory};
 use crate::script_thread::{MainThreadScriptMsg, ScriptThread};
 use crate::stylesheet_set::StylesheetSetRef;
 use crate::task::TaskBox;
@@ -207,12 +206,12 @@ pub enum FireMouseEventType {
 
 impl FireMouseEventType {
     pub fn as_str(&self) -> &str {
-        match self {
-            &FireMouseEventType::Move => "mousemove",
-            &FireMouseEventType::Over => "mouseover",
-            &FireMouseEventType::Out => "mouseout",
-            &FireMouseEventType::Enter => "mouseenter",
-            &FireMouseEventType::Leave => "mouseleave",
+        match *self {
+            FireMouseEventType::Move => "mousemove",
+            FireMouseEventType::Over => "mouseover",
+            FireMouseEventType::Out => "mouseout",
+            FireMouseEventType::Enter => "mouseenter",
+            FireMouseEventType::Leave => "mouseleave",
         }
     }
 }
@@ -231,6 +230,17 @@ enum FocusTransaction {
     /// A focus operation is in effect.
     /// Contains the element that has most recently requested focus for itself.
     InTransaction(Option<Dom<Element>>),
+}
+
+/// Information about a declarative refresh
+#[derive(JSTraceable, MallocSizeOf)]
+pub enum DeclarativeRefresh {
+    PendingLoad {
+        #[no_trace]
+        url: ServoUrl,
+        time: u64,
+    },
+    CreatedAfterLoad,
 }
 
 /// <https://dom.spec.whatwg.org/#document>
@@ -320,7 +330,7 @@ pub struct Document {
     /// This field is set to the document itself for inert documents.
     /// <https://html.spec.whatwg.org/multipage/#appropriate-template-contents-owner-document>
     appropriate_template_contents_owner_document: MutNullableDom<Document>,
-    /// Information on elements needing restyle to ship over to the layout thread when the
+    /// Information on elements needing restyle to ship over to layout when the
     /// time comes.
     pending_restyles: DomRefCell<HashMap<Dom<Element>, NoTrace<PendingRestyle>>>,
     /// This flag will be true if layout suppressed a reflow attempt that was
@@ -367,7 +377,7 @@ pub struct Document {
     spurious_animation_frames: Cell<u8>,
 
     /// Track the total number of elements in this DOM's tree.
-    /// This is sent to the layout thread every time a reflow is done;
+    /// This is sent to layout every time a reflow is done;
     /// layout uses this to determine if the gains from parallel layout will be worth the overhead.
     ///
     /// See also: <https://github.com/servo/servo/issues/10110>
@@ -435,6 +445,8 @@ pub struct Document {
     animations: DomRefCell<Animations>,
     /// The nearest inclusive ancestors to all the nodes that require a restyle.
     dirty_root: MutNullableDom<Element>,
+    /// <https://html.spec.whatwg.org/multipage/#will-declaratively-refresh>
+    declarative_refresh: DomRefCell<Option<DeclarativeRefresh>>,
 }
 
 #[derive(JSTraceable, MallocSizeOf)]
@@ -622,7 +634,7 @@ impl Document {
 
     #[inline]
     pub fn window(&self) -> &Window {
-        &*self.window
+        &self.window
     }
 
     #[inline]
@@ -701,7 +713,7 @@ impl Document {
                     event.set_trusted(true);
                     // FIXME(nox): Why are errors silenced here?
                     let _ = window.dispatch_event_with_target_override(
-                        &event,
+                        event,
                     );
                 }),
                 self.window.upcast(),
@@ -827,10 +839,9 @@ impl Document {
         let old_mode = self.quirks_mode.replace(new_mode);
 
         if old_mode != new_mode {
-            match self.window.layout_chan() {
-                Some(chan) => chan.send(Msg::SetQuirksMode(new_mode)).unwrap(),
-                None => warn!("Layout channel unavailable"),
-            }
+            let _ = self
+                .window
+                .with_layout(move |layout| layout.process(Msg::SetQuirksMode(new_mode)));
         }
     }
 
@@ -1068,7 +1079,7 @@ impl Document {
             return;
         }
         self.request_focus(
-            self.GetBody().as_ref().map(|e| &*e.upcast()),
+            self.GetBody().as_ref().map(|e| e.upcast()),
             FocusType::Element,
         )
     }
@@ -1161,7 +1172,7 @@ impl Document {
                     kind,
                     text,
                     multiline,
-                    DeviceIntRect::from_untyped(&rect),
+                    DeviceIntRect::from_untyped(&rect.to_box2d()),
                 ));
             }
         }
@@ -1749,8 +1760,8 @@ impl Document {
         let body = self.GetBody();
 
         let target = match (&focused, &body) {
-            (&Some(ref focused), _) => focused.upcast(),
-            (&None, &Some(ref body)) => body.upcast(),
+            (Some(focused), _) => focused.upcast(),
+            (&None, Some(body)) => body.upcast(),
             (&None, &None) => self.window.upcast(),
         };
 
@@ -1826,7 +1837,7 @@ impl Document {
 
     pub fn ime_dismissed(&self) {
         self.request_focus(
-            self.GetBody().as_ref().map(|e| &*e.upcast()),
+            self.GetBody().as_ref().map(|e| e.upcast()),
             FocusType::Element,
         )
     }
@@ -1907,7 +1918,7 @@ impl Document {
             .and_then(DomRoot::downcast::<HTMLBodyElement>)
         {
             let body = body.upcast::<Element>();
-            let value = body.parse_attribute(&ns!(), &local_name, value);
+            let value = body.parse_attribute(&ns!(), local_name, value);
             body.set_attribute(local_name, value);
         }
     }
@@ -1953,7 +1964,7 @@ impl Document {
 
         // If we are running 'fake' animation frames, we unconditionally
         // set up a one-shot timer for script to execute the rAF callbacks.
-        if self.is_faking_animation_frames() && self.window().visible() {
+        if self.is_faking_animation_frames() && !self.window().throttled() {
             warn!("Scheduling fake animation frame. Animation frames tick too fast.");
             let callback = FakeRequestAnimationFrameCallback {
                 document: Trusted::new(self),
@@ -2092,7 +2103,7 @@ impl Document {
             },
             LoadType::PageSource(_) => {
                 if self.has_browsing_context && self.is_fully_active() {
-                    // Note: if the document is not fully active, the layout thread will have exited already.
+                    // Note: if the document is not fully active, layout will have exited already.
                     // The underlying problem might actually be that layout exits while it should be kept alive.
                     // See https://github.com/servo/servo/issues/22507
 
@@ -2149,7 +2160,7 @@ impl Document {
         event.set_trusted(true);
         let event_target = self.window.upcast::<EventTarget>();
         let has_listeners = event_target.has_listeners_for(&atom!("beforeunload"));
-        self.window.dispatch_event_with_target_override(&event);
+        self.window.dispatch_event_with_target_override(event);
         // TODO: Step 6, decrease the event loop's termination nesting level by 1.
         // Step 7
         if has_listeners {
@@ -2205,13 +2216,13 @@ impl Document {
             );
             let event = event.upcast::<Event>();
             event.set_trusted(true);
-            let _ = self.window.dispatch_event_with_target_override(&event);
+            let _ = self.window.dispatch_event_with_target_override(event);
             // TODO Step 6, document visibility steps.
         }
         // Step 7
         if !self.fired_unload.get() {
             let event = Event::new(
-                &self.window.upcast(),
+                self.window.upcast(),
                 atom!("unload"),
                 EventBubbles::Bubbles,
                 EventCancelable::Cancelable,
@@ -2264,7 +2275,7 @@ impl Document {
             None => false,
         };
 
-        // Note: if the document is not fully active, the layout thread will have exited already,
+        // Note: if the document is not fully active, layout will have exited already,
         // and this method will panic.
         // The underlying problem might actually be that layout exits while it should be kept alive.
         // See https://github.com/servo/servo/issues/22507
@@ -2360,7 +2371,7 @@ impl Document {
 
                         // FIXME(nox): Why are errors silenced here?
                         let _ = window.dispatch_event_with_target_override(
-                            &event,
+                            event,
                         );
                     }),
                     self.window.upcast(),
@@ -2382,10 +2393,8 @@ impl Document {
         // TODO: should this only happen on the first document loaded?
         // https://immersive-web.github.io/webxr/#user-intention
         // https://github.com/immersive-web/navigation/issues/10
-        if pref!(dom.webxr.sessionavailable) {
-            if self.window.is_top_level() {
-                self.window.Navigator().Xr().dispatch_sessionavailable();
-            }
+        if pref!(dom.webxr.sessionavailable) && self.window.is_top_level() {
+            self.window.Navigator().Xr().dispatch_sessionavailable();
         }
 
         // Step 12: completely loaded.
@@ -2400,6 +2409,19 @@ impl Document {
                     task!(completely_loaded: move || {
                         let document = document.root();
                         document.completely_loaded.set(true);
+                        if let Some(DeclarativeRefresh::PendingLoad {
+                            url,
+                            time
+                        }) = &*document.declarative_refresh.borrow() {
+                            // https://html.spec.whatwg.org/multipage/#shared-declarative-refresh-steps
+                            document.window.upcast::<GlobalScope>().schedule_callback(
+                                OneshotTimerCallback::RefreshRedirectDue(RefreshRedirectDue {
+                                    window: window_from_node(&*document),
+                                    url: url.clone(),
+                                }),
+                                MsDuration::new(time.saturating_mul(1000)),
+                            );
+                        }
                         // Note: this will, among others, result in the "iframe-load-event-steps" being run.
                         // https://html.spec.whatwg.org/multipage/#iframe-load-event-steps
                         document.notify_constellation_load();
@@ -2408,6 +2430,10 @@ impl Document {
                 )
                 .unwrap();
         }
+    }
+
+    pub fn completely_loaded(&self) -> bool {
+        self.completely_loaded.get()
     }
 
     // https://html.spec.whatwg.org/multipage/#pending-parsing-blocking-script
@@ -2896,10 +2922,7 @@ impl Document {
 }
 
 fn is_character_value_key(key: &Key) -> bool {
-    match key {
-        Key::Character(_) | Key::Enter => true,
-        _ => false,
-    }
+    matches!(key, Key::Character(_) | Key::Enter)
 }
 
 #[derive(MallocSizeOf, PartialEq)]
@@ -2929,12 +2952,12 @@ impl<'dom> LayoutDocumentHelpers<'dom> for LayoutDom<'dom, Document> {
 
     #[inline]
     unsafe fn needs_paint_from_layout(self) {
-        (*self.unsafe_get()).needs_paint.set(true)
+        (self.unsafe_get()).needs_paint.set(true)
     }
 
     #[inline]
     unsafe fn will_paint(self) {
-        (*self.unsafe_get()).needs_paint.set(false)
+        (self.unsafe_get()).needs_paint.set(false)
     }
 
     #[inline]
@@ -3027,10 +3050,7 @@ fn get_registrable_domain_suffix_of_or_is_equal_to(
 
 /// <https://url.spec.whatwg.org/#network-scheme>
 fn url_has_network_scheme(url: &ServoUrl) -> bool {
-    match url.scheme() {
-        "ftp" | "http" | "https" => true,
-        _ => false,
-    }
+    matches!(url.scheme(), "ftp" | "http" | "https")
 }
 
 #[derive(Clone, Copy, Eq, JSTraceable, MallocSizeOf, PartialEq)]
@@ -3088,7 +3108,7 @@ impl Document {
             has_browsing_context,
             implementation: Default::default(),
             content_type,
-            last_modified: last_modified,
+            last_modified,
             url: DomRefCell::new(url),
             // https://dom.spec.whatwg.org/#concept-document-quirks
             quirks_mode: Cell::new(QuirksMode::NoQuirks),
@@ -3158,8 +3178,8 @@ impl Document {
             unload_event_start: Cell::new(Default::default()),
             unload_event_end: Cell::new(Default::default()),
             https_state: Cell::new(HttpsState::None),
-            origin: origin,
-            referrer: referrer,
+            origin,
+            referrer,
             referrer_policy: Cell::new(referrer_policy),
             target_element: MutNullableDom::new(None),
             last_click_info: DomRefCell::new(None),
@@ -3170,8 +3190,8 @@ impl Document {
             fullscreen_element: MutNullableDom::new(None),
             form_id_listener_map: Default::default(),
             interactive_time: DomRefCell::new(interactive_time),
-            tti_window: DomRefCell::new(InteractiveWindow::new()),
-            canceller: canceller,
+            tti_window: DomRefCell::new(InteractiveWindow::default()),
+            canceller,
             throw_on_dynamic_markup_insertion_counter: Cell::new(0),
             page_showing: Cell::new(false),
             salvageable: Cell::new(true),
@@ -3196,6 +3216,7 @@ impl Document {
             },
             animations: DomRefCell::new(Animations::new()),
             dirty_root: Default::default(),
+            declarative_refresh: Default::default(),
         }
     }
 
@@ -3275,7 +3296,7 @@ impl Document {
         proto: Option<HandleObject>,
     ) -> Fallible<DomRoot<Document>> {
         let doc = window.Document();
-        let docloader = DocumentLoader::new(&*doc.loader());
+        let docloader = DocumentLoader::new(&doc.loader());
         Ok(Document::new_with_proto(
             window,
             proto,
@@ -3410,7 +3431,7 @@ impl Document {
         maybe_node
             .iter()
             .flat_map(|node| node.traverse_preorder(ShadowIncluding::No))
-            .filter(|node| callback(&node))
+            .filter(|node| callback(node))
             .count() as u32
     }
 
@@ -3424,7 +3445,7 @@ impl Document {
         maybe_node
             .iter()
             .flat_map(|node| node.traverse_preorder(ShadowIncluding::No))
-            .filter(|node| callback(&node))
+            .filter(|node| callback(node))
             .nth(index as usize)
             .map(|n| DomRoot::from_ref(&*n))
     }
@@ -3441,12 +3462,11 @@ impl Document {
     /// Flushes the stylesheet list, and returns whether any stylesheet changed.
     pub fn flush_stylesheets_for_reflow(&self) -> bool {
         // NOTE(emilio): The invalidation machinery is used on the replicated
-        // list on the layout thread.
+        // list in layout.
         //
         // FIXME(emilio): This really should differentiate between CSSOM changes
         // and normal stylesheets additions / removals, because in the last case
-        // the layout thread already has that information and we could avoid
-        // dirtying the whole thing.
+        // layout already has that information and we could avoid dirtying the whole thing.
         let mut stylesheets = self.stylesheets.borrow_mut();
         let have_changed = stylesheets.has_changed();
         stylesheets.flush_without_invalidation();
@@ -3508,7 +3528,7 @@ impl Document {
     pub fn get_element_by_id(&self, id: &Atom) -> Option<DomRoot<Element>> {
         self.id_map
             .borrow()
-            .get(&id)
+            .get(id)
             .map(|ref elements| DomRoot::from_ref(&*(*elements)[0]))
     }
 
@@ -3517,7 +3537,7 @@ impl Document {
         RefMut::map(map, |m| {
             &mut m
                 .entry(Dom::from_ref(el))
-                .or_insert_with(|| NoTrace(PendingRestyle::new()))
+                .or_insert_with(|| NoTrace(PendingRestyle::default()))
                 .0
         })
     }
@@ -3585,7 +3605,7 @@ impl Document {
 
     //TODO - default still at no-referrer
     pub fn get_referrer_policy(&self) -> Option<ReferrerPolicy> {
-        return self.referrer_policy.get();
+        self.referrer_policy.get()
     }
 
     pub fn set_target_element(&self, node: Option<&Element>) {
@@ -3830,15 +3850,14 @@ impl Document {
             })
             .cloned();
 
-        match self.window.layout_chan() {
-            Some(chan) => chan
-                .send(Msg::AddStylesheet(
-                    sheet.clone(),
-                    insertion_point.as_ref().map(|s| s.sheet.clone()),
-                ))
-                .unwrap(),
-            None => return warn!("Layout channel unavailable"),
-        }
+        let cloned_stylesheet = sheet.clone();
+        let insertion_point2 = insertion_point.clone();
+        let _ = self.window.with_layout(move |layout| {
+            layout.add_stylesheet(
+                cloned_stylesheet,
+                insertion_point2.as_ref().map(|s| s.sheet.clone()),
+            );
+        });
 
         DocumentOrShadowRoot::add_stylesheet(
             owner,
@@ -3849,17 +3868,24 @@ impl Document {
         );
     }
 
+    /// Given a stylesheet, load all web fonts from it in Layout.
+    pub fn load_web_fonts_from_stylesheet(&self, stylesheet: Arc<Stylesheet>) {
+        let _ = self.window.with_layout(move |layout| {
+            layout.load_web_fonts_from_stylesheet(stylesheet);
+        });
+    }
+
     /// Remove a stylesheet owned by `owner` from the list of document sheets.
     #[allow(crown::unrooted_must_root)] // Owner needs to be rooted already necessarily.
-    pub fn remove_stylesheet(&self, owner: &Element, s: &Arc<Stylesheet>) {
-        match self.window.layout_chan() {
-            Some(chan) => chan.send(Msg::RemoveStylesheet(s.clone())).unwrap(),
-            None => return warn!("Layout channel unavailable"),
-        }
+    pub fn remove_stylesheet(&self, owner: &Element, stylesheet: &Arc<Stylesheet>) {
+        let cloned_stylesheet = stylesheet.clone();
+        let _ = self
+            .window
+            .with_layout(|layout| layout.remove_stylesheet(cloned_stylesheet));
 
         DocumentOrShadowRoot::remove_stylesheet(
             owner,
-            s,
+            stylesheet,
             StylesheetSetRef::Document(&mut *self.stylesheets.borrow_mut()),
         )
     }
@@ -3943,13 +3969,19 @@ impl Document {
     pub(crate) fn cancel_animations_for_node(&self, node: &Node) {
         self.animations.borrow().cancel_animations_for_node(node);
     }
+
+    pub(crate) fn will_declaratively_refresh(&self) -> bool {
+        self.declarative_refresh.borrow().is_some()
+    }
+    pub(crate) fn set_declarative_refresh(&self, refresh: DeclarativeRefresh) {
+        *self.declarative_refresh.borrow_mut() = Some(refresh);
+    }
 }
 
 impl Element {
     fn click_event_filter_by_disabled_state(&self) -> bool {
         let node = self.upcast::<Node>();
-        match node.type_id() {
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
+        matches!(node.type_id(), NodeTypeId::Element(ElementTypeId::HTMLElement(
                 HTMLElementTypeId::HTMLButtonElement,
             )) |
             NodeTypeId::Element(ElementTypeId::HTMLElement(
@@ -3963,9 +3995,7 @@ impl Element {
             )) |
             NodeTypeId::Element(ElementTypeId::HTMLElement(
                 HTMLElementTypeId::HTMLTextAreaElement,
-            )) if self.disabled_state() => true,
-            _ => false,
-        }
+            )) if self.disabled_state())
     }
 }
 
@@ -4059,8 +4089,7 @@ impl DocumentMethods for Document {
         };
 
         // Step 5
-        let host = match get_registrable_domain_suffix_of_or_is_equal_to(&*value, effective_domain)
-        {
+        let host = match get_registrable_domain_suffix_of_or_is_equal_to(&value, effective_domain) {
             None => return Err(Error::Security),
             Some(host) => host,
         };
@@ -4256,7 +4285,7 @@ impl DocumentMethods for Document {
         let value = AttrValue::String("".to_owned());
 
         Ok(Attr::new(
-            &self,
+            self,
             name.clone(),
             value,
             name,
@@ -4276,7 +4305,7 @@ impl DocumentMethods for Document {
         let value = AttrValue::String("".to_owned());
         let qualified_name = LocalName::from(qualified_name);
         Ok(Attr::new(
-            &self,
+            self,
             local_name,
             value,
             qualified_name,
@@ -4389,7 +4418,7 @@ impl DocumentMethods for Document {
             // FIXME(#25136): devicemotionevent, deviceorientationevent
             // FIXME(#7529): dragevent
             "events" | "event" | "htmlevents" | "svgevents" => {
-                Ok(Event::new_uninitialized(&self.window.upcast()))
+                Ok(Event::new_uninitialized(self.window.upcast()))
             },
             "focusevent" => Ok(DomRoot::upcast(FocusEvent::new_uninitialized(&self.window))),
             "hashchangeevent" => Ok(DomRoot::upcast(HashChangeEvent::new_uninitialized(
@@ -4566,14 +4595,15 @@ impl DocumentMethods for Document {
         self.get_html_element().and_then(|root| {
             let node = root.upcast::<Node>();
             node.children()
-                .find(|child| match child.type_id() {
-                    NodeTypeId::Element(ElementTypeId::HTMLElement(
-                        HTMLElementTypeId::HTMLBodyElement,
-                    )) |
-                    NodeTypeId::Element(ElementTypeId::HTMLElement(
-                        HTMLElementTypeId::HTMLFrameSetElement,
-                    )) => true,
-                    _ => false,
+                .find(|child| {
+                    matches!(
+                        child.type_id(),
+                        NodeTypeId::Element(ElementTypeId::HTMLElement(
+                            HTMLElementTypeId::HTMLBodyElement,
+                        )) | NodeTypeId::Element(ElementTypeId::HTMLElement(
+                            HTMLElementTypeId::HTMLFrameSetElement,
+                        ))
+                    )
                 })
                 .map(|node| DomRoot::downcast(node).unwrap())
         })
@@ -4604,7 +4634,7 @@ impl DocumentMethods for Document {
 
         match (self.GetDocumentElement(), &old_body) {
             // Step 3.
-            (Some(ref root), &Some(ref child)) => {
+            (Some(ref root), Some(child)) => {
                 let root = root.upcast::<Node>();
                 root.ReplaceChild(new_body.upcast(), child.upcast())
                     .unwrap();
@@ -4825,8 +4855,8 @@ impl DocumentMethods for Document {
     }
 
     #[allow(unsafe_code)]
-    // https://html.spec.whatwg.org/multipage/#dom-tree-accessors:dom-document-nameditem-filter
-    fn NamedGetter(&self, _cx: JSContext, name: DOMString) -> Option<NonNull<JSObject>> {
+    /// <https://html.spec.whatwg.org/multipage/#dom-tree-accessors:dom-document-nameditem-filter>
+    fn NamedGetter(&self, name: DOMString) -> Option<NamedPropertyValue> {
         if name.is_empty() {
             return None;
         }
@@ -4851,19 +4881,11 @@ impl DocumentMethods for Document {
                 .downcast::<HTMLIFrameElement>()
                 .and_then(|iframe| iframe.GetContentWindow())
             {
-                unsafe {
-                    return Some(NonNull::new_unchecked(
-                        nested_window_proxy.reflector().get_jsobject().get(),
-                    ));
-                }
+                return Some(NamedPropertyValue::WindowProxy(nested_window_proxy));
             }
 
             // Step 3.
-            unsafe {
-                return Some(NonNull::new_unchecked(
-                    first.reflector().get_jsobject().get(),
-                ));
-            }
+            return Some(NamedPropertyValue::Element(DomRoot::from_ref(first)));
         }
 
         // Step 4.
@@ -4898,11 +4920,7 @@ impl DocumentMethods for Document {
             self.upcast(),
             Box::new(DocumentNamedGetter { name }),
         );
-        unsafe {
-            Some(NonNull::new_unchecked(
-                collection.reflector().get_jsobject().get(),
-            ))
-        }
+        Some(NamedPropertyValue::HTMLCollection(collection))
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-tree-accessors:supported-property-names
@@ -4910,7 +4928,7 @@ impl DocumentMethods for Document {
         let mut names_with_first_named_element_map: HashMap<&Atom, &Element> = HashMap::new();
 
         let name_map = self.name_map.borrow();
-        for (name, elements) in &(*name_map).0 {
+        for (name, elements) in &(name_map).0 {
             if name.is_empty() {
                 continue;
             }
@@ -4922,7 +4940,7 @@ impl DocumentMethods for Document {
             }
         }
         let id_map = self.id_map.borrow();
-        for (id, elements) in &(*id_map).0 {
+        for (id, elements) in &(id_map).0 {
             if id.is_empty() {
                 continue;
             }
@@ -4950,7 +4968,7 @@ impl DocumentMethods for Document {
             if a.1 == b.1 {
                 // This can happen if an img has an id different from its name,
                 // spec does not say which string to put first.
-                a.0.cmp(&b.0)
+                a.0.cmp(b.0)
             } else if a.1.upcast::<Node>().is_before(b.1.upcast::<Node>()) {
                 Ordering::Less
             } else {
@@ -5253,7 +5271,7 @@ impl DocumentMethods for Document {
     // media element matching the given id.
     fn ServoGetMediaControls(&self, id: DOMString) -> Fallible<DomRoot<ShadowRoot>> {
         match self.media_controls.borrow().get(&*id) {
-            Some(m) => Ok(DomRoot::from_ref(&*m)),
+            Some(m) => Ok(DomRoot::from_ref(m)),
             None => Err(Error::InvalidAccess),
         }
     }

@@ -31,7 +31,8 @@ use script_layout_interface::{
 };
 use script_traits::{DocumentActivity, UntrustedNodeAddress};
 use selectors::matching::{
-    matches_selector_list, MatchingContext, MatchingMode, NeedsSelectorFlags,
+    matches_selector_list, MatchingContext, MatchingForInvalidation, MatchingMode,
+    NeedsSelectorFlags,
 };
 use selectors::parser::SelectorList;
 use servo_arc::Arc;
@@ -241,7 +242,7 @@ impl Node {
                     },
                     Some(ref prev_sibling) => {
                         prev_sibling.next_sibling.set(Some(new_child));
-                        new_child.prev_sibling.set(Some(&prev_sibling));
+                        new_child.prev_sibling.set(Some(prev_sibling));
                     },
                 }
                 before.prev_sibling.set(Some(new_child));
@@ -254,7 +255,7 @@ impl Node {
                     Some(ref last_child) => {
                         assert!(last_child.next_sibling.get().is_none());
                         last_child.next_sibling.set(Some(new_child));
-                        new_child.prev_sibling.set(Some(&last_child));
+                        new_child.prev_sibling.set(Some(last_child));
                     },
                 }
 
@@ -281,7 +282,7 @@ impl Node {
             node.set_flag(NodeFlags::IS_CONNECTED, parent_is_connected);
             // Out-of-document elements never have the descendants flag set.
             debug_assert!(!node.get_flag(NodeFlags::HAS_DIRTY_DESCENDANTS));
-            vtable_for(&&*node).bind_to_tree(&BindContext {
+            vtable_for(&node).bind_to_tree(&BindContext {
                 tree_connected: parent_is_connected,
                 tree_in_doc: parent_in_doc,
             });
@@ -312,11 +313,11 @@ impl Node {
             // This needs to be in its own loop, because unbind_from_tree may
             // rely on the state of IS_IN_DOC of the context node's descendants,
             // e.g. when removing a <form>.
-            vtable_for(&&*node).unbind_from_tree(&context);
+            vtable_for(&node).unbind_from_tree(context);
             // https://dom.spec.whatwg.org/#concept-node-remove step 14
             if let Some(element) = node.as_custom_element() {
                 ScriptThread::enqueue_callback_reaction(
-                    &*element,
+                    &element,
                     CallbackReaction::Disconnected,
                     None,
                 );
@@ -456,7 +457,7 @@ pub struct QuerySelectorIterator {
 impl<'a> QuerySelectorIterator {
     fn new(iter: TreeIterator, selectors: SelectorList<SelectorImpl>) -> QuerySelectorIterator {
         QuerySelectorIterator {
-            selectors: selectors,
+            selectors,
             iterator: iter,
         }
     }
@@ -480,6 +481,7 @@ impl<'a> Iterator for QuerySelectorIterator {
                     &mut nth_index_cache,
                     node.owner_doc().quirks_mode(),
                     NeedsSelectorFlags::No,
+                    MatchingForInvalidation::No,
                 );
                 if let Some(element) = DomRoot::downcast(node) {
                     if matches_selector_list(selectors, &element, &mut ctx) {
@@ -549,7 +551,7 @@ impl Node {
             s.push_str("    ");
         }
 
-        s.push_str(&*self.debug_str());
+        s.push_str(&self.debug_str());
         debug!("{:?}", s);
 
         // FIXME: this should have a pure version?
@@ -783,7 +785,7 @@ impl Node {
     }
 
     pub fn to_trusted_node_address(&self) -> TrustedNodeAddress {
-        TrustedNodeAddress(&*self as *const Node as *const libc::c_void)
+        TrustedNodeAddress(self as *const Node as *const libc::c_void)
     }
 
     /// Returns the rendered bounding content box if the element is rendered,
@@ -976,6 +978,7 @@ impl Node {
                     &mut nth_index_cache,
                     doc.quirks_mode(),
                     NeedsSelectorFlags::No,
+                    MatchingForInvalidation::No,
                 );
                 Ok(self
                     .traverse_preorder(ShadowIncluding::No)
@@ -1091,7 +1094,7 @@ impl Node {
 
     pub fn remove_self(&self) {
         if let Some(ref parent) = self.GetParentNode() {
-            Node::remove(self, &parent, SuppressObserver::Unsuppressed);
+            Node::remove(self, parent, SuppressObserver::Unsuppressed);
         }
     }
 
@@ -1239,7 +1242,7 @@ impl Node {
 
     /// <https://dom.spec.whatwg.org/#retarget>
     pub fn retarget(&self, b: &Node) -> DomRoot<Node> {
-        let mut a = DomRoot::from_ref(&*self);
+        let mut a = DomRoot::from_ref(self);
         loop {
             // Step 1.
             let a_root = a.GetRootNode(&GetRootNodeOptions::empty());
@@ -1440,14 +1443,14 @@ impl<'dom> LayoutNodeHelpers<'dom> for LayoutDom<'dom, Node> {
     #[inline]
     #[allow(unsafe_code)]
     unsafe fn get_flag(self, flag: NodeFlags) -> bool {
-        (*self.unsafe_get()).flags.get().contains(flag)
+        (self.unsafe_get()).flags.get().contains(flag)
     }
 
     #[inline]
     #[allow(unsafe_code)]
     unsafe fn set_flag(self, flag: NodeFlags, value: bool) {
         let this = self.unsafe_get();
-        let mut flags = (*this).flags.get();
+        let mut flags = (this).flags.get();
 
         if value {
             flags.insert(flag);
@@ -1455,7 +1458,7 @@ impl<'dom> LayoutNodeHelpers<'dom> for LayoutDom<'dom, Node> {
             flags.remove(flag);
         }
 
-        (*this).flags.set(flags);
+        (this).flags.set(flags);
     }
 
     #[inline]
@@ -1843,7 +1846,7 @@ impl Node {
             {
                 // Step 3.2.
                 ScriptThread::enqueue_callback_reaction(
-                    &*descendant,
+                    &descendant,
                     CallbackReaction::Adopted(old_doc.clone(), DomRoot::from_ref(document)),
                     None,
                 );
@@ -1867,7 +1870,6 @@ impl Node {
         // Step 1.
         match parent.type_id() {
             NodeTypeId::Document(_) | NodeTypeId::DocumentFragment(_) | NodeTypeId::Element(..) => {
-                ()
             },
             _ => return Err(Error::HierarchyRequest),
         }
@@ -2016,7 +2018,7 @@ impl Node {
         suppress_observers: SuppressObserver,
     ) {
         node.owner_doc().add_script_and_layout_blocker();
-        debug_assert!(&*node.owner_doc() == &*parent.owner_doc());
+        debug_assert!(*node.owner_doc() == *parent.owner_doc());
         debug_assert!(child.map_or(true, |child| Some(parent) ==
             child.GetParentNode().as_deref()));
 
@@ -2043,7 +2045,7 @@ impl Node {
                 Node::remove(kid, node, SuppressObserver::Suppressed);
             }
             // Step 5.
-            vtable_for(&node).children_changed(&ChildrenMutation::replace_all(new_nodes.r(), &[]));
+            vtable_for(node).children_changed(&ChildrenMutation::replace_all(new_nodes.r(), &[]));
 
             let mutation = Mutation::ChildList {
                 added: None,
@@ -2051,7 +2053,7 @@ impl Node {
                 prev: None,
                 next: None,
             };
-            MutationObserver::queue_a_mutation_record(&node, mutation);
+            MutationObserver::queue_a_mutation_record(node, mutation);
 
             new_nodes.r()
         } else {
@@ -2069,7 +2071,7 @@ impl Node {
         // Step 7.
         for kid in new_nodes {
             // Step 7.1.
-            parent.add_child(*kid, child);
+            parent.add_child(kid, child);
             // Step 7.7.
             for descendant in kid
                 .traverse_preorder(ShadowIncluding::Yes)
@@ -2080,19 +2082,19 @@ impl Node {
                     if descendant.get_custom_element_definition().is_some() {
                         // Step 7.7.2.1.
                         ScriptThread::enqueue_callback_reaction(
-                            &*descendant,
+                            &descendant,
                             CallbackReaction::Connected,
                             None,
                         );
                     } else {
                         // Step 7.7.2.2.
-                        try_upgrade_element(&*descendant);
+                        try_upgrade_element(&descendant);
                     }
                 }
             }
         }
         if let SuppressObserver::Unsuppressed = suppress_observers {
-            vtable_for(&parent).children_changed(&ChildrenMutation::insert(
+            vtable_for(parent).children_changed(&ChildrenMutation::insert(
                 previous_sibling.as_deref(),
                 new_nodes,
                 child,
@@ -2104,7 +2106,7 @@ impl Node {
                 prev: previous_sibling.as_deref(),
                 next: child,
             };
-            MutationObserver::queue_a_mutation_record(&parent, mutation);
+            MutationObserver::queue_a_mutation_record(parent, mutation);
         }
         node.owner_doc().remove_script_and_layout_blocker();
     }
@@ -2114,7 +2116,7 @@ impl Node {
         parent.owner_doc().add_script_and_layout_blocker();
         // Step 1.
         if let Some(node) = node {
-            Node::adopt(node, &*parent.owner_doc());
+            Node::adopt(node, &parent.owner_doc());
         }
         // Step 2.
         rooted_vec!(let removed_nodes <- parent.children());
@@ -2139,7 +2141,7 @@ impl Node {
             Node::insert(node, parent, None, SuppressObserver::Suppressed);
         }
         // Step 6.
-        vtable_for(&parent).children_changed(&ChildrenMutation::replace_all(
+        vtable_for(parent).children_changed(&ChildrenMutation::replace_all(
             removed_nodes.r(),
             added_nodes,
         ));
@@ -2151,7 +2153,7 @@ impl Node {
                 prev: None,
                 next: None,
             };
-            MutationObserver::queue_a_mutation_record(&parent, mutation);
+            MutationObserver::queue_a_mutation_record(parent, mutation);
         }
         parent.owner_doc().remove_script_and_layout_blocker();
     }
@@ -2213,9 +2215,9 @@ impl Node {
         // Step 11. transient registered observers
         // Step 12.
         if let SuppressObserver::Unsuppressed = suppress_observers {
-            vtable_for(&parent).children_changed(&ChildrenMutation::replace(
+            vtable_for(parent).children_changed(&ChildrenMutation::replace(
                 old_previous_sibling.as_deref(),
-                &Some(&node),
+                &Some(node),
                 &[],
                 old_next_sibling.as_deref(),
             ));
@@ -2227,7 +2229,7 @@ impl Node {
                 prev: old_previous_sibling.as_deref(),
                 next: old_next_sibling.as_deref(),
             };
-            MutationObserver::queue_a_mutation_record(&parent, mutation);
+            MutationObserver::queue_a_mutation_record(parent, mutation);
         }
         parent.owner_doc().remove_script_and_layout_blocker();
     }
@@ -2286,7 +2288,7 @@ impl Node {
                     IsHTMLDocument::NonHTMLDocument
                 };
                 let window = document.window();
-                let loader = DocumentLoader::new(&*document.loader());
+                let loader = DocumentLoader::new(&document.loader());
                 let document = Document::new(
                     window,
                     HasBrowsingContext::No,
@@ -2357,7 +2359,7 @@ impl Node {
         }
 
         // Step 5: cloning steps.
-        vtable_for(&node).cloning_steps(&copy, maybe_doc, clone_children);
+        vtable_for(node).cloning_steps(&copy, maybe_doc, clone_children);
 
         // Step 6.
         if clone_children == CloneChildrenFlag::CloneChildren {
@@ -2384,7 +2386,7 @@ impl Node {
     pub fn collect_text_contents<T: Iterator<Item = DomRoot<Node>>>(iterator: T) -> DOMString {
         let mut content = String::new();
         for node in iterator {
-            if let Some(ref text) = node.downcast::<Text>() {
+            if let Some(text) = node.downcast::<Text>() {
                 content.push_str(&text.upcast::<CharacterData>().data());
             }
         }
@@ -2399,7 +2401,7 @@ impl Node {
         }
     }
 
-    // https://dom.spec.whatwg.org/#locate-a-namespace
+    /// <https://dom.spec.whatwg.org/#locate-a-namespace>
     pub fn locate_namespace(node: &Node, prefix: Option<DOMString>) -> Namespace {
         match node.type_id() {
             NodeTypeId::Element(_) => node.downcast::<Element>().unwrap().locate_namespace(prefix),
@@ -2474,7 +2476,7 @@ impl NodeMethods for Node {
 
     // https://dom.spec.whatwg.org/#dom-node-isconnected
     fn IsConnected(&self) -> bool {
-        return self.is_connected();
+        self.is_connected()
     }
 
     // https://dom.spec.whatwg.org/#dom-node-ownerdocument
@@ -2634,7 +2636,6 @@ impl NodeMethods for Node {
         // Step 1.
         match self.type_id() {
             NodeTypeId::Document(_) | NodeTypeId::DocumentFragment(_) | NodeTypeId::Element(..) => {
-                ()
             },
             _ => return Err(Error::HierarchyRequest),
         }
@@ -2755,7 +2756,7 @@ impl NodeMethods for Node {
         Node::insert(node, self, reference_child, SuppressObserver::Suppressed);
 
         // Step 14.
-        vtable_for(&self).children_changed(&ChildrenMutation::replace(
+        vtable_for(self).children_changed(&ChildrenMutation::replace(
             previous_sibling.as_deref(),
             &removed_child,
             nodes,
@@ -2769,7 +2770,7 @@ impl NodeMethods for Node {
             next: reference_child,
         };
 
-        MutationObserver::queue_a_mutation_record(&self, mutation);
+        MutationObserver::queue_a_mutation_record(self, mutation);
 
         // Step 15.
         Ok(DomRoot::from_ref(child))
@@ -2793,14 +2794,14 @@ impl NodeMethods for Node {
                 }
                 while children
                     .peek()
-                    .map_or(false, |&(_, ref sibling)| sibling.is::<Text>())
+                    .map_or(false, |(_, sibling)| sibling.is::<Text>())
                 {
                     let (index, sibling) = children.next().unwrap();
                     sibling
                         .ranges
                         .drain_to_preceding_text_sibling(&sibling, &node, length);
                     self.ranges
-                        .move_to_text_child_at(self, index as u32, &node, length as u32);
+                        .move_to_text_child_at(self, index as u32, &node, length);
                     let sibling_cdata = sibling.downcast::<CharacterData>().unwrap();
                     length += sibling_cdata.Length();
                     cdata.append_data(&sibling_cdata.data());
@@ -2955,7 +2956,7 @@ impl NodeMethods for Node {
             attr1 = Some(a);
             attr1owner = a.GetOwnerElement();
             node1 = match attr1owner {
-                Some(ref e) => Some(&e.upcast()),
+                Some(ref e) => Some(e.upcast()),
                 None => None,
             }
         }
@@ -2967,7 +2968,7 @@ impl NodeMethods for Node {
             attr2 = Some(a);
             attr2owner = a.GetOwnerElement();
             node2 = match attr2owner {
-                Some(ref e) => Some(&*e.upcast()),
+                Some(ref e) => Some(e.upcast()),
                 None => None,
             }
         }
@@ -2978,33 +2979,30 @@ impl NodeMethods for Node {
         // same owner element.
         if let Some(node2) = node2 {
             if Some(node2) == node1 {
-                match (attr1, attr2) {
-                    (Some(a1), Some(a2)) => {
-                        let attrs = node2.downcast::<Element>().unwrap().attrs();
-                        // go through the attrs in order to see if self
-                        // or other is first; spec is clear that we
-                        // want value-equality, not reference-equality
-                        for attr in attrs.iter() {
-                            if (*attr.namespace() == *a1.namespace()) &&
-                                (attr.local_name() == a1.local_name()) &&
-                                (**attr.value() == **a1.value())
-                            {
-                                return NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC +
-                                    NodeConstants::DOCUMENT_POSITION_PRECEDING;
-                            }
-                            if (*attr.namespace() == *a2.namespace()) &&
-                                (attr.local_name() == a2.local_name()) &&
-                                (**attr.value() == **a2.value())
-                            {
-                                return NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC +
-                                    NodeConstants::DOCUMENT_POSITION_FOLLOWING;
-                            }
+                if let (Some(a1), Some(a2)) = (attr1, attr2) {
+                    let attrs = node2.downcast::<Element>().unwrap().attrs();
+                    // go through the attrs in order to see if self
+                    // or other is first; spec is clear that we
+                    // want value-equality, not reference-equality
+                    for attr in attrs.iter() {
+                        if (*attr.namespace() == *a1.namespace()) &&
+                            (attr.local_name() == a1.local_name()) &&
+                            (**attr.value() == **a1.value())
+                        {
+                            return NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC +
+                                NodeConstants::DOCUMENT_POSITION_PRECEDING;
                         }
-                        // both attrs have node2 as their owner element, so
-                        // we can't have left the loop without seeing them
-                        unreachable!();
-                    },
-                    (_, _) => {},
+                        if (*attr.namespace() == *a2.namespace()) &&
+                            (attr.local_name() == a2.local_name()) &&
+                            (**attr.value() == **a2.value())
+                        {
+                            return NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC +
+                                NodeConstants::DOCUMENT_POSITION_FOLLOWING;
+                        }
+                    }
+                    // both attrs have node2 as their owner element, so
+                    // we can't have left the loop without seeing them
+                    unreachable!();
                 }
             }
         }
@@ -3013,15 +3011,15 @@ impl NodeMethods for Node {
         match (node1, node2) {
             (None, _) => {
                 // node1 is null
-                return NodeConstants::DOCUMENT_POSITION_FOLLOWING +
+                NodeConstants::DOCUMENT_POSITION_FOLLOWING +
                     NodeConstants::DOCUMENT_POSITION_DISCONNECTED +
-                    NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
+                    NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
             },
             (_, None) => {
                 // node2 is null
-                return NodeConstants::DOCUMENT_POSITION_PRECEDING +
+                NodeConstants::DOCUMENT_POSITION_PRECEDING +
                     NodeConstants::DOCUMENT_POSITION_DISCONNECTED +
-                    NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC;
+                    NodeConstants::DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC
             },
             (Some(node1), Some(node2)) => {
                 // still step 6, testing if node1 and 2 share a root
@@ -3077,13 +3075,13 @@ impl NodeMethods for Node {
                 // contained in the other.
                 //
                 // If we're the container, return that `other` is contained by us.
-                return if self_and_ancestors.len() < other_and_ancestors.len() {
+                if self_and_ancestors.len() < other_and_ancestors.len() {
                     NodeConstants::DOCUMENT_POSITION_FOLLOWING +
                         NodeConstants::DOCUMENT_POSITION_CONTAINED_BY
                 } else {
                     NodeConstants::DOCUMENT_POSITION_PRECEDING +
                         NodeConstants::DOCUMENT_POSITION_CONTAINS
-                };
+                }
             },
         }
     }
@@ -3244,21 +3242,11 @@ impl<'a> ChildrenMutation<'a> {
         match (prev, next) {
             (None, None) => ChildrenMutation::ReplaceAll {
                 removed: &[],
-                added: added,
+                added,
             },
-            (Some(prev), None) => ChildrenMutation::Append {
-                prev: prev,
-                added: added,
-            },
-            (None, Some(next)) => ChildrenMutation::Prepend {
-                added: added,
-                next: next,
-            },
-            (Some(prev), Some(next)) => ChildrenMutation::Insert {
-                prev: prev,
-                added: added,
-                next: next,
-            },
+            (Some(prev), None) => ChildrenMutation::Append { prev, added },
+            (None, Some(next)) => ChildrenMutation::Prepend { added, next },
+            (Some(prev), Some(next)) => ChildrenMutation::Insert { prev, added, next },
         }
     }
 
@@ -3272,14 +3260,14 @@ impl<'a> ChildrenMutation<'a> {
             if let (None, None) = (prev, next) {
                 ChildrenMutation::ReplaceAll {
                     removed: from_ref(removed),
-                    added: added,
+                    added,
                 }
             } else {
                 ChildrenMutation::Replace {
-                    prev: prev,
-                    removed: *removed,
-                    added: added,
-                    next: next,
+                    prev,
+                    removed,
+                    added,
+                    next,
                 }
             }
         } else {
@@ -3288,10 +3276,7 @@ impl<'a> ChildrenMutation<'a> {
     }
 
     fn replace_all(removed: &'a [&'a Node], added: &'a [&'a Node]) -> ChildrenMutation<'a> {
-        ChildrenMutation::ReplaceAll {
-            removed: removed,
-            added: added,
-        }
+        ChildrenMutation::ReplaceAll { removed, added }
     }
 
     /// Get the child that follows the added or removed children.
@@ -3411,9 +3396,9 @@ impl<'a> UnbindContext<'a> {
     ) -> Self {
         UnbindContext {
             index: Cell::new(cached_index),
-            parent: parent,
-            prev_sibling: prev_sibling,
-            next_sibling: next_sibling,
+            parent,
+            prev_sibling,
+            next_sibling,
             tree_connected: parent.is_connected(),
             tree_in_doc: parent.is_in_doc(),
         }
@@ -3441,7 +3426,7 @@ unsafe_no_jsmanaged_fields!(UniqueId);
 impl MallocSizeOf for UniqueId {
     #[allow(unsafe_code)]
     fn size_of(&self, ops: &mut MallocSizeOfOps) -> usize {
-        if let &Some(ref uuid) = unsafe { &*self.cell.get() } {
+        if let Some(uuid) = unsafe { &*self.cell.get() } {
             unsafe { ops.malloc_size_of(&**uuid) }
         } else {
             0
@@ -3465,7 +3450,7 @@ impl UniqueId {
             if (*ptr).is_none() {
                 *ptr = Some(Box::new(Uuid::new_v4()));
             }
-            &(&*ptr).as_ref().unwrap()
+            (&*ptr).as_ref().unwrap()
         }
     }
 }

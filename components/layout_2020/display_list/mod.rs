@@ -12,7 +12,8 @@ use gfx::text::glyph::GlyphStore;
 use gfx_traits::WebRenderEpochToU16;
 use msg::constellation_msg::BrowsingContextId;
 use net_traits::image_cache::UsePlaceholder;
-use script_traits::compositor::{CompositorDisplayListInfo, ScrollTreeNodeId};
+use script_traits::compositor::{CompositorDisplayListInfo, ScrollSensitivity, ScrollTreeNodeId};
+use servo_geometry::MaxRect;
 use style::color::{AbsoluteColor, ColorSpace};
 use style::computed_values::text_decoration_style::T as ComputedTextDecorationStyle;
 use style::dom::OpaqueNode;
@@ -22,13 +23,16 @@ use style::values::computed::{BorderStyle, Color, Length, LengthPercentage, Outl
 use style::values::specified::text::TextDecorationLine;
 use style::values::specified::ui::CursorKind;
 use style_traits::CSSPixel;
-use webrender_api::{self as wr, units, ClipChainId, ClipId, CommonItemProperties};
+use webrender_api::{self as wr, units, BoxShadowClipMode, ClipChainId};
+use wr::units::LayoutVector2D;
 
 use crate::context::LayoutContext;
 use crate::display_list::conversions::ToWebRender;
 use crate::display_list::stacking_context::StackingContextSection;
-use crate::fragment_tree::{BoxFragment, Fragment, FragmentTree, Tag, TextFragment};
-use crate::geom::{PhysicalPoint, PhysicalRect};
+use crate::fragment_tree::{
+    BackgroundMode, BoxFragment, Fragment, FragmentTree, Tag, TextFragment,
+};
+use crate::geom::{LogicalRect, PhysicalPoint, PhysicalRect};
 use crate::replaced::IntrinsicSizes;
 use crate::style_ext::ComputedValuesExt;
 
@@ -37,6 +41,7 @@ mod conversions;
 mod gradient;
 mod stacking_context;
 
+use background::BackgroundPainter;
 pub use stacking_context::*;
 
 #[derive(Clone, Copy)]
@@ -63,6 +68,11 @@ pub struct DisplayList {
     /// data structure that the compositor uses to map hit tests to information
     /// about the item hit.
     pub compositor_info: CompositorDisplayListInfo,
+
+    /// A count of the number of SpatialTree nodes pushed to the WebRender display
+    /// list. This is merely to ensure that the currently-unused SpatialTreeItemKey
+    /// produced for every SpatialTree node is unique.
+    pub spatial_tree_count: u64,
 }
 
 impl DisplayList {
@@ -73,6 +83,7 @@ impl DisplayList {
         content_size: units::LayoutSize,
         pipeline_id: wr::PipelineId,
         epoch: wr::Epoch,
+        root_scroll_sensitivity: ScrollSensitivity,
     ) -> Self {
         Self {
             wr: wr::DisplayListBuilder::new(pipeline_id),
@@ -81,21 +92,39 @@ impl DisplayList {
                 content_size,
                 pipeline_id,
                 epoch,
+                root_scroll_sensitivity,
             ),
+            spatial_tree_count: 0,
         }
+    }
+
+    pub fn define_clip_chain<I>(&mut self, parent: ClipChainId, clips: I) -> ClipChainId
+    where
+        I: IntoIterator<Item = wr::ClipId>,
+        I::IntoIter: ExactSizeIterator + Clone,
+    {
+        // WebRender has two different ways of expressing "no clip." ClipChainId::INVALID should be
+        // used for primitives, but `None` is used for stacking contexts and clip chains. We convert
+        // to the `Option<ClipChainId>` representation here. Just passing Some(ClipChainId::INVALID)
+        // leads to a crash.
+        let parent = match parent {
+            ClipChainId::INVALID => None,
+            parent => Some(parent),
+        };
+        self.wr.define_clip_chain(parent, clips)
     }
 }
 
 pub(crate) struct DisplayListBuilder<'a> {
     /// The current [ScrollTreeNodeId] for this [DisplayListBuilder]. This
     /// allows only passing the builder instead passing the containing
-    /// [stacking_context::StackingContextFragment] as an argument to display
+    /// [stacking_context::StackingContextContent::Fragment] as an argument to display
     /// list building functions.
     current_scroll_node_id: ScrollTreeNodeId,
 
     /// The current [wr::ClipId] for this [DisplayListBuilder]. This allows
     /// only passing the builder instead passing the containing
-    /// [stacking_context::StackingContextFragment] as an argument to display
+    /// [stacking_context::StackingContextContent::Fragment] as an argument to display
     /// list building functions.
     current_clip_chain_id: ClipChainId,
 
@@ -111,7 +140,7 @@ pub(crate) struct DisplayListBuilder<'a> {
     pub display_list: &'a mut DisplayList,
 
     /// A recording of the sizes of iframes encountered when building this
-    /// display list. This information is forwarded to the layout thread for the
+    /// display list. This information is forwarded to layout for the
     /// iframe so that its layout knows how large the initial containing block /
     /// viewport is.
     iframe_sizes: FnvHashMap<BrowsingContextId, Size2D<f32, CSSPixel>>,
@@ -131,7 +160,7 @@ impl DisplayList {
     ) -> (FnvHashMap<BrowsingContextId, Size2D<f32, CSSPixel>>, bool) {
         let mut builder = DisplayListBuilder {
             current_scroll_node_id: self.compositor_info.root_reference_frame_id,
-            current_clip_chain_id: ClipChainId(0, self.compositor_info.pipeline_id),
+            current_clip_chain_id: ClipChainId::INVALID,
             element_for_canvas_background: fragment_tree.canvas_background.from_element,
             is_contentful: false,
             context,
@@ -159,7 +188,7 @@ impl<'a> DisplayListBuilder<'a> {
         wr::CommonItemProperties {
             clip_rect,
             spatial_id: self.current_scroll_node_id.spatial_id,
-            clip_id: ClipId::ClipChain(self.current_clip_chain_id),
+            clip_chain_id: self.current_clip_chain_id,
             flags: style.get_webrender_primitive_flags(),
         }
     }
@@ -205,7 +234,21 @@ impl Fragment {
                 Visibility::Collapse => (),
             },
             Fragment::AbsoluteOrFixedPositioned(_) => {},
-            Fragment::Anonymous(_) => {},
+            Fragment::Positioning(positioning_fragment) => {
+                if let Some(style) = positioning_fragment.style.as_ref() {
+                    let rect = positioning_fragment
+                        .rect
+                        .to_physical(style.writing_mode, containing_block)
+                        .translate(containing_block.origin.to_vector());
+                    self.maybe_push_hit_test_for_style_and_tag(
+                        builder,
+                        style,
+                        positioning_fragment.base.tag,
+                        rect,
+                        Cursor::Default,
+                    );
+                }
+            },
             Fragment::Image(i) => match i.style.get_inherited_box().visibility {
                 Visibility::Visible => {
                     builder.is_contentful = true;
@@ -246,7 +289,7 @@ impl Fragment {
                         common.clip_rect,
                         &wr::SpaceAndClipInfo {
                             spatial_id: common.spatial_id,
-                            clip_id: common.clip_id,
+                            clip_chain_id: common.clip_chain_id,
                         },
                         iframe.pipeline_id.to_webrender(),
                         true,
@@ -263,6 +306,31 @@ impl Fragment {
                 Visibility::Collapse => (),
             },
         }
+    }
+
+    fn maybe_push_hit_test_for_style_and_tag(
+        &self,
+        builder: &mut DisplayListBuilder,
+        style: &ComputedValues,
+        tag: Option<Tag>,
+        rect: PhysicalRect<Length>,
+        cursor: Cursor,
+    ) {
+        let hit_info = builder.hit_info(style, tag, cursor);
+        let hit_info = match hit_info {
+            Some(hit_info) => hit_info,
+            None => return,
+        };
+
+        let clip_chain_id = builder.current_clip_chain_id;
+        let spatial_id = builder.current_scroll_node_id.spatial_id;
+        builder.wr().push_hit_test(
+            rect.to_webrender(),
+            clip_chain_id,
+            spatial_id,
+            style.get_webrender_primitive_flags(),
+            hit_info,
+        );
     }
 
     fn build_display_list_for_text_fragment(
@@ -291,25 +359,36 @@ impl Fragment {
             return;
         }
 
-        if let Some(hit_info) =
-            builder.hit_info(&fragment.parent_style, fragment.base.tag, Cursor::Text)
-        {
-            let clip_chain_id = builder.current_clip_chain_id;
-            let spatial_id = builder.current_scroll_node_id.spatial_id;
-            builder.wr().push_hit_test(
-                &CommonItemProperties {
-                    clip_rect: rect.to_webrender(),
-                    clip_id: ClipId::ClipChain(clip_chain_id),
-                    spatial_id,
-                    flags: fragment.parent_style.get_webrender_primitive_flags(),
-                },
-                hit_info,
-            );
-        }
+        self.maybe_push_hit_test_for_style_and_tag(
+            builder,
+            &fragment.parent_style,
+            fragment.base.tag,
+            rect,
+            Cursor::Text,
+        );
 
         let color = fragment.parent_style.clone_color();
         let font_metrics = &fragment.font_metrics;
         let dppx = builder.context.style_context.device_pixel_ratio().get();
+        let common = builder.common_properties(rect.to_webrender(), &fragment.parent_style);
+
+        // Shadows. According to CSS-BACKGROUNDS, text shadows render in *reverse* order (front to
+        // back).
+        let shadows = &fragment.parent_style.get_inherited_text().text_shadow;
+        for shadow in shadows.0.iter().rev() {
+            builder.wr().push_shadow(
+                &wr::SpaceAndClipInfo {
+                    spatial_id: common.spatial_id,
+                    clip_chain_id: common.clip_chain_id,
+                },
+                wr::Shadow {
+                    offset: LayoutVector2D::new(shadow.horizontal.px(), shadow.vertical.px()),
+                    color: rgba(shadow.color.resolve_to_absolute(&color)),
+                    blur_radius: shadow.blur.px(),
+                },
+                true, /* should_inflate */
+            );
+        }
 
         // Underline.
         if fragment
@@ -333,7 +412,6 @@ impl Fragment {
         }
 
         // Text.
-        let common = builder.common_properties(rect.to_webrender(), &fragment.parent_style);
         builder.wr().push_text(
             &common,
             rect.to_webrender(),
@@ -350,9 +428,12 @@ impl Fragment {
         {
             let mut rect = rect;
             rect.origin.y += Length::from(font_metrics.ascent - font_metrics.strikeout_offset);
-            // XXX(ferjm) This does not work on MacOS #942
             rect.size.height = Length::new(font_metrics.strikeout_size.to_nearest_pixel(dppx));
             self.build_display_list_for_text_decoration(fragment, builder, &rect, &color);
+        }
+
+        if !shadows.0.is_empty() {
+            builder.wr().pop_all_shadows();
         }
     }
 
@@ -364,7 +445,7 @@ impl Fragment {
         color: &AbsoluteColor,
     ) {
         let rect = rect.to_webrender();
-        let wavy_line_thickness = (0.33 * rect.size.height).ceil();
+        let wavy_line_thickness = (0.33 * rect.size().height).ceil();
         let text_decoration_color = fragment
             .parent_style
             .clone_text_decoration_color()
@@ -411,8 +492,8 @@ impl<'a> BuilderForBoxFragment<'a> {
             };
             let corner = |corner: &style::values::computed::BorderCornerRadius| {
                 Size2D::new(
-                    resolve(&corner.0.width.0, border_rect.size.width),
-                    resolve(&corner.0.height.0, border_rect.size.height),
+                    resolve(&corner.0.width.0, border_rect.size().width),
+                    resolve(&corner.0.height.0, border_rect.size().height),
                 )
             };
             let b = fragment.style.get_border();
@@ -518,6 +599,7 @@ impl<'a> BuilderForBoxFragment<'a> {
         } else {
             self.build_hit_test(builder);
             self.build_background(builder);
+            self.build_box_shadow(builder);
             self.build_border(builder);
         }
     }
@@ -535,9 +617,36 @@ impl<'a> BuilderForBoxFragment<'a> {
 
         let mut common = builder.common_properties(self.border_rect, &self.fragment.style);
         if let Some(clip_chain_id) = self.border_edge_clip(builder) {
-            common.clip_id = ClipId::ClipChain(clip_chain_id);
+            common.clip_chain_id = clip_chain_id;
         }
-        builder.wr().push_hit_test(&common, hit_info);
+        builder.wr().push_hit_test(
+            common.clip_rect,
+            common.clip_chain_id,
+            common.spatial_id,
+            common.flags,
+            hit_info,
+        );
+    }
+
+    fn build_background_for_painter(
+        &mut self,
+        builder: &mut DisplayListBuilder,
+        painter: &BackgroundPainter,
+    ) {
+        let b = painter.style.get_background();
+        let background_color = painter.style.resolve_color(b.background_color.clone());
+        if background_color.alpha > 0.0 {
+            // https://drafts.csswg.org/css-backgrounds/#background-color
+            // “The background color is clipped according to the background-clip
+            //  value associated with the bottom-most background image layer.”
+            let layer_index = b.background_image.0.len() - 1;
+            let (bounds, common) = painter.painting_area(self, builder, layer_index);
+            builder
+                .wr()
+                .push_rect(&common, *bounds, rgba(background_color))
+        }
+
+        self.build_background_image(builder, painter);
     }
 
     fn build_background(&mut self, builder: &mut DisplayListBuilder) {
@@ -550,34 +659,46 @@ impl<'a> BuilderForBoxFragment<'a> {
             return;
         }
 
-        let source = background::Source::Fragment;
-        let style = &self.fragment.style;
-        let b = style.get_background();
-        let background_color = style.resolve_color(b.background_color.clone());
-        if background_color.alpha > 0.0 {
-            // https://drafts.csswg.org/css-backgrounds/#background-color
-            // “The background color is clipped according to the background-clip
-            //  value associated with the bottom-most background image layer.”
-            let layer_index = b.background_image.0.len() - 1;
-            let (bounds, common) = background::painting_area(self, &source, builder, layer_index);
-            builder
-                .wr()
-                .push_rect(&common, *bounds, rgba(background_color))
+        // If this BoxFragment does not paint a background, do nothing.
+        if let BackgroundMode::None = self.fragment.background_mode {
+            return;
         }
 
-        self.build_background_image(builder, source);
+        // Paint all extra backgrounds for this BoxFragment. These are painted first, as that's
+        // the order that they are expected to be painted for table cells (where this feature
+        // is used).
+        if let BackgroundMode::Extra(ref extra_backgrounds) = self.fragment.background_mode {
+            for extra_background in extra_backgrounds {
+                let positioning_area: LogicalRect<Length> = extra_background.rect.clone().into();
+                let painter = BackgroundPainter {
+                    style: &extra_background.style,
+                    painting_area_override: None,
+                    positioning_area_override: Some(
+                        positioning_area
+                            .to_physical(self.fragment.style.writing_mode, self.containing_block)
+                            .translate(self.containing_block.origin.to_vector())
+                            .to_webrender(),
+                    ),
+                };
+                self.build_background_for_painter(builder, &painter);
+            }
+        }
+
+        let painter = BackgroundPainter {
+            style: &self.fragment.style,
+            painting_area_override: None,
+            positioning_area_override: None,
+        };
+        self.build_background_for_painter(builder, &painter);
     }
 
     fn build_background_image(
         &mut self,
         builder: &mut DisplayListBuilder,
-        source: background::Source<'a>,
+        painter: &BackgroundPainter,
     ) {
         use style::values::computed::image::Image;
-        let style = match source {
-            background::Source::Canvas { style, .. } => style,
-            background::Source::Fragment => &self.fragment.style,
-        };
+        let style = painter.style;
         let b = style.get_background();
         // Reverse because the property is top layer first, we want to paint bottom layer first.
         for (index, image) in b.background_image.0.iter().enumerate().rev() {
@@ -586,7 +707,7 @@ impl<'a> BuilderForBoxFragment<'a> {
                 Image::Gradient(ref gradient) => {
                     let intrinsic = IntrinsicSizes::empty();
                     if let Some(layer) =
-                        &background::layout_layer(self, &source, builder, index, intrinsic)
+                        &background::layout_layer(self, painter, builder, index, intrinsic)
                     {
                         gradient::build(style, gradient, layer, builder)
                     }
@@ -627,7 +748,7 @@ impl<'a> BuilderForBoxFragment<'a> {
                     );
 
                     if let Some(layer) =
-                        background::layout_layer(self, &source, builder, index, intrinsic)
+                        background::layout_layer(self, painter, builder, index, intrinsic)
                     {
                         let image_rendering = image_rendering(style.clone_image_rendering());
                         if layer.repeat {
@@ -688,16 +809,13 @@ impl<'a> BuilderForBoxFragment<'a> {
         let border_widths = self
             .fragment
             .border
-            .to_physical(self.fragment.style.writing_mode);
-        let widths = SideOffsets2D::new(
-            border_widths.top.px(),
-            border_widths.right.px(),
-            border_widths.bottom.px(),
-            border_widths.left.px(),
-        );
-        if widths == SideOffsets2D::zero() {
+            .to_physical(self.fragment.style.writing_mode)
+            .to_webrender();
+
+        if border_widths == SideOffsets2D::zero() {
             return;
         }
+
         let common = builder.common_properties(self.border_rect, &self.fragment.style);
         let details = wr::BorderDetails::Normal(wr::NormalBorder {
             top: self.build_border_side(border.border_top_style, border.border_top_color.clone()),
@@ -714,7 +832,7 @@ impl<'a> BuilderForBoxFragment<'a> {
         });
         builder
             .wr()
-            .push_border(&common, self.border_rect, widths, details)
+            .push_border(&common, self.border_rect, border_widths, details)
     }
 
     fn build_outline(&mut self, builder: &mut DisplayListBuilder) {
@@ -750,6 +868,42 @@ impl<'a> BuilderForBoxFragment<'a> {
         builder
             .wr()
             .push_border(&common, outline_rect, widths, details)
+    }
+
+    fn build_box_shadow(&self, builder: &mut DisplayListBuilder<'_>) {
+        let box_shadows = &self.fragment.style.get_effects().box_shadow.0;
+        if box_shadows.is_empty() {
+            return;
+        }
+
+        // NB: According to CSS-BACKGROUNDS, box shadows render in *reverse* order (front to back).
+        let border_rect = self.border_rect;
+        let common = builder.common_properties(MaxRect::max_rect(), &self.fragment.style);
+        for box_shadow in box_shadows.iter().rev() {
+            let clip_mode = if box_shadow.inset {
+                BoxShadowClipMode::Inset
+            } else {
+                BoxShadowClipMode::Outset
+            };
+
+            builder.wr().push_box_shadow(
+                &common,
+                border_rect,
+                LayoutVector2D::new(
+                    box_shadow.base.horizontal.px(),
+                    box_shadow.base.vertical.px(),
+                ),
+                rgba(
+                    self.fragment
+                        .style
+                        .resolve_color(box_shadow.base.color.clone()),
+                ),
+                box_shadow.base.blur.px(),
+                box_shadow.spread.px(),
+                self.border_radius,
+                clip_mode,
+            );
+        }
     }
 }
 
@@ -900,13 +1054,10 @@ fn clip_for_radii(
     if radii.is_zero() {
         None
     } else {
-        let clip_chain_id = builder.current_clip_chain_id;
-        let parent_space_and_clip = wr::SpaceAndClipInfo {
-            spatial_id: builder.current_scroll_node_id.spatial_id,
-            clip_id: ClipId::ClipChain(clip_chain_id),
-        };
+        let spatial_id = builder.current_scroll_node_id.spatial_id;
+        let parent_clip_chain_id = builder.current_clip_chain_id;
         let new_clip_id = builder.wr().define_clip_rounded_rect(
-            &parent_space_and_clip,
+            spatial_id,
             wr::ComplexClipRegion {
                 rect,
                 radii,
@@ -915,8 +1066,8 @@ fn clip_for_radii(
         );
         Some(
             builder
-                .wr()
-                .define_clip_chain(Some(clip_chain_id), [new_clip_id]),
+                .display_list
+                .define_clip_chain(parent_clip_chain_id, [new_clip_id]),
         )
     }
 }

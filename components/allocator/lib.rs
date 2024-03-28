@@ -9,15 +9,17 @@ static ALLOC: Allocator = Allocator;
 
 pub use crate::platform::*;
 
-#[cfg(not(any(windows, target_os = "android")))]
+#[cfg(not(any(windows, target_os = "android", feature = "use-system-allocator")))]
 mod platform {
     use std::os::raw::c_void;
 
-    use jemallocator;
-
-    pub use self::jemallocator::Jemalloc as Allocator;
+    pub use jemallocator::Jemalloc as Allocator;
 
     /// Get the size of a heap block.
+    ///
+    /// # Safety
+    ///
+    /// Passing a non-heap allocated pointer to this function results in undefined behavior.
     pub unsafe extern "C" fn usable_size(ptr: *const c_void) -> usize {
         jemallocator::usable_size(ptr)
     }
@@ -28,14 +30,25 @@ mod platform {
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(all(
+    not(windows),
+    any(target_os = "android", feature = "use-system-allocator")
+))]
 mod platform {
     pub use std::alloc::System as Allocator;
     use std::os::raw::c_void;
 
     /// Get the size of a heap block.
+    ///
+    /// # Safety
+    ///
+    /// Passing a non-heap allocated pointer to this function results in undefined behavior.
     pub unsafe extern "C" fn usable_size(ptr: *const c_void) -> usize {
-        libc::malloc_usable_size(ptr)
+        #[cfg(target_vendor = "apple")]
+        return libc::malloc_size(ptr);
+
+        #[cfg(not(target_vendor = "apple"))]
+        return libc::malloc_usable_size(ptr as *mut _);
     }
 
     pub mod libc_compat {
@@ -51,6 +64,10 @@ mod platform {
     use winapi::um::heapapi::{GetProcessHeap, HeapSize, HeapValidate};
 
     /// Get the size of a heap block.
+    ///
+    /// # Safety
+    ///
+    /// Passing a non-heap allocated pointer to this function results in undefined behavior.
     pub unsafe extern "C" fn usable_size(mut ptr: *const c_void) -> usize {
         let heap = GetProcessHeap();
 

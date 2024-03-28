@@ -33,8 +33,8 @@ use canvas_traits::webgl::WebGLThreads;
 use compositing::windowing::{EmbedderEvent, EmbedderMethods, WindowMethods};
 use compositing::{CompositeTarget, IOCompositor, InitialCompositorState, ShutdownState};
 use compositing_traits::{
-    CanvasToCompositorMsg, CompositingReason, CompositorMsg, CompositorProxy, CompositorReceiver,
-    ConstellationMsg, FontToCompositorMsg, ForwardedToCompositorMsg,
+    CanvasToCompositorMsg, CompositorMsg, CompositorProxy, CompositorReceiver, ConstellationMsg,
+    FontToCompositorMsg, ForwardedToCompositorMsg,
 };
 #[cfg(all(
     not(target_os = "windows"),
@@ -75,6 +75,7 @@ use profile::{mem as profile_mem, time as profile_time};
 use profile_traits::{mem, time};
 use script::serviceworker_manager::ServiceWorkerManager;
 use script::JSEngineSetup;
+use script_layout_interface::LayoutFactory;
 use script_traits::{ScriptToConstellationChan, WindowSizeData};
 use servo_config::{opts, pref, prefs};
 use servo_media::player::context::GlContext;
@@ -87,7 +88,7 @@ use surfman::{GLApi, GLVersion};
 #[cfg(target_os = "linux")]
 use surfman::{NativeConnection, NativeContext};
 use webrender::{RenderApiSender, ShaderPrecacheFlags};
-use webrender_api::{DocumentId, FontInstanceKey, FontKey, ImageKey};
+use webrender_api::{ColorF, DocumentId, FontInstanceKey, FontKey, FramePublishId, ImageKey};
 use webrender_traits::{
     WebrenderExternalImageHandlers, WebrenderExternalImageRegistry, WebrenderImageHandlerType,
 };
@@ -197,26 +198,17 @@ impl webrender_api::RenderNotifier for RenderNotifier {
         Box::new(RenderNotifier::new(self.compositor_proxy.clone()))
     }
 
-    fn wake_up(&self, composite_needed: bool) {
-        if composite_needed {
-            self.compositor_proxy
-                .recomposite(CompositingReason::NewWebRenderFrame);
-        }
-    }
+    fn wake_up(&self, _composite_needed: bool) {}
 
     fn new_frame_ready(
         &self,
         _document_id: DocumentId,
-        scrolled: bool,
+        _scrolled: bool,
         composite_needed: bool,
-        _render_time_ns: Option<u64>,
+        _frame_publish_id: FramePublishId,
     ) {
-        if scrolled {
-            self.compositor_proxy
-                .send(CompositorMsg::NewScrollFrameReady(composite_needed));
-        } else {
-            self.wake_up(true);
-        }
+        self.compositor_proxy
+            .send(CompositorMsg::NewWebRenderFrameReady(composite_needed));
     }
 }
 
@@ -318,7 +310,7 @@ where
 
         let coordinates: compositing::windowing::EmbedderCoordinates = window.get_coordinates();
         let device_pixel_ratio = coordinates.hidpi_factor.get();
-        let viewport_size = coordinates.viewport.size.to_f32() / device_pixel_ratio;
+        let viewport_size = coordinates.viewport.size().to_f32() / device_pixel_ratio;
 
         let (mut webrender, webrender_api_sender) = {
             let mut debug_flags = webrender::DebugFlags::empty();
@@ -328,11 +320,22 @@ where
             );
 
             let render_notifier = Box::new(RenderNotifier::new(compositor_proxy.clone()));
-            webrender::Renderer::new(
+            let clear_color = servo_config::pref!(shell.background_color.rgba);
+            let clear_color = ColorF::new(
+                clear_color[0] as f32,
+                clear_color[1] as f32,
+                clear_color[2] as f32,
+                clear_color[3] as f32,
+            );
+            webrender::create_webrender_instance(
                 webrender_gl.clone(),
                 render_notifier,
-                webrender::RendererOptions {
-                    device_pixel_ratio,
+                webrender::WebRenderOptions {
+                    // We force the use of optimized shaders here because rendering is broken
+                    // on Android emulators with unoptimized shaders. This is due to a known
+                    // issue in the emulator's OpenGL emulation layer.
+                    // See: https://github.com/servo/servo/issues/31726
+                    use_optimized_shaders: true,
                     resource_override_path: opts.shaders_dir.clone(),
                     enable_aa: !opts.debug.disable_text_antialiasing,
                     debug_flags: debug_flags,
@@ -344,7 +347,7 @@ where
                     enable_subpixel_aa: pref!(gfx.subpixel_text_antialiasing.enabled) &&
                         !opts.debug.disable_subpixel_text_antialiasing,
                     allow_texture_swizzling: pref!(gfx.texture_swizzling.enabled),
-                    clear_color: None,
+                    clear_color,
                     ..Default::default()
                 },
                 None,
@@ -353,7 +356,7 @@ where
         };
 
         let webrender_api = webrender_api_sender.create_api();
-        let webrender_document = webrender_api.add_document(coordinates.get_viewport().size);
+        let webrender_document = webrender_api.add_document(coordinates.get_viewport().size());
 
         // Important that this call is done in a single-threaded fashion, we
         // can't defer it after `create_constellation` has started.
@@ -395,7 +398,7 @@ where
             embedder.register_webxr(&mut webxr_main_thread, embedder_proxy.clone());
         }
 
-        let wgpu_image_handler = webgpu::WGPUExternalImages::new();
+        let wgpu_image_handler = webgpu::WGPUExternalImages::default();
         let wgpu_image_map = wgpu_image_handler.images.clone();
         external_image_handlers.set_handler(
             Box::new(wgpu_image_handler),
@@ -417,9 +420,8 @@ where
             device_pixel_ratio: Scale::new(device_pixel_ratio),
         };
 
-        // Create the constellation, which maintains the engine
-        // pipelines, including the script and layout threads, as well
-        // as the navigation context.
+        // Create the constellation, which maintains the engine pipelines, including script and
+        // layout, as well as the navigation context.
         let constellation_chan = create_constellation(
             user_agent,
             opts.config_dir.clone(),
@@ -469,7 +471,6 @@ where
                 webxr_main_thread,
             },
             composite_target,
-            opts.is_running_problem_test,
             opts.exit_after_load,
             opts.debug.convert_mouse_to_touch,
             top_level_browsing_context_id,
@@ -782,11 +783,11 @@ where
                 }
             },
 
-            EmbedderEvent::WebViewVisibilityChanged(webview_id, visible) => {
-                let msg = ConstellationMsg::WebViewVisibilityChanged(webview_id, visible);
+            EmbedderEvent::SetWebViewThrottled(webview_id, throttled) => {
+                let msg = ConstellationMsg::SetWebViewThrottled(webview_id, throttled);
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!(
-                        "Sending WebViewVisibilityChanged to constellation failed ({:?}).",
+                        "Sending SetWebViewThrottled to constellation failed ({:?}).",
                         e
                     );
                 }
@@ -855,7 +856,7 @@ where
     }
 
     pub fn pinch_zoom_level(&self) -> f32 {
-        self.compositor.pinch_zoom_level()
+        self.compositor.pinch_zoom_level().get()
     }
 
     pub fn setup_logging(&self) {
@@ -986,28 +987,21 @@ fn create_constellation(
         wgpu_image_map,
     };
 
-    let start_constellation_chan = if opts::get().legacy_layout {
-        Constellation::<
-            script_layout_interface::message::Msg,
-            layout_thread_2013::LayoutThread,
-            script::script_thread::ScriptThread,
-            script::serviceworker_manager::ServiceWorkerManager,
-        >::start
+    let layout_factory: Arc<dyn LayoutFactory> = if opts::get().legacy_layout {
+        Arc::new(layout_thread_2013::LayoutFactoryImpl())
     } else {
-        Constellation::<
-            script_layout_interface::message::Msg,
-            layout_thread_2020::LayoutThread,
-            script::script_thread::ScriptThread,
-            script::serviceworker_manager::ServiceWorkerManager,
-        >::start
+        Arc::new(layout_thread_2020::LayoutFactoryImpl())
     };
 
-    start_constellation_chan(
+    Constellation::<
+        script::script_thread::ScriptThread,
+        script::serviceworker_manager::ServiceWorkerManager,
+    >::start(
         initial_state,
+        layout_factory,
         initial_window_size,
         opts.random_pipeline_closure_probability,
         opts.random_pipeline_closure_seed,
-        opts.is_running_problem_test,
         opts.hard_fail,
         !opts.debug.disable_canvas_antialiasing,
         canvas_create_sender,
@@ -1042,14 +1036,14 @@ impl gfx_traits::WebrenderApi for FontCacheWR {
 struct CanvasWebrenderApi(CompositorProxy);
 
 impl canvas_paint_thread::WebrenderApi for CanvasWebrenderApi {
-    fn generate_key(&self) -> Result<ImageKey, ()> {
+    fn generate_key(&self) -> Option<ImageKey> {
         let (sender, receiver) = unbounded();
         let _ = self
             .0
             .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Canvas(
                 CanvasToCompositorMsg::GenerateKey(sender),
             )));
-        receiver.recv().map_err(|_| ())
+        receiver.recv().ok()
     }
     fn update_images(&self, updates: Vec<canvas_paint_thread::ImageUpdate>) {
         let _ = self
@@ -1129,21 +1123,17 @@ pub fn run_content_process(token: String) {
             set_logger(content.script_to_constellation_chan().clone());
 
             let background_hang_monitor_register = content.register_with_background_hang_monitor();
-            if opts::get().legacy_layout {
-                content.start_all::<script_layout_interface::message::Msg,
-                                    layout_thread_2013::LayoutThread,
-                                    script::script_thread::ScriptThread>(
-                                        true,
-                                        background_hang_monitor_register,
-                                    );
+            let layout_factory: Arc<dyn LayoutFactory> = if opts::get().legacy_layout {
+                Arc::new(layout_thread_2013::LayoutFactoryImpl())
             } else {
-                content.start_all::<script_layout_interface::message::Msg,
-                                    layout_thread_2020::LayoutThread,
-                                    script::script_thread::ScriptThread>(
-                                        true,
-                                        background_hang_monitor_register,
-                                    );
-            }
+                Arc::new(layout_thread_2020::LayoutFactoryImpl())
+            };
+
+            content.start_all::<script::script_thread::ScriptThread>(
+                true,
+                layout_factory,
+                background_hang_monitor_register,
+            );
         },
         UnprivilegedContent::ServiceWorker(content) => {
             content.start::<ServiceWorkerManager>();

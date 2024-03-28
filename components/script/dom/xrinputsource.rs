@@ -58,7 +58,7 @@ impl XRInputSource {
             global,
         );
 
-        let _ac = enter_realm(&*global);
+        let _ac = enter_realm(global);
         let cx = GlobalScope::get_cx();
         unsafe {
             rooted!(in(*cx) let mut profiles = UndefinedValue());
@@ -100,7 +100,7 @@ impl XRInputSourceMethods for XRInputSource {
     fn TargetRaySpace(&self) -> DomRoot<XRSpace> {
         self.target_ray_space.or_init(|| {
             let global = self.global();
-            XRSpace::new_inputspace(&global, &self.session, &self, false)
+            XRSpace::new_inputspace(&global, &self.session, self, false)
         })
     }
 
@@ -109,7 +109,7 @@ impl XRInputSourceMethods for XRInputSource {
         if self.info.supports_grip {
             Some(self.grip_space.or_init(|| {
                 let global = self.global();
-                XRSpace::new_inputspace(&global, &self.session, &self, true)
+                XRSpace::new_inputspace(&global, &self.session, self, true)
             }))
         } else {
             None
@@ -125,7 +125,7 @@ impl XRInputSourceMethods for XRInputSource {
         if let Some(ref hand) = self.info.hand_support {
             Some(
                 self.hand
-                    .or_init(|| XRHand::new(&self.global(), &self, hand.clone())),
+                    .or_init(|| XRHand::new(&self.global(), self, hand.clone())),
             )
         } else {
             None

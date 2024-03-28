@@ -46,9 +46,9 @@ impl BluetoothRemoteGATTDescriptor {
         BluetoothRemoteGATTDescriptor {
             reflector_: Reflector::new(),
             characteristic: Dom::from_ref(characteristic),
-            uuid: uuid,
+            uuid,
             value: DomRefCell::new(None),
-            instance_id: instance_id,
+            instance_id,
         }
     }
 
@@ -122,7 +122,7 @@ impl BluetoothRemoteGATTDescriptorMethods for BluetoothRemoteGATTDescriptor {
         self.get_bluetooth_thread()
             .send(BluetoothRequest::ReadValue(self.get_instance_id(), sender))
             .unwrap();
-        return p;
+        p
     }
 
     // https://webbluetoothcg.github.io/web-bluetooth/#dom-bluetoothremotegattdescriptor-writevalue
@@ -168,7 +168,7 @@ impl BluetoothRemoteGATTDescriptorMethods for BluetoothRemoteGATTDescriptor {
                 sender,
             ))
             .unwrap();
-        return p;
+        p
     }
 }
 

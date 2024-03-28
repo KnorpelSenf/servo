@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use cssparser::RGBA;
+use cssparser::RgbaLegacy;
 use dom_struct::dom_struct;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::rust::HandleObject;
@@ -70,12 +70,12 @@ impl HTMLHRElementMethods for HTMLHRElement {
 }
 
 pub trait HTMLHRLayoutHelpers {
-    fn get_color(self) -> Option<RGBA>;
+    fn get_color(self) -> Option<RgbaLegacy>;
     fn get_width(self) -> LengthOrPercentageOrAuto;
 }
 
 impl HTMLHRLayoutHelpers for LayoutDom<'_, HTMLHRElement> {
-    fn get_color(self) -> Option<RGBA> {
+    fn get_color(self) -> Option<RgbaLegacy> {
         self.upcast::<Element>()
             .get_attr_for_layout(&ns!(), &local_name!("color"))
             .and_then(AttrValue::as_color)
@@ -97,10 +97,10 @@ impl VirtualMethods for HTMLHRElement {
     }
 
     fn parse_plain_attribute(&self, name: &LocalName, value: DOMString) -> AttrValue {
-        match name {
-            &local_name!("align") => AttrValue::from_dimension(value.into()),
-            &local_name!("color") => AttrValue::from_legacy_color(value.into()),
-            &local_name!("width") => AttrValue::from_dimension(value.into()),
+        match *name {
+            local_name!("align") => AttrValue::from_dimension(value.into()),
+            local_name!("color") => AttrValue::from_legacy_color(value.into()),
+            local_name!("width") => AttrValue::from_dimension(value.into()),
             _ => self
                 .super_type()
                 .unwrap()

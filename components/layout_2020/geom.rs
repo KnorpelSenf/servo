@@ -4,7 +4,7 @@
 
 use std::convert::From;
 use std::fmt;
-use std::ops::{Add, AddAssign, Sub};
+use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use app_units::Au;
 use serde::Serialize;
@@ -26,7 +26,7 @@ pub type LengthOrAuto = AutoOr<Length>;
 pub type AuOrAuto = AutoOr<Au>;
 pub type LengthPercentageOrAuto<'a> = AutoOr<&'a LengthPercentage>;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub struct LogicalVec2<T> {
     pub inline: T,
     pub block: T,
@@ -70,6 +70,13 @@ impl<T: Clone> LogicalVec2<T> {
             block: b.clone(),
         }
     }
+
+    pub fn map<U>(&self, f: impl Fn(&T) -> U) -> LogicalVec2<U> {
+        LogicalVec2 {
+            inline: f(&self.inline),
+            block: f(&self.block),
+        }
+    }
 }
 
 impl<T> Add<&'_ LogicalVec2<T>> for &'_ LogicalVec2<T>
@@ -110,6 +117,34 @@ where
     }
 }
 
+impl<T> AddAssign<LogicalVec2<T>> for LogicalVec2<T>
+where
+    T: AddAssign<T> + Copy,
+{
+    fn add_assign(&mut self, other: LogicalVec2<T>) {
+        self.add_assign(&other);
+    }
+}
+
+impl<T> SubAssign<&'_ LogicalVec2<T>> for LogicalVec2<T>
+where
+    T: SubAssign<T> + Copy,
+{
+    fn sub_assign(&mut self, other: &'_ LogicalVec2<T>) {
+        self.inline -= other.inline;
+        self.block -= other.block;
+    }
+}
+
+impl<T> SubAssign<LogicalVec2<T>> for LogicalVec2<T>
+where
+    T: SubAssign<T> + Copy,
+{
+    fn sub_assign(&mut self, other: LogicalVec2<T>) {
+        self.sub_assign(&other);
+    }
+}
+
 impl<T: Zero> LogicalVec2<T> {
     pub fn zero() -> Self {
         Self {
@@ -119,12 +154,9 @@ impl<T: Zero> LogicalVec2<T> {
     }
 }
 
-impl LogicalVec2<LengthOrAuto> {
-    pub fn auto_is(&self, f: impl Fn() -> Length) -> LogicalVec2<Length> {
-        LogicalVec2 {
-            inline: self.inline.auto_is(&f),
-            block: self.block.auto_is(&f),
-        }
+impl<T: Clone> LogicalVec2<AutoOr<T>> {
+    pub fn auto_is(&self, f: impl Fn() -> T) -> LogicalVec2<T> {
+        self.map(|t| t.auto_is(&f))
     }
 }
 
@@ -136,10 +168,10 @@ impl LogicalVec2<LengthPercentageOrAuto<'_>> {
         LogicalVec2 {
             inline: self
                 .inline
-                .percentage_relative_to(containing_block.inline_size),
-            block: self
-                .block
-                .maybe_percentage_relative_to(containing_block.block_size.non_auto()),
+                .percentage_relative_to(containing_block.inline_size.into()),
+            block: self.block.maybe_percentage_relative_to(
+                containing_block.block_size.map(|t| t.into()).non_auto(),
+            ),
         }
     }
 }
@@ -152,9 +184,11 @@ impl LogicalVec2<Option<&'_ LengthPercentage>> {
         LogicalVec2 {
             inline: self
                 .inline
-                .map(|lp| lp.percentage_relative_to(containing_block.inline_size)),
+                .map(|lp| lp.percentage_relative_to(containing_block.inline_size.into())),
             block: self.block.and_then(|lp| {
-                lp.maybe_percentage_relative_to(containing_block.block_size.non_auto())
+                lp.maybe_percentage_relative_to(
+                    containing_block.block_size.map(|t| t.into()).non_auto(),
+                )
             }),
         }
     }
@@ -329,8 +363,8 @@ impl LogicalSides<LengthPercentageOrAuto<'_>> {
     }
 }
 
-impl LogicalSides<LengthOrAuto> {
-    pub fn auto_is(&self, f: impl Fn() -> Length) -> LogicalSides<Length> {
+impl<T: Clone> LogicalSides<AutoOr<T>> {
+    pub fn auto_is(&self, f: impl Fn() -> T) -> LogicalSides<T> {
         self.map(|s| s.auto_is(&f))
     }
 }
@@ -477,14 +511,8 @@ impl From<LogicalVec2<Au>> for LogicalVec2<CSSPixelLength> {
 impl From<LogicalRect<Au>> for LogicalRect<CSSPixelLength> {
     fn from(value: LogicalRect<Au>) -> Self {
         LogicalRect {
-            start_corner: LogicalVec2 {
-                inline: value.start_corner.inline.into(),
-                block: value.start_corner.block.into(),
-            },
-            size: LogicalVec2 {
-                inline: value.size.inline.into(),
-                block: value.size.block.into(),
-            },
+            start_corner: value.start_corner.into(),
+            size: value.size.into(),
         }
     }
 }
@@ -492,14 +520,22 @@ impl From<LogicalRect<Au>> for LogicalRect<CSSPixelLength> {
 impl From<LogicalRect<CSSPixelLength>> for LogicalRect<Au> {
     fn from(value: LogicalRect<CSSPixelLength>) -> Self {
         LogicalRect {
-            start_corner: LogicalVec2 {
-                inline: value.start_corner.inline.into(),
-                block: value.start_corner.block.into(),
-            },
-            size: LogicalVec2 {
-                inline: value.size.inline.into(),
-                block: value.size.block.into(),
-            },
+            start_corner: value.start_corner.into(),
+            size: value.size.into(),
         }
     }
+}
+
+/// Convert a `PhysicalRect<Length>` (one that uses CSSPixel as the unit) to an untyped `Rect<Au>`.
+pub fn physical_rect_to_au_rect(rect: PhysicalRect<Length>) -> euclid::default::Rect<Au> {
+    euclid::default::Rect::new(
+        euclid::default::Point2D::new(
+            Au::from_f32_px(rect.origin.x.px()),
+            Au::from_f32_px(rect.origin.y.px()),
+        ),
+        euclid::default::Size2D::new(
+            Au::from_f32_px(rect.size.width.px()),
+            Au::from_f32_px(rect.size.height.px()),
+        ),
+    )
 }

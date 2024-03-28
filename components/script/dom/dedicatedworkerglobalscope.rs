@@ -78,7 +78,7 @@ impl<'a> AutoWorkerReset<'a> {
         worker: TrustedWorkerAddress,
     ) -> AutoWorkerReset<'a> {
         AutoWorkerReset {
-            workerscope: workerscope,
+            workerscope,
             old_worker: replace(&mut *workerscope.worker.borrow_mut(), Some(worker)),
         }
     }
@@ -121,7 +121,7 @@ impl QueuedTaskConversion for DedicatedWorkerScriptMsg {
         };
         match script_msg {
             CommonScriptMsg::Task(_category, _boxed, _pipeline_id, source_name) => {
-                Some(&source_name)
+                Some(source_name)
             },
             _ => None,
         }
@@ -169,10 +169,7 @@ impl QueuedTaskConversion for DedicatedWorkerScriptMsg {
     }
 
     fn is_wake_up(&self) -> bool {
-        match self {
-            DedicatedWorkerScriptMsg::WakeUp => true,
-            _ => false,
-        }
+        matches!(self, DedicatedWorkerScriptMsg::WakeUp)
     }
 }
 
@@ -218,7 +215,7 @@ impl WorkerEventLoopMethods for DedicatedWorkerGlobalScope {
     }
 
     fn handle_worker_post_event(&self, worker: &TrustedWorkerAddress) -> Option<AutoWorkerReset> {
-        let ar = AutoWorkerReset::new(&self, worker.clone());
+        let ar = AutoWorkerReset::new(self, worker.clone());
         Some(ar)
     }
 
@@ -268,10 +265,10 @@ impl DedicatedWorkerGlobalScope {
                 gpu_id_hub,
             ),
             task_queue: TaskQueue::new(receiver, own_sender.clone()),
-            own_sender: own_sender,
-            parent_sender: parent_sender,
+            own_sender,
+            parent_sender,
             worker: DomRefCell::new(None),
-            image_cache: image_cache,
+            image_cache,
             browsing_context,
             control_receiver,
         }
@@ -431,7 +428,7 @@ impl DedicatedWorkerGlobalScope {
                 let (metadata, bytes) = match load_whole_resource(
                     request,
                     &global_scope.resource_threads().sender(),
-                    &global_scope,
+                    global_scope,
                 ) {
                     Err(_) => {
                         println!("error loading script {}", serialized_worker_url);
@@ -464,7 +461,7 @@ impl DedicatedWorkerGlobalScope {
 
                 {
                     let _ar = AutoWorkerReset::new(&global, worker.clone());
-                    let _ac = enter_realm(&*scope);
+                    let _ac = enter_realm(scope);
                     scope.execute_script(DOMString::from(source));
                 }
 

@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use app_units::Au;
 use gfx_traits::print_tree::PrintTree;
 use serde::Serialize;
 use servo_arc::Arc as ServoArc;
@@ -20,6 +21,24 @@ use crate::geom::{
 };
 use crate::style_ext::ComputedValuesExt;
 
+/// Describes how a [`BoxFragment`] paints its background.
+pub(crate) enum BackgroundMode {
+    /// Draw the normal [`BoxFragment`] background as well as the extra backgrounds
+    /// based on the style and positioning rectangles in this data structure.
+    Extra(Vec<ExtraBackground>),
+    /// Do not draw a background for this Fragment. This is used for elements like
+    /// table tracks and table track groups, which rely on cells to paint their
+    /// backgrounds.
+    None,
+    /// Draw the background normally, getting information from the Fragment style.
+    Normal,
+}
+
+pub(crate) struct ExtraBackground {
+    pub style: ServoArc<ComputedValues>,
+    pub rect: LogicalRect<Au>,
+}
+
 #[derive(Serialize)]
 pub(crate) struct BoxFragment {
     pub base: BaseFragment,
@@ -33,9 +52,9 @@ pub(crate) struct BoxFragment {
     /// <https://drafts.csswg.org/css-writing-modes/#orthogonal-flows>
     pub content_rect: LogicalRect<Length>,
 
-    pub padding: LogicalSides<Length>,
-    pub border: LogicalSides<Length>,
-    pub margin: LogicalSides<Length>,
+    pub padding: LogicalSides<Au>,
+    pub border: LogicalSides<Au>,
+    pub margin: LogicalSides<Au>,
 
     /// When the `clear` property is not set to `none`, it may introduce clearance.
     /// Clearance is some extra spacing that is added above the top margin,
@@ -43,7 +62,7 @@ pub(crate) struct BoxFragment {
     /// The presence of clearance prevents the top margin from collapsing with
     /// earlier margins or with the bottom margin of the parent block.
     /// <https://drafts.csswg.org/css2/#clearance>
-    pub clearance: Option<Length>,
+    pub clearance: Option<Au>,
 
     /// When this [`BoxFragment`] is for content that has a baseline, this tracks
     /// the first and last baselines of that content. This is used to propagate baselines
@@ -62,18 +81,22 @@ pub(crate) struct BoxFragment {
     /// during stacking context tree construction because they rely on the size of the
     /// scroll container.
     pub(crate) resolved_sticky_insets: Option<PhysicalSides<LengthOrAuto>>,
+
+    #[serde(skip_serializing)]
+    pub background_mode: BackgroundMode,
 }
 
 impl BoxFragment {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_fragment_info: BaseFragmentInfo,
         style: ServoArc<ComputedValues>,
         children: Vec<Fragment>,
         content_rect: LogicalRect<Length>,
-        padding: LogicalSides<Length>,
-        border: LogicalSides<Length>,
-        margin: LogicalSides<Length>,
-        clearance: Option<Length>,
+        padding: LogicalSides<Au>,
+        border: LogicalSides<Au>,
+        margin: LogicalSides<Au>,
+        clearance: Option<Au>,
         block_margins_collapsed_with_children: CollapsedBlockMargins,
     ) -> BoxFragment {
         let position = style.get_box().position;
@@ -99,15 +122,16 @@ impl BoxFragment {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_overconstrained(
         base_fragment_info: BaseFragmentInfo,
         style: ServoArc<ComputedValues>,
         children: Vec<Fragment>,
         content_rect: LogicalRect<Length>,
-        padding: LogicalSides<Length>,
-        border: LogicalSides<Length>,
-        margin: LogicalSides<Length>,
-        clearance: Option<Length>,
+        padding: LogicalSides<Au>,
+        border: LogicalSides<Au>,
+        margin: LogicalSides<Au>,
+        clearance: Option<Au>,
         block_margins_collapsed_with_children: CollapsedBlockMargins,
         overconstrained: PhysicalSize<bool>,
     ) -> BoxFragment {
@@ -130,8 +154,10 @@ impl BoxFragment {
         let mut baselines = Baselines::default();
         if style.establishes_scroll_container() {
             baselines.last = Some(
-                (content_rect.size.block + padding.block_end + border.block_end + margin.block_end)
-                    .into(),
+                Au::from(content_rect.size.block) +
+                    padding.block_end +
+                    border.block_end +
+                    margin.block_end,
             )
         }
 
@@ -149,6 +175,7 @@ impl BoxFragment {
             scrollable_overflow_from_children,
             overconstrained,
             resolved_sticky_insets: None,
+            background_mode: BackgroundMode::Normal,
         }
     }
 
@@ -163,6 +190,17 @@ impl BoxFragment {
         }
         self.baselines.first = baselines.first;
         self
+    }
+
+    pub fn add_extra_background(&mut self, extra_background: ExtraBackground) {
+        match self.background_mode {
+            BackgroundMode::Extra(ref mut backgrounds) => backgrounds.push(extra_background),
+            _ => self.background_mode = BackgroundMode::Extra(vec![extra_background]),
+        }
+    }
+
+    pub fn set_does_not_paint_background(&mut self) {
+        self.background_mode = BackgroundMode::None;
     }
 
     pub fn scrollable_overflow(
@@ -185,11 +223,13 @@ impl BoxFragment {
     }
 
     pub fn padding_rect(&self) -> LogicalRect<Length> {
-        self.content_rect.inflate(&self.padding)
+        self.content_rect
+            .inflate(&self.padding.map(|t| (*t).into()))
     }
 
     pub fn border_rect(&self) -> LogicalRect<Length> {
-        self.padding_rect().inflate(&self.border)
+        self.padding_rect()
+            .inflate(&self.border.map(|t| (*t).into()))
     }
 
     pub fn print(&self, tree: &mut PrintTree) {

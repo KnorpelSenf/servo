@@ -5,6 +5,8 @@
 //! The high-level interface from script to constellation. Using this abstract interface helps
 //! reduce coupling between these two components.
 
+#![allow(clippy::new_without_default)]
+
 use std::cell::Cell;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -80,18 +82,20 @@ pub struct PipelineNamespaceInstaller {
     namespace_receiver: IpcReceiver<PipelineNamespaceId>,
 }
 
-impl PipelineNamespaceInstaller {
-    pub fn new() -> Self {
+impl Default for PipelineNamespaceInstaller {
+    fn default() -> Self {
         let (namespace_sender, namespace_receiver) =
             ipc::channel().expect("PipelineNamespaceInstaller ipc channel failure");
         println!("constructing installer");
-        PipelineNamespaceInstaller {
+        Self {
             request_sender: None,
-            namespace_sender: namespace_sender,
-            namespace_receiver: namespace_receiver,
+            namespace_sender,
+            namespace_receiver,
         }
     }
+}
 
+impl PipelineNamespaceInstaller {
     /// Provide a request sender to send requests to the constellation.
     pub fn set_sender(&mut self, sender: IpcSender<PipelineNamespaceRequest>) {
         self.request_sender = Some(sender);
@@ -122,7 +126,7 @@ lazy_static! {
     ///
     /// Use PipelineNamespace::fetch_install to install a unique pipeline-namespace from the calling thread.
     static ref PIPELINE_NAMESPACE_INSTALLER: Arc<Mutex<PipelineNamespaceInstaller>> =
-        Arc::new(Mutex::new(PipelineNamespaceInstaller::new()));
+        Arc::new(Mutex::new(PipelineNamespaceInstaller::default()));
 }
 
 /// Each pipeline ID needs to be unique. However, it also needs to be possible to
@@ -248,7 +252,7 @@ size_of_test!(BrowsingContextId, 8);
 size_of_test!(Option<BrowsingContextId>, 8);
 
 impl BrowsingContextId {
-    pub fn new() -> BrowsingContextId {
+    pub fn new() -> Self {
         PIPELINE_NAMESPACE.with(|tls| {
             let mut namespace = tls.get().expect("No namespace set for this thread!");
             let new_browsing_context_id = namespace.next_browsing_context_id();
@@ -293,6 +297,7 @@ impl TopLevelBrowsingContextId {
     pub fn new() -> TopLevelBrowsingContextId {
         TopLevelBrowsingContextId(BrowsingContextId::new())
     }
+
     /// Each script and layout thread should have the top-level browsing context id installed,
     /// since it is used by crash reporting.
     pub fn install(id: TopLevelBrowsingContextId) {
@@ -460,7 +465,6 @@ pub enum LayoutHangAnnotation {
     Reflow,
     GetRPC,
     CollectReports,
-    PrepareToExit,
     ExitNow,
     GetCurrentEpoch,
     GetWebFontLoadState,
@@ -469,7 +473,6 @@ pub enum LayoutHangAnnotation {
     SetScrollStates,
     UpdateScrollStateFromScript,
     RegisterPaint,
-    SetNavigationStart,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -547,7 +550,7 @@ impl fmt::Debug for HangAlert {
                     "\n The following component is experiencing a transient hang: \n {:?}",
                     component_id
                 )?;
-                (annotation.clone(), None)
+                (*annotation, None)
             },
             HangAlert::Permanent(component_id, annotation, profile) => {
                 write!(
@@ -555,7 +558,7 @@ impl fmt::Debug for HangAlert {
                     "\n The following component is experiencing a permanent hang: \n {:?}",
                     component_id
                 )?;
-                (annotation.clone(), profile.clone())
+                (*annotation, profile.clone())
             },
         };
 
@@ -612,7 +615,6 @@ impl fmt::Debug for HangProfile {
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum MonitoredComponentType {
-    Layout,
     Script,
 }
 

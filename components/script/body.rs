@@ -91,7 +91,7 @@ impl TransmitBodyConnectHandler {
         source: BodySource,
     ) -> TransmitBodyConnectHandler {
         TransmitBodyConnectHandler {
-            stream: stream,
+            stream,
             task_source,
             canceller,
             bytes_sender: None,
@@ -287,7 +287,7 @@ struct TransmitBodyPromiseHandler {
 impl Callback for TransmitBodyPromiseHandler {
     /// Step 5 of <https://fetch.spec.whatwg.org/#concept-request-transmit-body>
     fn callback(&self, cx: JSContext, v: HandleValue, _realm: InRealm) {
-        let is_done = match get_read_promise_done(cx.clone(), &v) {
+        let is_done = match get_read_promise_done(cx, &v) {
             Ok(is_done) => is_done,
             Err(_) => {
                 // Step 5.5, the "otherwise" steps.
@@ -304,7 +304,7 @@ impl Callback for TransmitBodyPromiseHandler {
             return self.stream.stop_reading();
         }
 
-        let chunk = match get_read_promise_bytes(cx.clone(), &v) {
+        let chunk = match get_read_promise_bytes(cx, &v) {
             Ok(chunk) => chunk,
             Err(_) => {
                 // Step 5.5, the "otherwise" steps.
@@ -453,7 +453,7 @@ impl Extractable for BodyInit {
             BodyInit::ArrayBuffer(ref typedarray) => {
                 let bytes = typedarray.to_vec();
                 let total_bytes = bytes.len();
-                let stream = ReadableStream::new_from_bytes(&global, bytes);
+                let stream = ReadableStream::new_from_bytes(global, bytes);
                 Ok(ExtractedBody {
                     stream,
                     total_bytes: Some(total_bytes),
@@ -464,7 +464,7 @@ impl Extractable for BodyInit {
             BodyInit::ArrayBufferView(ref typedarray) => {
                 let bytes = typedarray.to_vec();
                 let total_bytes = bytes.len();
-                let stream = ReadableStream::new_from_bytes(&global, bytes);
+                let stream = ReadableStream::new_from_bytes(global, bytes);
                 Ok(ExtractedBody {
                     stream,
                     total_bytes: Some(total_bytes),
@@ -497,7 +497,7 @@ impl Extractable for Vec<u8> {
     fn extract(&self, global: &GlobalScope) -> Fallible<ExtractedBody> {
         let bytes = self.clone();
         let total_bytes = self.len();
-        let stream = ReadableStream::new_from_bytes(&global, bytes);
+        let stream = ReadableStream::new_from_bytes(global, bytes);
         Ok(ExtractedBody {
             stream,
             total_bytes: Some(total_bytes),
@@ -531,7 +531,7 @@ impl Extractable for DOMString {
         let bytes = self.as_bytes().to_owned();
         let total_bytes = bytes.len();
         let content_type = Some(DOMString::from("text/plain;charset=UTF-8"));
-        let stream = ReadableStream::new_from_bytes(&global, bytes);
+        let stream = ReadableStream::new_from_bytes(global, bytes);
         Ok(ExtractedBody {
             stream,
             total_bytes: Some(total_bytes),
@@ -550,7 +550,7 @@ impl Extractable for FormData {
             "multipart/form-data;boundary={}",
             boundary
         )));
-        let stream = ReadableStream::new_from_bytes(&global, bytes);
+        let stream = ReadableStream::new_from_bytes(global, bytes);
         Ok(ExtractedBody {
             stream,
             total_bytes: Some(total_bytes),
@@ -567,7 +567,7 @@ impl Extractable for URLSearchParams {
         let content_type = Some(DOMString::from(
             "application/x-www-form-urlencoded;charset=UTF-8",
         ));
-        let stream = ReadableStream::new_from_bytes(&global, bytes);
+        let stream = ReadableStream::new_from_bytes(global, bytes);
         Ok(ExtractedBody {
             stream,
             total_bytes: Some(total_bytes),
@@ -656,7 +656,7 @@ impl Callback for ConsumeBodyPromiseHandler {
             .as_ref()
             .expect("ConsumeBodyPromiseHandler has no stream in callback.");
 
-        let is_done = match get_read_promise_done(cx.clone(), &v) {
+        let is_done = match get_read_promise_done(cx, &v) {
             Ok(is_done) => is_done,
             Err(err) => {
                 stream.stop_reading();
@@ -667,9 +667,9 @@ impl Callback for ConsumeBodyPromiseHandler {
 
         if is_done {
             // When read is fulfilled with an object whose done property is true.
-            self.resolve_result_promise(cx.clone());
+            self.resolve_result_promise(cx);
         } else {
-            let chunk = match get_read_promise_bytes(cx.clone(), &v) {
+            let chunk = match get_read_promise_bytes(cx, &v) {
                 Ok(chunk) => chunk,
                 Err(err) => {
                     stream.stop_reading();
@@ -685,7 +685,7 @@ impl Callback for ConsumeBodyPromiseHandler {
                 .expect("No bytes for ConsumeBodyPromiseHandler.");
 
             // Append the value property to bytes.
-            bytes.extend_from_slice(&*chunk);
+            bytes.extend_from_slice(&chunk);
 
             let global = stream.global();
 

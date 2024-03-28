@@ -16,7 +16,7 @@ use crate::dom::NodeExt;
 use crate::dom_traversal::{Contents, NodeAndStyleInfo};
 use crate::flexbox::FlexContainer;
 use crate::flow::BlockFormattingContext;
-use crate::fragment_tree::{BaseFragmentInfo, Fragment};
+use crate::fragment_tree::{BaseFragmentInfo, Fragment, FragmentFlags};
 use crate::positioned::PositioningContext;
 use crate::replaced::ReplacedContent;
 use crate::sizing::{self, ContentSizes};
@@ -59,8 +59,8 @@ pub(crate) enum NonReplacedFormattingContextContents {
     // Other layout modes go here
 }
 
-/// The baselines of a layout or a [`BoxFragment`]. Some layout uses the first and some layout uses
-/// the last.
+/// The baselines of a layout or a [`crate::fragment_tree::BoxFragment`]. Some layout
+/// uses the first and some layout uses the last.
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Baselines {
     pub first: Option<Au>,
@@ -72,6 +72,11 @@ pub(crate) struct IndependentLayout {
 
     /// <https://drafts.csswg.org/css2/visudet.html#root-height>
     pub content_block_size: Au,
+
+    /// The contents of a table may force it to become wider than what we would expect
+    /// from 'width' and 'min-width'. This is the resulting inline content size,
+    /// or None for non-table layouts.
+    pub content_inline_size_for_table: Option<Au>,
 
     /// The offset of the last inflow baseline of this layout in the content area, if
     /// there was one. This is used to propagate baselines to the ancestors of `display:
@@ -126,11 +131,15 @@ impl IndependentFormattingContext {
                     contents,
                 })
             },
-            Err(contents) => Self::Replaced(ReplacedFormattingContext {
-                base_fragment_info: node_and_style_info.into(),
-                style: Arc::clone(&node_and_style_info.style),
-                contents,
-            }),
+            Err(contents) => {
+                let mut base_fragment_info: BaseFragmentInfo = node_and_style_info.into();
+                base_fragment_info.flags.insert(FragmentFlags::IS_REPLACED);
+                Self::Replaced(ReplacedFormattingContext {
+                    base_fragment_info,
+                    style: Arc::clone(&node_and_style_info.style),
+                    contents,
+                })
+            },
         }
     }
 
@@ -187,18 +196,26 @@ impl NonReplacedFormattingContext {
         &self,
         layout_context: &LayoutContext,
         positioning_context: &mut PositioningContext,
+        containing_block_for_children: &ContainingBlock,
         containing_block: &ContainingBlock,
     ) -> IndependentLayout {
         match &self.contents {
-            NonReplacedFormattingContextContents::Flow(bfc) => {
-                bfc.layout(layout_context, positioning_context, containing_block)
-            },
-            NonReplacedFormattingContextContents::Flex(fc) => {
-                fc.layout(layout_context, positioning_context, containing_block)
-            },
-            NonReplacedFormattingContextContents::Table(table) => {
-                table.layout(layout_context, positioning_context, containing_block)
-            },
+            NonReplacedFormattingContextContents::Flow(bfc) => bfc.layout(
+                layout_context,
+                positioning_context,
+                containing_block_for_children,
+            ),
+            NonReplacedFormattingContextContents::Flex(fc) => fc.layout(
+                layout_context,
+                positioning_context,
+                containing_block_for_children,
+            ),
+            NonReplacedFormattingContextContents::Table(table) => table.layout(
+                layout_context,
+                positioning_context,
+                containing_block_for_children,
+                containing_block,
+            ),
         }
     }
 

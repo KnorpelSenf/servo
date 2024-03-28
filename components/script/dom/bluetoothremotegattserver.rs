@@ -90,7 +90,7 @@ impl BluetoothRemoteGATTServerMethods for BluetoothRemoteGATTServer {
             ))
             .unwrap();
         // Step 5: return promise.
-        return p;
+        p
     }
 
     // https://webbluetoothcg.github.io/web-bluetooth/#dom-bluetoothremotegattserver-disconnect
@@ -162,12 +162,12 @@ impl AsyncBluetoothListener for BluetoothRemoteGATTServer {
             BluetoothResponse::GetPrimaryServices(services_vec, single) => {
                 let device = self.Device();
                 if single {
-                    promise.resolve_native(&device.get_or_create_service(&services_vec[0], &self));
+                    promise.resolve_native(&device.get_or_create_service(&services_vec[0], self));
                     return;
                 }
                 let mut services = vec![];
                 for service in services_vec {
-                    let bt_service = device.get_or_create_service(&service, &self);
+                    let bt_service = device.get_or_create_service(&service, self);
                     services.push(bt_service);
                 }
                 promise.resolve_native(&services);

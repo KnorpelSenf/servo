@@ -18,14 +18,13 @@ pub mod webdriver_msg;
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use bitflags::bitflags;
 use bluetooth_traits::BluetoothRequest;
 use canvas_traits::webgl::WebGLPipeline;
 use compositor::ScrollTreeNodeId;
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{RecvTimeoutError, Sender};
 use devtools_traits::{DevtoolScriptControlMsg, ScriptToDevtoolsControlMsg, WorkerId};
 use embedder_traits::{CompositorEventVariant, Cursor};
 use euclid::default::Point2D;
@@ -57,7 +56,7 @@ use servo_atoms::Atom;
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style_traits::{CSSPixel, SpeculativePainter};
 use webgpu::identity::WebGPUMsg;
-use webrender_api::units::{DeviceIntSize, DevicePixel, LayoutPixel, LayoutPoint, WorldPoint};
+use webrender_api::units::{DeviceIntSize, DevicePixel, DevicePoint, LayoutPixel, LayoutPoint};
 use webrender_api::{
     BuiltDisplayList, BuiltDisplayListDescriptor, DocumentId, ExternalImageData, ExternalScrollId,
     HitTestFlags, ImageData, ImageDescriptor, ImageKey, PipelineId as WebRenderPipelineId,
@@ -110,19 +109,14 @@ impl UntrustedNodeAddress {
     }
 }
 
-/// Messages sent to the layout thread from the constellation and/or compositor.
+/// Messages sent to layout from the constellation and/or compositor.
 #[derive(Debug, Deserialize, Serialize)]
 pub enum LayoutControlMsg {
-    /// Requests that this layout thread exit.
+    /// Requests that this layout clean up before exit.
     ExitNow,
-    /// Requests the current epoch (layout counter) from this layout.
-    GetCurrentEpoch(IpcSender<Epoch>),
     /// Tells layout about the new scrolling offsets of each scrollable stacking context.
     SetScrollStates(Vec<ScrollState>),
-    /// Requests the current load state of Web fonts. `true` is returned if fonts are still loading
-    /// and `false` is returned if all fonts have loaded.
-    GetWebFontLoadState(IpcSender<bool>),
-    /// Send the paint time for a specific epoch to the layout thread.
+    /// Send the paint time for a specific epoch to layout.
     PaintMetric(Epoch, u64),
 }
 
@@ -200,14 +194,14 @@ impl LoadData {
     ) -> LoadData {
         LoadData {
             load_origin,
-            url: url,
-            creator_pipeline_id: creator_pipeline_id,
+            url,
+            creator_pipeline_id,
             method: Method::GET,
             headers: HeaderMap::new(),
             data: None,
             js_eval_result: None,
-            referrer: referrer,
-            referrer_policy: referrer_policy,
+            referrer,
+            referrer_policy,
             srcdoc: "".to_string(),
             inherited_secure_context,
             crash: None,
@@ -233,8 +227,6 @@ pub struct NewLayoutInfo {
     pub load_data: LoadData,
     /// Information about the initial window size.
     pub window_size: WindowSizeData,
-    /// A port on which layout can receive messages from the pipeline.
-    pub pipeline_port: IpcReceiver<LayoutControlMsg>,
 }
 
 /// When a pipeline is closed, should its browsing context be discarded too?
@@ -293,7 +285,7 @@ pub enum ConstellationControlMsg {
     /// Sends the final response to script thread for fetching after all redirections
     /// have been resolved
     NavigationResponse(PipelineId, FetchResponseMsg),
-    /// Gives a channel and ID to a layout thread, as well as the ID of that layout's parent
+    /// Gives a channel and ID to a layout, as well as the ID of that layout's parent
     AttachLayout(NewLayoutInfo),
     /// Window resized.  Sends a DOM event eventually, but first we combine events.
     Resize(PipelineId, WindowSizeData, WindowSizeType),
@@ -320,11 +312,10 @@ pub enum ConstellationControlMsg {
     GetTitle(PipelineId),
     /// Notifies script thread of a change to one of its document's activity
     SetDocumentActivity(PipelineId, DocumentActivity),
-    /// Notifies script thread whether frame is visible
-    ChangeFrameVisibilityStatus(PipelineId, bool),
-    /// Notifies script thread that frame visibility change is complete
-    /// PipelineId is for the parent, BrowsingContextId is for the nested browsing context
-    NotifyVisibilityChange(PipelineId, BrowsingContextId, bool),
+    /// Set whether to use less resources by running timers at a heavily limited rate.
+    SetThrottled(PipelineId, bool),
+    /// Notify the containing iframe (in PipelineId) that the nested browsing context (BrowsingContextId) is throttled.
+    SetThrottledInContainingIframe(PipelineId, BrowsingContextId, bool),
     /// Notifies script thread that a url should be loaded in this iframe.
     /// PipelineId is for the parent, BrowsingContextId is for the nested browsing context
     NavigateIframe(
@@ -401,6 +392,10 @@ pub enum ConstellationControlMsg {
     MediaSessionAction(PipelineId, MediaSessionActionType),
     /// Notifies script thread that WebGPU server has started
     SetWebGPUPort(IpcReceiver<WebGPUMsg>),
+    /// A mesage for a layout from the constellation.
+    ForLayoutFromConstellation(LayoutControlMsg, PipelineId),
+    /// A message for a layout from the font cache.
+    ForLayoutFromFontCache(PipelineId),
 }
 
 impl fmt::Debug for ConstellationControlMsg {
@@ -420,8 +415,8 @@ impl fmt::Debug for ConstellationControlMsg {
             SetScrollState(..) => "SetScrollState",
             GetTitle(..) => "GetTitle",
             SetDocumentActivity(..) => "SetDocumentActivity",
-            ChangeFrameVisibilityStatus(..) => "ChangeFrameVisibilityStatus",
-            NotifyVisibilityChange(..) => "NotifyVisibilityChange",
+            SetThrottled(..) => "SetThrottled",
+            SetThrottledInContainingIframe(..) => "SetThrottledInContainingIframe",
             NavigateIframe(..) => "NavigateIframe",
             PostMessage { .. } => "PostMessage",
             UpdatePipelineId(..) => "UpdatePipelineId",
@@ -439,6 +434,8 @@ impl fmt::Debug for ConstellationControlMsg {
             ExitFullScreen(..) => "ExitFullScreen",
             MediaSessionAction(..) => "MediaSessionAction",
             SetWebGPUPort(..) => "SetWebGPUPort",
+            ForLayoutFromConstellation(..) => "ForLayoutFromConstellation",
+            ForLayoutFromFontCache(..) => "ForLayoutFromFontCache",
         };
         write!(formatter, "ConstellationControlMsg::{}", variant)
     }
@@ -664,7 +661,7 @@ pub struct InitialScriptState {
     pub script_to_constellation_chan: ScriptToConstellationChan,
     /// A handle to register script-(and associated layout-)threads for hang monitoring.
     pub background_hang_monitor_register: Box<dyn BackgroundHangMonitorRegister>,
-    /// A sender for the layout thread to communicate to the constellation.
+    /// A sender layout to communicate to the constellation.
     pub layout_to_constellation_chan: IpcSender<LayoutMsg>,
     /// A channel to schedule timer events.
     pub scheduler_chan: IpcSender<TimerSchedulerMsg>,
@@ -694,23 +691,8 @@ pub struct InitialScriptState {
     pub webrender_document: DocumentId,
     /// FIXME(victor): The Webrender API sender in this constellation's pipeline
     pub webrender_api_sender: WebrenderIpcSender,
-    /// Flag to indicate if the layout thread is busy handling a request.
-    pub layout_is_busy: Arc<AtomicBool>,
     /// Application window's GL Context for Media player
     pub player_context: WindowGLContext,
-}
-
-/// This trait allows creating a `ScriptThread` without depending on the `script`
-/// crate.
-pub trait ScriptThreadFactory {
-    /// Type of message sent from script to layout.
-    type Message;
-    /// Create a `ScriptThread`.
-    fn create(
-        state: InitialScriptState,
-        load_data: LoadData,
-        user_agent: Cow<'static, str>,
-    ) -> (Sender<Self::Message>, Receiver<Self::Message>);
 }
 
 /// This trait allows creating a `ServiceWorkerManager` without depending on the `script`
@@ -994,7 +976,7 @@ impl StructuredSerializedData {
                     // Note: we insert the blob at the original id,
                     // otherwise this will not match the storage key as serialized by SM in `serialized`.
                     // The clone has it's own new Id however.
-                    blob_clones.insert(original_id.clone(), blob_clone);
+                    blob_clones.insert(*original_id, blob_clone);
                 } else {
                     // Not panicking only because this is called from the constellation.
                     warn!("Serialized blob not in memory format(should never happen).");
@@ -1138,7 +1120,7 @@ pub enum ScriptToCompositorMsg {
     /// Inform WebRender of the existence of this pipeline.
     SendInitialTransaction(WebRenderPipelineId),
     /// Perform a scroll operation.
-    SendScrollNode(LayoutPoint, ExternalScrollId),
+    SendScrollNode(WebRenderPipelineId, LayoutPoint, ExternalScrollId),
     /// Inform WebRender of a new display list for the given pipeline.
     SendDisplayList {
         /// The [CompositorDisplayListInfo] that describes the display list being sent.
@@ -1152,7 +1134,7 @@ pub enum ScriptToCompositorMsg {
     /// the provided channel sender.
     HitTest(
         Option<WebRenderPipelineId>,
-        WorldPoint,
+        DevicePoint,
         HitTestFlags,
         IpcSender<Vec<CompositorHitTestResult>>,
     ),
@@ -1184,11 +1166,17 @@ impl WebrenderIpcSender {
     }
 
     /// Perform a scroll operation.
-    pub fn send_scroll_node(&self, point: LayoutPoint, scroll_id: ExternalScrollId) {
-        if let Err(e) = self
-            .0
-            .send(ScriptToCompositorMsg::SendScrollNode(point, scroll_id))
-        {
+    pub fn send_scroll_node(
+        &self,
+        pipeline_id: WebRenderPipelineId,
+        point: LayoutPoint,
+        scroll_id: ExternalScrollId,
+    ) {
+        if let Err(e) = self.0.send(ScriptToCompositorMsg::SendScrollNode(
+            pipeline_id,
+            point,
+            scroll_id,
+        )) {
             warn!("Error sending scroll node: {}", e);
         }
     }
@@ -1209,8 +1197,14 @@ impl WebrenderIpcSender {
             warn!("Error sending display list: {}", e);
         }
 
-        if let Err(e) = display_list_sender.send(&display_list_data) {
-            warn!("Error sending display data: {}", e);
+        if let Err(error) = display_list_sender.send(&display_list_data.items_data) {
+            warn!("Error sending display list items: {}", error);
+        }
+        if let Err(error) = display_list_sender.send(&display_list_data.cache_data) {
+            warn!("Error sending display list cache data: {}", error);
+        }
+        if let Err(error) = display_list_sender.send(&display_list_data.spatial_tree) {
+            warn!("Error sending display spatial tree: {}", error);
         }
     }
 
@@ -1219,7 +1213,7 @@ impl WebrenderIpcSender {
     pub fn hit_test(
         &self,
         pipeline: Option<WebRenderPipelineId>,
-        point: WorldPoint,
+        point: DevicePoint,
         flags: HitTestFlags,
     ) -> Vec<CompositorHitTestResult> {
         let (sender, receiver) = ipc::channel().unwrap();
@@ -1232,12 +1226,12 @@ impl WebrenderIpcSender {
     }
 
     /// Create a new image key. Blocks until the key is available.
-    pub fn generate_image_key(&self) -> Result<ImageKey, ()> {
+    pub fn generate_image_key(&self) -> Option<ImageKey> {
         let (sender, receiver) = ipc::channel().unwrap();
         self.0
             .send(ScriptToCompositorMsg::GenerateImageKey(sender))
-            .map_err(|_| ())?;
-        receiver.recv().map_err(|_| ())
+            .ok()?;
+        receiver.recv().ok()
     }
 
     /// Perform a resource update operation.
@@ -1280,7 +1274,7 @@ impl WebrenderIpcSender {
         }
 
         senders.into_iter().for_each(|(tx, data)| {
-            if let Err(e) = tx.send(&*data) {
+            if let Err(e) = tx.send(&data) {
                 warn!("error sending image data: {}", e);
             }
         });
@@ -1325,8 +1319,8 @@ impl SerializedImageData {
     /// Convert to ``ImageData`.
     pub fn to_image_data(&self) -> Result<ImageData, ipc::IpcError> {
         match self {
-            SerializedImageData::Raw(rx) => rx.recv().map(|data| ImageData::new(data)),
-            SerializedImageData::External(image) => Ok(ImageData::External(image.clone())),
+            SerializedImageData::Raw(rx) => rx.recv().map(ImageData::new),
+            SerializedImageData::External(image) => Ok(ImageData::External(*image)),
         }
     }
 }
@@ -1367,6 +1361,6 @@ pub enum GamepadUpdateType {
     /// <https://www.w3.org/TR/gamepad/#dfn-represents-a-standard-gamepad-axis>
     Axis(usize, f64),
     /// Button index and input value
-    /// <https://www.w3.org/TR/gamepad/#dfn-represents-a-standard-gamepad-button
+    /// <https://www.w3.org/TR/gamepad/#dfn-represents-a-standard-gamepad-button>
     Button(usize, f64),
 }

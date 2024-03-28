@@ -143,18 +143,16 @@ impl HTMLFormElement {
                 RadioListMode::ControlsExceptImageInputs => {
                     if child
                         .downcast::<HTMLElement>()
-                        .map_or(false, |c| c.is_listed_element())
+                        .map_or(false, |c| c.is_listed_element()) &&
+                        (child.get_id().map_or(false, |i| i == *name) ||
+                            child.get_name().map_or(false, |n| n == *name))
                     {
-                        if child.get_id().map_or(false, |i| i == *name) ||
-                            child.get_name().map_or(false, |n| n == *name)
-                        {
-                            if let Some(inp) = child.downcast::<HTMLInputElement>() {
-                                // input, only return it if it's not image-button state
-                                return inp.input_type() != InputType::Image;
-                            } else {
-                                // control, but not an input
-                                return true;
-                            }
+                        if let Some(inp) = child.downcast::<HTMLInputElement>() {
+                            // input, only return it if it's not image-button state
+                            return inp.input_type() != InputType::Image;
+                        } else {
+                            // control, but not an input
+                            return true;
                         }
                     }
                     return false;
@@ -178,16 +176,16 @@ impl HTMLFormElement {
         self.controls
             .borrow()
             .iter()
-            .filter(|n| HTMLFormElement::filter_for_radio_list(mode, &*n, name))
+            .filter(|n| HTMLFormElement::filter_for_radio_list(mode, n, name))
             .nth(index as usize)
-            .and_then(|n| Some(DomRoot::from_ref(n.upcast::<Node>())))
+            .map(|n| DomRoot::from_ref(n.upcast::<Node>()))
     }
 
     pub fn count_for_radio_list(&self, mode: RadioListMode, name: &Atom) -> u32 {
         self.controls
             .borrow()
             .iter()
-            .filter(|n| HTMLFormElement::filter_for_radio_list(mode, &**n, name))
+            .filter(|n| HTMLFormElement::filter_for_radio_list(mode, n, name))
             .count() as u32
     }
 }
@@ -281,12 +279,12 @@ impl HTMLFormElementMethods for HTMLFormElement {
 
                 let submit_button = match element {
                     HTMLElementTypeId::HTMLInputElement => FormSubmitter::InputElement(
-                        &submitter_element
+                        submitter_element
                             .downcast::<HTMLInputElement>()
                             .expect("Failed to downcast submitter elem to HTMLInputElement."),
                     ),
                     HTMLElementTypeId::HTMLButtonElement => FormSubmitter::ButtonElement(
-                        &submitter_element
+                        submitter_element
                             .downcast::<HTMLButtonElement>()
                             .expect("Failed to downcast submitter elem to HTMLButtonElement."),
                     ),
@@ -317,7 +315,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
             },
             None => {
                 // Step 2
-                FormSubmitter::FormElement(&self)
+                FormSubmitter::FormElement(self)
             },
         };
         // Step 3
@@ -393,7 +391,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
 
     // https://html.spec.whatwg.org/multipage/#dom-form-length
     fn Length(&self) -> u32 {
-        self.Elements().Length() as u32
+        self.Elements().Length()
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-form-item
@@ -441,14 +439,14 @@ impl HTMLFormElementMethods for HTMLFormElement {
         past_names_map.insert(
             name,
             (
-                Dom::from_ref(&*element_node.downcast::<Element>().unwrap()),
+                Dom::from_ref(element_node.downcast::<Element>().unwrap()),
                 NoTrace(Instant::now()),
             ),
         );
 
         // Step 6
         return Some(RadioNodeListOrElement::Element(DomRoot::from_ref(
-            &*element_node.downcast::<Element>().unwrap(),
+            element_node.downcast::<Element>().unwrap(),
         )));
     }
 
@@ -486,10 +484,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
 
         impl SourcedNameSource {
             fn is_past(&self) -> bool {
-                match self {
-                    SourcedNameSource::Past(..) => true,
-                    _ => false,
-                }
+                matches!(self, SourcedNameSource::Past(..))
             }
         }
 
@@ -512,7 +507,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
                 if let Some(id_atom) = child.get_id() {
                     let entry = SourcedName {
                         name: id_atom,
-                        element: DomRoot::from_ref(&*child),
+                        element: DomRoot::from_ref(child),
                         source: SourcedNameSource::Id,
                     };
                     sourced_names_vec.push(entry);
@@ -520,7 +515,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
                 if let Some(name_atom) = child.get_name() {
                     let entry = SourcedName {
                         name: name_atom,
-                        element: DomRoot::from_ref(&*child),
+                        element: DomRoot::from_ref(child),
                         source: SourcedNameSource::Name,
                     };
                     sourced_names_vec.push(entry);
@@ -534,7 +529,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
                 if let Some(id_atom) = child.get_id() {
                     let entry = SourcedName {
                         name: id_atom,
-                        element: DomRoot::from_ref(&*child),
+                        element: DomRoot::from_ref(child),
                         source: SourcedNameSource::Id,
                     };
                     sourced_names_vec.push(entry);
@@ -542,7 +537,7 @@ impl HTMLFormElementMethods for HTMLFormElement {
                 if let Some(name_atom) = child.get_name() {
                     let entry = SourcedName {
                         name: name_atom,
-                        element: DomRoot::from_ref(&*child),
+                        element: DomRoot::from_ref(child),
                         source: SourcedNameSource::Name,
                     };
                     sourced_names_vec.push(entry);
@@ -583,17 +578,16 @@ impl HTMLFormElementMethods for HTMLFormElement {
                 } else {
                     a.source.cmp(&b.source)
                 }
+            } else if a
+                .element
+                .upcast::<Node>()
+                .CompareDocumentPosition(b.element.upcast::<Node>()) &
+                NodeConstants::DOCUMENT_POSITION_FOLLOWING ==
+                NodeConstants::DOCUMENT_POSITION_FOLLOWING
+            {
+                std::cmp::Ordering::Less
             } else {
-                if a.element
-                    .upcast::<Node>()
-                    .CompareDocumentPosition(b.element.upcast::<Node>()) &
-                    NodeConstants::DOCUMENT_POSITION_FOLLOWING ==
-                    NodeConstants::DOCUMENT_POSITION_FOLLOWING
-                {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                }
+                std::cmp::Ordering::Greater
             }
         });
 
@@ -603,16 +597,12 @@ impl HTMLFormElementMethods for HTMLFormElement {
         // Step 7-8
         let mut names_vec: Vec<DOMString> = Vec::new();
         for elem in sourced_names_vec.iter() {
-            if names_vec
-                .iter()
-                .find(|name| &**name == &*elem.name)
-                .is_none()
-            {
+            if names_vec.iter().find(|name| **name == *elem.name).is_none() {
                 names_vec.push(DOMString::from(&*elem.name));
             }
         }
 
-        return names_vec;
+        names_vec
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-form-checkvalidity>
@@ -653,7 +643,7 @@ impl HTMLFormElement {
 
             // Substep 2, 3, 4
             let mut candidate_encodings =
-                split_html_space_chars(&*input).filter_map(|c| Encoding::for_label(c.as_bytes()));
+                split_html_space_chars(&input).filter_map(|c| Encoding::for_label(c.as_bytes()));
 
             // Substep 5, 6
             return candidate_encodings.next().unwrap_or(UTF_8);
@@ -722,11 +712,9 @@ impl HTMLFormElement {
             // Step 6.2
             self.firing_submission_events.set(true);
             // Step 6.3
-            if !submitter.no_validate(self) {
-                if self.interactive_validation().is_err() {
-                    self.firing_submission_events.set(false);
-                    return;
-                }
+            if !submitter.no_validate(self) && self.interactive_validation().is_err() {
+                self.firing_submission_events.set(false);
+                return;
             }
             // Step 6.4
             // spec calls this "submitterButton" but it doesn't have to be a button,
@@ -849,7 +837,7 @@ impl HTMLFormElement {
                 load_data
                     .headers
                     .typed_insert(ContentType::from(mime::APPLICATION_WWW_FORM_URLENCODED));
-                self.mutate_action_url(&mut form_data, load_data, encoding, &target_window);
+                self.mutate_action_url(&mut form_data, load_data, encoding, target_window);
             },
             // https://html.spec.whatwg.org/multipage/#submit-body
             ("http", FormMethod::FormPost) | ("https", FormMethod::FormPost) => {
@@ -859,7 +847,7 @@ impl HTMLFormElement {
                     load_data,
                     enctype,
                     encoding,
-                    &target_window,
+                    target_window,
                 );
             },
             // https://html.spec.whatwg.org/multipage/#submit-get-action
@@ -868,7 +856,7 @@ impl HTMLFormElement {
             ("data", FormMethod::FormPost) |
             ("ftp", _) |
             ("javascript", _) => {
-                self.plan_to_navigate(load_data, &target_window);
+                self.plan_to_navigate(load_data, target_window);
             },
             ("mailto", FormMethod::FormPost) => {
                 // TODO: Mail as body
@@ -878,14 +866,14 @@ impl HTMLFormElement {
                 // TODO: Mail with headers
                 // https://html.spec.whatwg.org/multipage/#submit-mailto-headers
             },
-            _ => return,
+            _ => (),
         }
     }
 
     // https://html.spec.whatwg.org/multipage/#submit-mutate-action
     fn mutate_action_url(
         &self,
-        form_data: &mut Vec<FormDatum>,
+        form_data: &mut [FormDatum],
         mut load_data: LoadData,
         encoding: &'static Encoding,
         target: &Window,
@@ -1133,7 +1121,6 @@ impl HTMLFormElement {
                     },
                     HTMLElementTypeId::HTMLObjectElement => {
                         // Unimplemented
-                        ()
                     },
                     HTMLElementTypeId::HTMLSelectElement => {
                         let select = child.downcast::<HTMLSelectElement>().unwrap();
@@ -1145,7 +1132,7 @@ impl HTMLFormElement {
                         if !name.is_empty() {
                             data_set.push(FormDatum {
                                 ty: textarea.Type(),
-                                name: name,
+                                name,
                                 value: FormDatumValue::String(textarea.Value()),
                             });
                         }
@@ -1510,7 +1497,7 @@ pub trait FormControl: DomObject {
 
     fn set_form_owner(&self, form: Option<&HTMLFormElement>);
 
-    fn to_element<'a>(&'a self) -> &'a Element;
+    fn to_element(&self) -> &Element;
 
     fn is_listed(&self) -> bool {
         true
@@ -1540,10 +1527,11 @@ pub trait FormControl: DomObject {
             .next();
 
         // Step 1
-        if old_owner.is_some() && !(self.is_listed() && has_form_id) {
-            if nearest_form_ancestor == old_owner {
-                return;
-            }
+        if old_owner.is_some() &&
+            !(self.is_listed() && has_form_id) &&
+            nearest_form_ancestor == old_owner
+        {
+            return;
         }
 
         let new_owner = if self.is_listed() && has_form_id && elem.is_connected() {
@@ -1698,7 +1686,7 @@ impl VirtualMethods for HTMLFormElement {
                 .borrow()
                 .iter()
                 .filter(|c| !c.is_in_same_home_subtree(self))
-                .map(|c| c.clone()),
+                .cloned(),
         );
 
         for control in to_reset.iter() {
@@ -1721,11 +1709,11 @@ impl VirtualMethods for HTMLFormElement {
 }
 
 pub trait FormControlElementHelpers {
-    fn as_maybe_form_control<'a>(&'a self) -> Option<&'a dyn FormControl>;
+    fn as_maybe_form_control(&self) -> Option<&dyn FormControl>;
 }
 
 impl FormControlElementHelpers for Element {
-    fn as_maybe_form_control<'a>(&'a self) -> Option<&'a dyn FormControl> {
+    fn as_maybe_form_control(&self) -> Option<&dyn FormControl> {
         let node = self.upcast::<Node>();
 
         match node.type_id() {
@@ -1766,7 +1754,7 @@ impl FormControlElementHelpers for Element {
 
 // https://html.spec.whatwg.org/multipage/#multipart/form-data-encoding-algorithm
 pub fn encode_multipart_form_data(
-    form_data: &mut Vec<FormDatum>,
+    form_data: &mut [FormDatum],
     boundary: String,
     encoding: &'static Encoding,
 ) -> Vec<u8> {

@@ -137,7 +137,7 @@ where
     T: TypedArrayElementCreator,
 {
     rooted!(in(cx) let mut rval = ptr::null_mut::<JSObject>());
-    <TypedArray<T, *mut JSObject>>::create(cx, CreateWith::Slice(&value), rval.handle_mut())
+    <TypedArray<T, *mut JSObject>>::create(cx, CreateWith::Slice(value), rval.handle_mut())
         .unwrap();
     ObjectValue(rval.get())
 }
@@ -563,10 +563,10 @@ impl WebGLRenderingContext {
 
     pub fn get_current_framebuffer_size(&self) -> Option<(i32, i32)> {
         match self.bound_draw_framebuffer.get() {
-            Some(fb) => return fb.size(),
+            Some(fb) => fb.size(),
 
             // The window system framebuffer is bound
-            None => return Some((self.DrawingBufferWidth(), self.DrawingBufferHeight())),
+            None => Some((self.DrawingBufferWidth(), self.DrawingBufferHeight())),
         }
     }
 
@@ -627,17 +627,16 @@ impl WebGLRenderingContext {
     }
 
     fn validate_stencil_actions(&self, action: u32) -> bool {
-        match action {
-            0 |
-            constants::KEEP |
-            constants::REPLACE |
-            constants::INCR |
-            constants::DECR |
-            constants::INVERT |
-            constants::INCR_WRAP |
-            constants::DECR_WRAP => true,
-            _ => false,
-        }
+        matches!(
+            action,
+            0 | constants::KEEP |
+                constants::REPLACE |
+                constants::INCR |
+                constants::DECR |
+                constants::INVERT |
+                constants::INCR_WRAP |
+                constants::DECR_WRAP
+        )
     }
 
     pub fn get_image_pixels(&self, source: TexImageSource) -> Fallible<Option<TexPixels>> {
@@ -736,7 +735,7 @@ impl WebGLRenderingContext {
 
         // NOTE: width and height are positive or zero due to validate()
         if height == 0 {
-            return Ok(0);
+            Ok(0)
         } else {
             // We need to be careful here to not count unpack
             // alignment at the end of the image, otherwise (for
@@ -744,7 +743,7 @@ impl WebGLRenderingContext {
             // GL_ALPHA/GL_UNSIGNED_BYTE texture would throw an error.
             let cpp = element_size * components / components_per_element;
             let stride = (width * cpp + unpacking_alignment - 1) & !(unpacking_alignment - 1);
-            return Ok(stride * (height - 1) + width * cpp);
+            Ok(stride * (height - 1) + width * cpp)
         }
     }
 
@@ -831,7 +830,7 @@ impl WebGLRenderingContext {
         }
 
         if let Some(fb) = self.bound_draw_framebuffer.get() {
-            fb.invalidate_texture(&*texture);
+            fb.invalidate_texture(texture);
         }
     }
 
@@ -872,10 +871,10 @@ impl WebGLRenderingContext {
         }
 
         // See https://www.khronos.org/registry/webgl/specs/latest/2.0/#4.1.6
-        if self.webgl_version() == WebGLVersion::WebGL1 {
-            if data_type != image_info.data_type().unwrap() {
-                return self.webgl_error(InvalidOperation);
-            }
+        if self.webgl_version() == WebGLVersion::WebGL1 &&
+            data_type != image_info.data_type().unwrap()
+        {
+            return self.webgl_error(InvalidOperation);
         }
 
         let settings = self.texture_unpacking_settings.get();
@@ -1565,7 +1564,7 @@ impl WebGLRenderingContext {
             rb.storage(self.api_type, samples, internal_format, width, height)
         );
         if let Some(fb) = self.bound_draw_framebuffer.get() {
-            fb.invalidate_renderbuffer(&*rb);
+            fb.invalidate_renderbuffer(&rb);
         }
 
         // FIXME: https://github.com/servo/servo/issues/13710
@@ -1639,7 +1638,7 @@ impl WebGLRenderingContext {
         });
 
         if let Some(fb) = self.bound_draw_framebuffer.get() {
-            fb.invalidate_texture(&*texture);
+            fb.invalidate_texture(&texture);
         }
     }
 
@@ -2067,7 +2066,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                 let format_ids = self.extension_manager.get_tex_compression_ids();
 
                 rooted!(in(*cx) let mut rval = ptr::null_mut::<JSObject>());
-                let _ = Uint32Array::create(*cx, CreateWith::Slice(&format_ids), rval.handle_mut())
+                Uint32Array::create(*cx, CreateWith::Slice(&format_ids), rval.handle_mut())
                     .unwrap();
                 return ObjectValue(rval.get());
             },
@@ -2166,7 +2165,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                 let (sender, receiver) = webgl_channel().unwrap();
                 self.send_command(WebGLCommand::GetParameterInt2(param, sender));
                 rooted!(in(*cx) let mut rval = ptr::null_mut::<JSObject>());
-                let _ = Int32Array::create(
+                Int32Array::create(
                     *cx,
                     CreateWith::Slice(&receiver.recv().unwrap()),
                     rval.handle_mut(),
@@ -2178,7 +2177,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                 let (sender, receiver) = webgl_channel().unwrap();
                 self.send_command(WebGLCommand::GetParameterInt4(param, sender));
                 rooted!(in(*cx) let mut rval = ptr::null_mut::<JSObject>());
-                let _ = Int32Array::create(
+                Int32Array::create(
                     *cx,
                     CreateWith::Slice(&receiver.recv().unwrap()),
                     rval.handle_mut(),
@@ -2195,7 +2194,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                 let (sender, receiver) = webgl_channel().unwrap();
                 self.send_command(WebGLCommand::GetParameterFloat2(param, sender));
                 rooted!(in(*cx) let mut rval = ptr::null_mut::<JSObject>());
-                let _ = Float32Array::create(
+                Float32Array::create(
                     *cx,
                     CreateWith::Slice(&receiver.recv().unwrap()),
                     rval.handle_mut(),
@@ -2207,7 +2206,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                 let (sender, receiver) = webgl_channel().unwrap();
                 self.send_command(WebGLCommand::GetParameterFloat4(param, sender));
                 rooted!(in(*cx) let mut rval = ptr::null_mut::<JSObject>());
-                let _ = Float32Array::create(
+                Float32Array::create(
                     *cx,
                     CreateWith::Slice(&receiver.recv().unwrap()),
                     rval.handle_mut(),
@@ -2442,7 +2441,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
             },
             _ => return self.webgl_error(InvalidEnum),
         };
-        self.bind_buffer_maybe(&slot, target, buffer);
+        self.bind_buffer_maybe(slot, target, buffer);
     }
 
     // https://www.khronos.org/registry/webgl/specs/latest/1.0/#5.14.6
@@ -2664,15 +2663,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         // NB: TexImage2D depth is always equal to 1
         handle_potential_webgl_error!(
             self,
-            texture.initialize(
-                target,
-                width as u32,
-                height as u32,
-                1,
-                internal_format,
-                level as u32,
-                None
-            )
+            texture.initialize(target, width, height, 1, internal_format, level, None)
         );
 
         let msg = WebGLCommand::CopyTexImage2D(
@@ -3074,7 +3065,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
             Ok(ret) => Some(ret),
             Err(e) => {
                 self.webgl_error(e);
-                return None;
+                None
             },
         }
     }
@@ -3154,23 +3145,20 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
             .attachment(attachment)
         {
             Some(attachment_root) => match attachment_root {
-                WebGLFramebufferAttachmentRoot::Renderbuffer(_) => match pname {
+                WebGLFramebufferAttachmentRoot::Renderbuffer(_) => matches!(
+                    pname,
                     constants::FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE |
-                    constants::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME => true,
-                    _ => false,
-                },
-                WebGLFramebufferAttachmentRoot::Texture(_) => match pname {
+                        constants::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME
+                ),
+                WebGLFramebufferAttachmentRoot::Texture(_) => matches!(
+                    pname,
                     constants::FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE |
-                    constants::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME |
-                    constants::FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL |
-                    constants::FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE => true,
-                    _ => false,
-                },
+                        constants::FRAMEBUFFER_ATTACHMENT_OBJECT_NAME |
+                        constants::FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL |
+                        constants::FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE
+                ),
             },
-            _ => match pname {
-                constants::FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE => true,
-                _ => false,
-            },
+            _ => matches!(pname, constants::FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE),
         };
 
         if !target_matches || !attachment_matches || !pname_matches || !bound_attachment_matches {
@@ -3220,18 +3208,18 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         // https://github.com/immersive-web/webxr/issues/862
         let target_matches = target == constants::RENDERBUFFER;
 
-        let pname_matches = match pname {
+        let pname_matches = matches!(
+            pname,
             constants::RENDERBUFFER_WIDTH |
-            constants::RENDERBUFFER_HEIGHT |
-            constants::RENDERBUFFER_INTERNAL_FORMAT |
-            constants::RENDERBUFFER_RED_SIZE |
-            constants::RENDERBUFFER_GREEN_SIZE |
-            constants::RENDERBUFFER_BLUE_SIZE |
-            constants::RENDERBUFFER_ALPHA_SIZE |
-            constants::RENDERBUFFER_DEPTH_SIZE |
-            constants::RENDERBUFFER_STENCIL_SIZE => true,
-            _ => false,
-        };
+                constants::RENDERBUFFER_HEIGHT |
+                constants::RENDERBUFFER_INTERNAL_FORMAT |
+                constants::RENDERBUFFER_RED_SIZE |
+                constants::RENDERBUFFER_GREEN_SIZE |
+                constants::RENDERBUFFER_BLUE_SIZE |
+                constants::RENDERBUFFER_ALPHA_SIZE |
+                constants::RENDERBUFFER_DEPTH_SIZE |
+                constants::RENDERBUFFER_STENCIL_SIZE
+        );
 
         if !target_matches || !pname_matches {
             self.webgl_error(InvalidEnum);
@@ -3392,7 +3380,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                         let value = [x, y, z, w];
                         unsafe {
                             rooted!(in(*cx) let mut result = ptr::null_mut::<JSObject>());
-                            let _ = Float32Array::create(
+                            Float32Array::create(
                                 *cx,
                                 CreateWith::Slice(&value),
                                 result.handle_mut(),
@@ -3405,12 +3393,8 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                         let value = [x, y, z, w];
                         unsafe {
                             rooted!(in(*cx) let mut result = ptr::null_mut::<JSObject>());
-                            let _ = Int32Array::create(
-                                *cx,
-                                CreateWith::Slice(&value),
-                                result.handle_mut(),
-                            )
-                            .unwrap();
+                            Int32Array::create(*cx, CreateWith::Slice(&value), result.handle_mut())
+                                .unwrap();
                             return ObjectValue(result.get());
                         }
                     },
@@ -3418,7 +3402,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
                         let value = [x, y, z, w];
                         unsafe {
                             rooted!(in(*cx) let mut result = ptr::null_mut::<JSObject>());
-                            let _ = Uint32Array::create(
+                            Uint32Array::create(
                                 *cx,
                                 CreateWith::Slice(&value),
                                 result.handle_mut(),
@@ -3805,7 +3789,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
             constants::FRONT | constants::BACK | constants::FRONT_AND_BACK => {
                 self.send_command(WebGLCommand::StencilMaskSeparate(face, mask))
             },
-            _ => return self.webgl_error(InvalidEnum),
+            _ => self.webgl_error(InvalidEnum),
         };
     }
 
@@ -4258,7 +4242,8 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         pixels: CustomAutoRooterGuard<Option<ArrayBufferView>>,
     ) -> ErrorResult {
         if !self.extension_manager.is_tex_type_enabled(data_type) {
-            return Ok(self.webgl_error(InvalidEnum));
+            self.webgl_error(InvalidEnum);
+            return Ok(());
         }
 
         let validator = TexImage2DValidator::new(
@@ -4289,10 +4274,16 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         };
 
         if !internal_format.compatible_data_types().contains(&data_type) {
-            return Ok(self.webgl_error(InvalidOperation));
+            return {
+                self.webgl_error(InvalidOperation);
+                Ok(())
+            };
         }
         if texture.is_immutable() {
-            return Ok(self.webgl_error(InvalidOperation));
+            return {
+                self.webgl_error(InvalidOperation);
+                Ok(())
+            };
         }
 
         let unpacking_alignment = self.texture_unpacking_alignment.get();
@@ -4325,7 +4316,10 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         //      type, and pixel storage parameters, generates an
         //      INVALID_OPERATION error."
         if buff.len() < expected_byte_length as usize {
-            return Ok(self.webgl_error(InvalidOperation));
+            return {
+                self.webgl_error(InvalidOperation);
+                Ok(())
+            };
         }
 
         let size = Size2D::new(width, height);
@@ -4372,7 +4366,8 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         source: TexImageSource,
     ) -> ErrorResult {
         if !self.extension_manager.is_tex_type_enabled(data_type) {
-            return Ok(self.webgl_error(InvalidEnum));
+            self.webgl_error(InvalidEnum);
+            return Ok(());
         }
 
         let pixels = match self.get_image_pixels(source)? {
@@ -4407,10 +4402,16 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         };
 
         if !internal_format.compatible_data_types().contains(&data_type) {
-            return Ok(self.webgl_error(InvalidOperation));
+            return {
+                self.webgl_error(InvalidOperation);
+                Ok(())
+            };
         }
         if texture.is_immutable() {
-            return Ok(self.webgl_error(InvalidOperation));
+            return {
+                self.webgl_error(InvalidOperation);
+                Ok(())
+            };
         }
 
         if !self.validate_filterable_texture(
@@ -4504,7 +4505,10 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         //      type, and pixel storage parameters, generates an
         //      INVALID_OPERATION error."
         if buff.len() < expected_byte_length as usize {
-            return Ok(self.webgl_error(InvalidOperation));
+            return {
+                self.webgl_error(InvalidOperation);
+                Ok(())
+            };
         }
 
         self.tex_sub_image_2d(
@@ -4589,8 +4593,8 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
         }
 
         match self.bound_draw_framebuffer.get() {
-            Some(fb) => return fb.check_status(),
-            None => return constants::FRAMEBUFFER_COMPLETE,
+            Some(fb) => fb.check_status(),
+            None => constants::FRAMEBUFFER_COMPLETE,
         }
     }
 
@@ -4959,7 +4963,7 @@ pub trait Size2DExt {
 
 impl Size2DExt for Size2D<u32> {
     fn to_u64(&self) -> Size2D<u64> {
-        return Size2D::new(self.width as u64, self.height as u64);
+        Size2D::new(self.width as u64, self.height as u64)
     }
 }
 

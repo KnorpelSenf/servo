@@ -28,6 +28,7 @@ use crate::dom::bindings::str::DOMString;
 use crate::dom::document::FakeRequestAnimationFrameCallback;
 use crate::dom::eventsource::EventSourceTimeoutCallback;
 use crate::dom::globalscope::GlobalScope;
+use crate::dom::htmlmetaelement::RefreshRedirectDue;
 use crate::dom::testbinding::TestBindingCallback;
 use crate::dom::xmlhttprequest::XHRTimeoutCallback;
 use crate::script_module::ScriptFetchOptions;
@@ -89,6 +90,7 @@ pub enum OneshotTimerCallback {
     JsTimer(JsTimerTask),
     TestBindingCallback(TestBindingCallback),
     FakeRequestAnimationFrame(FakeRequestAnimationFrameCallback),
+    RefreshRedirectDue(RefreshRedirectDue),
 }
 
 impl OneshotTimerCallback {
@@ -99,6 +101,7 @@ impl OneshotTimerCallback {
             OneshotTimerCallback::JsTimer(task) => task.invoke(this, js_timers),
             OneshotTimerCallback::TestBindingCallback(callback) => callback.invoke(),
             OneshotTimerCallback::FakeRequestAnimationFrame(callback) => callback.invoke(),
+            OneshotTimerCallback::RefreshRedirectDue(callback) => callback.invoke(),
         }
     }
 }
@@ -121,16 +124,16 @@ impl PartialOrd for OneshotTimer {
 impl Eq for OneshotTimer {}
 impl PartialEq for OneshotTimer {
     fn eq(&self, other: &OneshotTimer) -> bool {
-        self as *const OneshotTimer == other as *const OneshotTimer
+        std::ptr::eq(self, other)
     }
 }
 
 impl OneshotTimers {
     pub fn new(scheduler_chan: IpcSender<TimerSchedulerMsg>) -> OneshotTimers {
         OneshotTimers {
-            js_timers: JsTimers::new(),
+            js_timers: JsTimers::default(),
             timer_event_chan: DomRefCell::new(None),
-            scheduler_chan: scheduler_chan,
+            scheduler_chan,
             next_timer_handle: Cell::new(OneshotTimerHandle(1)),
             timers: DomRefCell::new(Vec::new()),
             suspended_since: Cell::new(None),
@@ -159,9 +162,9 @@ impl OneshotTimers {
 
         let timer = OneshotTimer {
             handle: new_handle,
-            source: source,
-            callback: callback,
-            scheduled_for: scheduled_for,
+            source,
+            callback,
+            scheduled_for,
         };
 
         {
@@ -191,7 +194,7 @@ impl OneshotTimers {
     fn is_next_timer(&self, handle: OneshotTimerHandle) -> bool {
         match self.timers.borrow().last() {
             None => false,
-            Some(ref max_timer) => max_timer.handle == handle,
+            Some(max_timer) => max_timer.handle == handle,
         }
     }
 
@@ -415,8 +418,8 @@ enum InternalTimerCallback {
     ),
 }
 
-impl JsTimers {
-    pub fn new() -> JsTimers {
+impl Default for JsTimers {
+    fn default() -> Self {
         JsTimers {
             next_timer_handle: Cell::new(JsTimerHandle(1)),
             active_timers: DomRefCell::new(HashMap::new()),
@@ -424,7 +427,9 @@ impl JsTimers {
             min_duration: Cell::new(None),
         }
     }
+}
 
+impl JsTimers {
     // see https://html.spec.whatwg.org/multipage/#timer-initialisation-steps
     pub fn set_timeout_or_interval(
         &self,
@@ -465,9 +470,9 @@ impl JsTimers {
         // step 4
         let mut task = JsTimerTask {
             handle: JsTimerHandle(new_handle),
-            source: source,
-            callback: callback,
-            is_interval: is_interval,
+            source,
+            callback,
+            is_interval,
             is_user_interacting: ScriptThread::is_user_interacting(),
             nesting_level: 0,
             duration: Length::new(0),
@@ -525,9 +530,9 @@ impl JsTimers {
         let oneshot_handle = global.schedule_callback(callback, duration);
 
         // step 3
-        let entry = active_timers.entry(handle).or_insert(JsTimerEntry {
-            oneshot_handle: oneshot_handle,
-        });
+        let entry = active_timers
+            .entry(handle)
+            .or_insert(JsTimerEntry { oneshot_handle });
         entry.oneshot_handle = oneshot_handle;
     }
 }

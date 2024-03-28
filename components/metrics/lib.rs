@@ -75,13 +75,7 @@ fn set_metric<U: ProgressiveWebMetric>(
     pwm.send_queued_constellation_msg(metric_type, time);
 
     // Send the metric to the time profiler.
-    send_profile_data(
-        category,
-        metadata,
-        &pwm.get_time_profiler_chan(),
-        time,
-        time,
-    );
+    send_profile_data(category, metadata, pwm.get_time_profiler_chan(), time, time);
 
     // Print the metric to console if the print-pwm option was given.
     if opts::get().print_pwm {
@@ -119,13 +113,15 @@ pub struct InteractiveWindow {
     start: SystemTime,
 }
 
-impl InteractiveWindow {
-    pub fn new() -> InteractiveWindow {
-        InteractiveWindow {
+impl Default for InteractiveWindow {
+    fn default() -> Self {
+        Self {
             start: SystemTime::now(),
         }
     }
+}
 
+impl InteractiveWindow {
     // We need to either start or restart the 10s window
     //   start: we've added a new document
     //   restart: there was a task > 50ms
@@ -163,7 +159,7 @@ impl InteractiveMetrics {
             dom_content_loaded: Cell::new(None),
             main_thread_available: Cell::new(None),
             time_to_interactive: Cell::new(None),
-            time_profiler_chan: time_profiler_chan,
+            time_profiler_chan,
             url,
         }
     }
@@ -261,7 +257,7 @@ impl ProgressiveWebMetric for InteractiveMetrics {
 // https://w3c.github.io/paint-timing/
 pub struct PaintTimeMetrics {
     pending_metrics: RefCell<HashMap<Epoch, (Option<TimerMetadata>, bool)>>,
-    navigation_start: Option<u64>,
+    navigation_start: u64,
     first_paint: Cell<Option<u64>>,
     first_contentful_paint: Cell<Option<u64>>,
     pipeline_id: PipelineId,
@@ -278,10 +274,11 @@ impl PaintTimeMetrics {
         constellation_chan: IpcSender<LayoutMsg>,
         script_chan: IpcSender<ConstellationControlMsg>,
         url: ServoUrl,
+        navigation_start: u64,
     ) -> PaintTimeMetrics {
         PaintTimeMetrics {
             pending_metrics: RefCell::new(HashMap::new()),
-            navigation_start: None,
+            navigation_start,
             first_paint: Cell::new(None),
             first_contentful_paint: Cell::new(None),
             pipeline_id,
@@ -342,11 +339,8 @@ impl PaintTimeMetrics {
     }
 
     pub fn maybe_set_metric(&self, epoch: Epoch, paint_time: u64) {
-        if self.first_paint.get().is_some() && self.first_contentful_paint.get().is_some() ||
-            self.navigation_start.is_none()
-        {
-            // If we already set all paint metrics or we have not set navigation start yet,
-            // we just bail out.
+        if self.first_paint.get().is_some() && self.first_contentful_paint.get().is_some() {
+            // If we already set all paint metrics we just bail out.
             return;
         }
 
@@ -387,11 +381,11 @@ impl PaintTimeMetrics {
 
 impl ProgressiveWebMetric for PaintTimeMetrics {
     fn get_navigation_start(&self) -> Option<u64> {
-        self.navigation_start
+        Some(self.navigation_start)
     }
 
     fn set_navigation_start(&mut self, time: u64) {
-        self.navigation_start = Some(time);
+        self.navigation_start = time;
     }
 
     fn send_queued_constellation_msg(&self, name: ProgressiveWebMetricType, time: u64) {

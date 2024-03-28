@@ -167,11 +167,9 @@ impl HTMLSelectElement {
 
         if let Some(last_selected) = last_selected {
             last_selected.set_selectedness(true);
-        } else {
-            if self.display_size() == 1 {
-                if let Some(first_enabled) = first_enabled {
-                    first_enabled.set_selectedness(true);
-                }
+        } else if self.display_size() == 1 {
+            if let Some(first_enabled) = first_enabled {
+                first_enabled.set_selectedness(true);
             }
         }
     }
@@ -359,7 +357,7 @@ impl HTMLSelectElementMethods for HTMLSelectElement {
     fn SelectedIndex(&self) -> i32 {
         self.list_of_options()
             .enumerate()
-            .filter(|&(_, ref opt_elem)| opt_elem.Selected())
+            .filter(|(_, opt_elem)| opt_elem.Selected())
             .map(|(i, _)| i as i32)
             .next()
             .unwrap_or(-1)
@@ -419,12 +417,12 @@ impl VirtualMethods for HTMLSelectElement {
 
     fn attribute_mutated(&self, attr: &Attr, mutation: AttributeMutation) {
         self.super_type().unwrap().attribute_mutated(attr, mutation);
-        match attr.local_name() {
-            &local_name!("required") => {
+        match *attr.local_name() {
+            local_name!("required") => {
                 self.validity_state()
                     .perform_validation_and_update(ValidationFlags::VALUE_MISSING);
             },
-            &local_name!("disabled") => {
+            local_name!("disabled") => {
                 let el = self.upcast::<Element>();
                 match mutation {
                     AttributeMutation::Set(_) => {
@@ -441,7 +439,7 @@ impl VirtualMethods for HTMLSelectElement {
                 self.validity_state()
                     .perform_validation_and_update(ValidationFlags::VALUE_MISSING);
             },
-            &local_name!("form") => {
+            local_name!("form") => {
                 self.form_attribute_mutated(mutation);
             },
             _ => {},

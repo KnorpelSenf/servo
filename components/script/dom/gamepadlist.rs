@@ -38,7 +38,7 @@ impl GamepadList {
                 .iter()
                 .any(|g| g.gamepad_id() == gamepad.gamepad_id())
             {
-                self.list.borrow_mut().push(Dom::from_ref(&*gamepad));
+                self.list.borrow_mut().push(Dom::from_ref(gamepad));
                 // Ensure that the gamepad has the correct index
                 gamepad.update_index(self.list.borrow().len() as i32 - 1);
             }
@@ -47,6 +47,14 @@ impl GamepadList {
 
     pub fn remove_gamepad(&self, index: usize) {
         self.list.borrow_mut().remove(index);
+    }
+
+    pub fn list(&self) -> Vec<Option<DomRoot<Gamepad>>> {
+        self.list
+            .borrow()
+            .iter()
+            .map(|gamepad| Some(DomRoot::from_ref(&**gamepad)))
+            .collect()
     }
 }
 

@@ -113,12 +113,7 @@ pub fn fixed_to_float(before: usize, f: i32) -> f64 {
 }
 
 pub fn is_bidi_control(c: char) -> bool {
-    match c {
-        '\u{202A}'..='\u{202E}' => true,
-        '\u{2066}'..='\u{2069}' => true,
-        '\u{200E}' | '\u{200F}' | '\u{061C}' => true,
-        _ => false,
-    }
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}')
 }
 
 pub fn unicode_plane(codepoint: char) -> u32 {
@@ -154,5 +149,6 @@ pub fn is_cjk(codepoint: char) -> bool {
     }
 
     // https://en.wikipedia.org/wiki/Plane_(Unicode)#Supplementary_Ideographic_Plane
-    unicode_plane(codepoint) == 2
+    // https://en.wikipedia.org/wiki/Plane_(Unicode)#Tertiary_Ideographic_Plane
+    unicode_plane(codepoint) == 2 || unicode_plane(codepoint) == 3
 }

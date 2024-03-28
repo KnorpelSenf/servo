@@ -25,7 +25,7 @@ use crate::dom::NodeExt;
 use crate::dom_traversal::{Contents, NodeAndStyleInfo};
 use crate::formatting_contexts::IndependentFormattingContext;
 use crate::fragment_tree::{BoxFragment, CollapsedBlockMargins, CollapsedMargin, FloatFragment};
-use crate::geom::{LogicalRect, LogicalSides, LogicalVec2};
+use crate::geom::{LogicalRect, LogicalVec2};
 use crate::positioned::PositioningContext;
 use crate::style_ext::{ComputedValuesExt, DisplayInside, PaddingBorderMargin};
 use crate::ContainingBlock;
@@ -113,9 +113,9 @@ impl<'a> PlacementAmongFloats<'a> {
             (current_bands, next_band)
         };
         let min_inline_start = float_context.containing_block_info.inline_start +
-            pbm.margin.inline_start.auto_is(Length::zero).into();
+            pbm.margin.inline_start.auto_is(Au::zero);
         let max_inline_end = (float_context.containing_block_info.inline_end -
-            pbm.margin.inline_end.auto_is(Length::zero).into())
+            pbm.margin.inline_end.auto_is(Au::zero))
         .max(min_inline_start + object_size.inline);
         PlacementAmongFloats {
             float_context,
@@ -249,6 +249,18 @@ impl<'a> PlacementAmongFloats<'a> {
                 block: MAX_AU,
             },
         }
+    }
+
+    /// After placing a table and then laying it out, it may turn out wider than what
+    /// we initially expected. This method takes care of updating the data so that
+    /// the next place() can find the right area for the new size.
+    /// Note that if the new size is smaller, placement won't backtrack to consider
+    /// areas that weren't big enough for the old size.
+    pub(crate) fn set_inline_size(&mut self, inline_size: Au, pbm: &PaddingBorderMargin) {
+        self.object_size.inline = inline_size;
+        self.max_inline_end = (self.float_context.containing_block_info.inline_end -
+            pbm.margin.inline_end.auto_is(Au::zero))
+        .max(self.min_inline_start + inline_size);
     }
 
     /// After placing an object with `height: auto` (and using the minimum inline and
@@ -899,8 +911,8 @@ impl FloatBox {
                 // Margin is computed this way regardless of whether the element is replaced
                 // or non-replaced.
                 let pbm = style.padding_border_margin(containing_block);
-                let margin = pbm.margin.auto_is(Length::zero);
-                let pbm_sums = &(&pbm.padding + &pbm.border) + &margin.clone().into();
+                let margin = pbm.margin.auto_is(Au::zero);
+                let pbm_sums = &(&pbm.padding + &pbm.border) + &margin.clone();
 
                 let (content_size, children);
                 match self.contents {
@@ -918,10 +930,10 @@ impl FloatBox {
 
                         let tentative_inline_size = box_size.inline.auto_is(|| {
                             let available_size =
-                                containing_block.inline_size - pbm_sums.inline_sum().into();
+                                containing_block.inline_size - pbm_sums.inline_sum();
                             non_replaced
                                 .inline_content_sizes(layout_context)
-                                .shrink_to_fit(available_size.into())
+                                .shrink_to_fit(available_size)
                                 .into()
                         });
                         let inline_size = tentative_inline_size
@@ -931,14 +943,15 @@ impl FloatBox {
                         // https://drafts.csswg.org/css2/#block-root-margin
                         // FIXME(pcwalton): Is a tree rank of zero correct here?
                         let containing_block_for_children = ContainingBlock {
-                            inline_size,
-                            block_size: box_size.block,
+                            inline_size: inline_size.into(),
+                            block_size: box_size.block.map(|t| t.into()),
                             style: &non_replaced.style,
                         };
                         let independent_layout = non_replaced.layout(
                             layout_context,
                             positioning_context,
                             &containing_block_for_children,
+                            containing_block,
                         );
                         content_size = LogicalVec2 {
                             inline: inline_size,
@@ -962,7 +975,7 @@ impl FloatBox {
                             .into();
                         children = replaced
                             .contents
-                            .make_fragments(&replaced.style, content_size.clone().into());
+                            .make_fragments(&replaced.style, content_size.into());
                     },
                 };
 
@@ -976,8 +989,8 @@ impl FloatBox {
                     style.clone(),
                     children,
                     content_rect,
-                    pbm.padding.into(),
-                    pbm.border.into(),
+                    pbm.padding,
+                    pbm.border,
                     margin,
                     // Clearance is handled internally by the float placement logic, so there's no need
                     // to store it explicitly in the fragment.
@@ -1202,9 +1215,8 @@ impl SequentialLayoutState {
 
         let pbm_sums = &(&box_fragment.padding + &box_fragment.border) + &box_fragment.margin;
         let content_rect: LogicalRect<Au> = box_fragment.content_rect.clone().into();
-        let pbm_sums_all: LogicalSides<Au> = pbm_sums.map(|length| (*length).into());
         let margin_box_start_corner = self.floats.add_float(&PlacementInfo {
-            size: &content_rect.size + &pbm_sums_all.sum(),
+            size: &content_rect.size + &pbm_sums.sum(),
             side: FloatSide::from_style(&box_fragment.style).expect("Float box wasn't floated!"),
             clear: box_fragment.style.get_box().clear,
         });
@@ -1212,7 +1224,7 @@ impl SequentialLayoutState {
         // This is the position of the float in the float-containing block formatting context. We add the
         // existing start corner here because we may have already gotten some relative positioning offset.
         let new_position_in_bfc =
-            &(&margin_box_start_corner + &pbm_sums_all.start_offset()) + &content_rect.start_corner;
+            &(&margin_box_start_corner + &pbm_sums.start_offset()) + &content_rect.start_corner;
 
         // This is the position of the float relative to the containing block start.
         let new_position_in_containing_block = LogicalVec2 {

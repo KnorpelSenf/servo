@@ -86,7 +86,7 @@ impl DocumentLoader {
         let initial_loads = initial_load.into_iter().map(LoadType::PageSource).collect();
 
         DocumentLoader {
-            resource_threads: resource_threads,
+            resource_threads,
             blocking_loads: initial_loads,
             events_inhibited: false,
             cancellers: Vec::new(),
@@ -164,10 +164,9 @@ impl DocumentLoader {
     }
 
     pub fn is_only_blocked_by_iframes(&self) -> bool {
-        self.blocking_loads.iter().all(|load| match *load {
-            LoadType::Subframe(_) => true,
-            _ => false,
-        })
+        self.blocking_loads
+            .iter()
+            .all(|load| matches!(*load, LoadType::Subframe(_)))
     }
 
     pub fn inhibit_events(&mut self) {

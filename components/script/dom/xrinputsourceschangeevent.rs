@@ -80,7 +80,7 @@ impl XRInputSourcesChangeEvent {
             let event = changeevent.upcast::<Event>();
             event.init_event(type_, bubbles, cancelable);
         }
-        let _ac = enter_realm(&*global);
+        let _ac = enter_realm(global);
         let cx = GlobalScope::get_cx();
         unsafe {
             rooted!(in(*cx) let mut added_val = UndefinedValue());
@@ -108,8 +108,8 @@ impl XRInputSourcesChangeEvent {
             init.parent.bubbles,
             init.parent.cancelable,
             &init.session,
-            &*init.added,
-            &*init.removed,
+            &init.added,
+            &init.removed,
         )
     }
 }

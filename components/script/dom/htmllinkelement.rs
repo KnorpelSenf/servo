@@ -204,8 +204,8 @@ impl VirtualMethods for HTMLLinkElement {
         }
 
         let rel = get_attr(self.upcast(), &local_name!("rel"));
-        match attr.local_name() {
-            &local_name!("href") => {
+        match *attr.local_name() {
+            local_name!("href") => {
                 if string_is_stylesheet(&rel) {
                     self.handle_stylesheet_url(&attr.value());
                 } else if is_favicon(&rel) {
@@ -213,7 +213,7 @@ impl VirtualMethods for HTMLLinkElement {
                     self.handle_favicon_url(rel.as_ref().unwrap(), &attr.value(), &sizes);
                 }
             },
-            &local_name!("sizes") => {
+            local_name!("sizes") => {
                 if is_favicon(&rel) {
                     if let Some(ref href) = get_attr(self.upcast(), &local_name!("href")) {
                         self.handle_favicon_url(
@@ -308,7 +308,7 @@ impl HTMLLinkElement {
             None => "",
         };
 
-        let mut input = ParserInput::new(&mq_str);
+        let mut input = ParserInput::new(mq_str);
         let mut css_parser = CssParser::new(&mut input);
         let document_url_data = &UrlExtraData(document.url().get_arc());
         let window = document.window();
@@ -317,7 +317,7 @@ impl HTMLLinkElement {
         // much sense.
         let context = CssParserContext::new(
             Origin::Author,
-            &document_url_data,
+            document_url_data,
             Some(CssRuleType::Media),
             ParsingMode::DEFAULT,
             document.quirks_mode(),

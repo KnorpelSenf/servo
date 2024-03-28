@@ -4,6 +4,7 @@
 
 use std::borrow::Cow;
 use std::convert::{TryFrom, TryInto};
+use std::iter::repeat;
 
 use log::warn;
 use script_layout_interface::wrapper_traits::ThreadSafeLayoutNode;
@@ -13,7 +14,10 @@ use style::selector_parser::PseudoElement;
 use style::str::char_is_whitespace;
 use style::values::specified::TextDecorationLine;
 
-use super::{Table, TableSlot, TableSlotCell, TableSlotCoordinates, TableSlotOffset};
+use super::{
+    Table, TableSlot, TableSlotCell, TableSlotCoordinates, TableSlotOffset, TableTrack,
+    TableTrackGroup, TableTrackGroupType,
+};
 use crate::context::LayoutContext;
 use crate::dom::{BoxSlot, NodeExt};
 use crate::dom_traversal::{Contents, NodeAndStyleInfo, NonReplacedContents, TraversalHandler};
@@ -22,7 +26,7 @@ use crate::formatting_contexts::{
     IndependentFormattingContext, NonReplacedFormattingContext,
     NonReplacedFormattingContextContents,
 };
-use crate::fragment_tree::{BaseFragmentInfo, FragmentFlags, Tag};
+use crate::fragment_tree::BaseFragmentInfo;
 use crate::style_ext::{DisplayGeneratingBox, DisplayLayoutInternal};
 
 /// A reference to a slot and its coordinates in the table
@@ -52,6 +56,19 @@ pub(crate) enum AnonymousTableContent<'dom, Node> {
     },
 }
 
+impl<'dom, Node> AnonymousTableContent<'dom, Node> {
+    fn is_whitespace_only(&self) -> bool {
+        match self {
+            Self::Element { .. } => false,
+            Self::Text(_, ref text) => text.chars().all(char_is_whitespace),
+        }
+    }
+
+    fn contents_are_whitespace_only(contents: &[Self]) -> bool {
+        contents.iter().all(|content| content.is_whitespace_only())
+    }
+}
+
 impl Table {
     pub(crate) fn construct<'dom>(
         context: &LayoutContext,
@@ -59,8 +76,9 @@ impl Table {
         contents: NonReplacedContents,
         propagated_text_decoration_line: TextDecorationLine,
     ) -> Self {
-        let mut traversal =
-            TableBuilderTraversal::new(context, info, propagated_text_decoration_line);
+        let text_decoration_line =
+            propagated_text_decoration_line | info.style.clone_text_decoration_line();
+        let mut traversal = TableBuilderTraversal::new(context, info, text_decoration_line);
         contents.traverse(context, info, &mut traversal);
         traversal.finish()
     }
@@ -79,12 +97,10 @@ impl Table {
             .stylist
             .style_for_anonymous::<Node::ConcreteElement>(
                 &context.shared_context().guards,
-                // TODO: This should be updated for Layout 2020 once we've determined
-                // which styles should be inherited for tables.
-                &PseudoElement::ServoLegacyAnonymousTable,
+                &PseudoElement::ServoAnonymousTable,
                 &parent_info.style,
             );
-        let anonymous_info = parent_info.new_replacing_style(anonymous_style.clone());
+        let anonymous_info = parent_info.new_anonymous(anonymous_style.clone());
 
         let mut table_builder =
             TableBuilderTraversal::new(context, &anonymous_info, propagated_text_decoration_line);
@@ -224,30 +240,216 @@ impl TableBuilder {
         Self::new(ComputedValues::initial_values().to_arc())
     }
 
+    pub fn last_row_index_in_row_group_at_row_n(&self, n: usize) -> usize {
+        // TODO: This is just a linear search, because the idea is that there are
+        // generally less than or equal to three row groups, but if we notice a lot
+        // of web content with more, we can consider a binary search here.
+        for row_group in self.table.row_groups.iter() {
+            if row_group.track_range.start > n {
+                return row_group.track_range.start - 1;
+            }
+        }
+        self.table.size.height - 1
+    }
+
     pub fn finish(mut self) -> Table {
-        // Make sure that every row has the same number of cells.
+        self.do_missing_cells_fixup();
+        self.remove_extra_columns_and_column_groups();
+        self.reorder_first_thead_and_tfoot();
+        self.do_final_rowspan_calculation();
+        self.table
+    }
+
+    /// Do <https://drafts.csswg.org/css-tables/#missing-cells-fixup> which ensures
+    /// that every row has the same number of cells.
+    fn do_missing_cells_fixup(&mut self) {
         for row in self.table.slots.iter_mut() {
             row.resize_with(self.table.size.width, || TableSlot::Empty);
         }
+    }
 
-        // Turn all rowspan=0 rows into the real value to avoid having to
-        // make the calculation continually during layout. In addition, make
-        // sure that there are no rowspans that extend past the end of the
-        // table.
+    /// It's possible to define more table columns via `<colgroup>` and `<col>` elements
+    /// than actually exist in the table. In that case, remove these bogus columns
+    /// to prevent using them later in layout.
+    fn remove_extra_columns_and_column_groups(&mut self) {
+        let number_of_actual_table_columns = self.table.size.width;
+        self.table.columns.truncate(number_of_actual_table_columns);
+
+        let mut remove_from = None;
+        for (group_index, column_group) in self.table.column_groups.iter_mut().enumerate() {
+            if column_group.track_range.start >= number_of_actual_table_columns {
+                remove_from = Some(group_index);
+                break;
+            }
+            column_group.track_range.end = column_group
+                .track_range
+                .end
+                .min(number_of_actual_table_columns);
+        }
+
+        if let Some(remove_from) = remove_from {
+            self.table.column_groups.truncate(remove_from);
+        }
+    }
+
+    /// Reorder the first `<thead>` and `<tbody>` to be the first and last row groups respectively.
+    /// This requires fixing up all row group indices.
+    /// See <https://drafts.csswg.org/css-tables/#table-header-group> and
+    /// <https://drafts.csswg.org/css-tables/#table-footer-group>.
+    fn reorder_first_thead_and_tfoot(&mut self) {
+        let mut thead_index = None;
+        let mut tfoot_index = None;
+        for (row_group_index, row_group) in self.table.row_groups.iter().enumerate() {
+            if thead_index.is_none() && row_group.group_type == TableTrackGroupType::HeaderGroup {
+                thead_index = Some(row_group_index);
+            }
+            if tfoot_index.is_none() && row_group.group_type == TableTrackGroupType::FooterGroup {
+                tfoot_index = Some(row_group_index);
+            }
+            if thead_index.is_some() && tfoot_index.is_some() {
+                break;
+            }
+        }
+
+        if let Some(thead_index) = thead_index {
+            self.move_row_group_to_front(thead_index)
+        }
+
+        if let Some(mut tfoot_index) = tfoot_index {
+            // We may have moved a `<thead>` which means the original index we
+            // we found for this this <tfoot>` also needs to be updated!
+            if thead_index.unwrap_or(0) > tfoot_index {
+                tfoot_index += 1;
+            }
+            self.move_row_group_to_end(tfoot_index)
+        }
+    }
+
+    fn regenerate_track_ranges(&mut self) {
+        // Now update all track group ranges.
+        let mut current_row_group_index = None;
+        for (row_index, row) in self.table.rows.iter().enumerate() {
+            if current_row_group_index == row.group_index {
+                continue;
+            }
+
+            // Finish any row group that is currently being processed.
+            if let Some(current_group_index) = current_row_group_index {
+                self.table.row_groups[current_group_index].track_range.end = row_index;
+            }
+
+            // Start processing this new row group and update its starting index.
+            current_row_group_index = row.group_index;
+            if let Some(current_group_index) = current_row_group_index {
+                self.table.row_groups[current_group_index].track_range.start = row_index;
+            }
+        }
+
+        // Finish the last row group.
+        if let Some(current_group_index) = current_row_group_index {
+            self.table.row_groups[current_group_index].track_range.end = self.table.rows.len();
+        }
+    }
+
+    fn move_row_group_to_front(&mut self, index_to_move: usize) {
+        if index_to_move == 0 {
+            return;
+        }
+
+        // Move the slots associated with this group.
+        let row_range = self.table.row_groups[index_to_move].track_range.clone();
+        let removed_slots: Vec<Vec<TableSlot>> = self
+            .table
+            .slots
+            .splice(row_range.clone(), std::iter::empty())
+            .collect();
+        self.table.slots.splice(0..0, removed_slots);
+
+        // Move the rows associated with this group.
+        let removed_rows: Vec<TableTrack> = self
+            .table
+            .rows
+            .splice(row_range, std::iter::empty())
+            .collect();
+        self.table.rows.splice(0..0, removed_rows);
+
+        // Move the group itself.
+        let removed_row_group = self.table.row_groups.remove(index_to_move);
+        self.table.row_groups.insert(0, removed_row_group);
+
+        for row in self.table.rows.iter_mut() {
+            match row.group_index.as_mut() {
+                Some(group_index) if *group_index < index_to_move => *group_index += 1,
+                Some(group_index) if *group_index == index_to_move => *group_index = 0,
+                _ => {},
+            }
+        }
+
+        // Do this now, rather than after possibly moving a `<tfoot>` row group to the end,
+        // because moving row groups depends on an accurate `track_range` in every group.
+        self.regenerate_track_ranges();
+    }
+
+    fn move_row_group_to_end(&mut self, index_to_move: usize) {
+        let last_row_group_index = self.table.row_groups.len() - 1;
+        if index_to_move == last_row_group_index {
+            return;
+        }
+
+        // Move the slots associated with this group.
+        let row_range = self.table.row_groups[index_to_move].track_range.clone();
+        let removed_slots: Vec<Vec<TableSlot>> = self
+            .table
+            .slots
+            .splice(row_range.clone(), std::iter::empty())
+            .collect();
+        self.table.slots.extend(removed_slots);
+
+        // Move the rows associated with this group.
+        let removed_rows: Vec<TableTrack> = self
+            .table
+            .rows
+            .splice(row_range, std::iter::empty())
+            .collect();
+        self.table.rows.extend(removed_rows);
+
+        // Move the group itself.
+        let removed_row_group = self.table.row_groups.remove(index_to_move);
+        self.table.row_groups.push(removed_row_group);
+
+        for row in self.table.rows.iter_mut() {
+            match row.group_index.as_mut() {
+                Some(group_index) if *group_index > index_to_move => *group_index -= 1,
+                Some(group_index) if *group_index == index_to_move => {
+                    *group_index = last_row_group_index
+                },
+                _ => {},
+            }
+        }
+
+        self.regenerate_track_ranges();
+    }
+
+    /// Turn all rowspan=0 rows into the real value to avoid having to make the calculation
+    /// continually during layout. In addition, make sure that there are no rowspans that extend
+    /// past the end of their row group.
+    fn do_final_rowspan_calculation(&mut self) {
         for row_index in 0..self.table.size.height {
+            let last_row_index_in_group = self.last_row_index_in_row_group_at_row_n(row_index);
             for cell in self.table.slots[row_index].iter_mut() {
                 if let TableSlot::Cell(ref mut cell) = cell {
-                    let rowspan_to_end_of_table = self.table.size.height - row_index;
+                    if cell.rowspan == 1 {
+                        continue;
+                    }
+                    let rowspan_to_end_of_group = last_row_index_in_group - row_index + 1;
                     if cell.rowspan == 0 {
-                        cell.rowspan = rowspan_to_end_of_table;
+                        cell.rowspan = rowspan_to_end_of_group;
                     } else {
-                        cell.rowspan = cell.rowspan.min(rowspan_to_end_of_table);
+                        cell.rowspan = cell.rowspan.min(rowspan_to_end_of_group);
                     }
                 }
             }
         }
-
-        self.table
     }
 
     fn current_y(&self) -> usize {
@@ -288,7 +490,7 @@ impl TableBuilder {
 
     /// When not in the process of filling a cell, make sure any incoming rowspans are
     /// filled so that the next specified cell comes after them. Should have been called before
-    /// [`Self::handle_cell`].
+    /// [`Self::add_cell`]
     ///
     /// if `stop_at_cell_opportunity` is set, this will stop at the first slot with
     /// `incoming_rowspans` equal to zero. If not, it will insert [`TableSlot::Empty`] and
@@ -399,15 +601,18 @@ pub(crate) struct TableBuilderTraversal<'style, 'dom, Node> {
     context: &'style LayoutContext<'style>,
     info: &'style NodeAndStyleInfo<Node>,
 
-    /// Propagated value for text-decoration-line, used to construct the block
-    /// contents of table cells.
-    propagated_text_decoration_line: TextDecorationLine,
+    /// The value of the [`TextDecorationLine`] to use, either for the row group
+    /// if processing one or for the table itself if outside a row group.
+    current_text_decoration_line: TextDecorationLine,
 
     /// The [`TableBuilder`] for this [`TableBuilderTraversal`]. This is separated
     /// into another struct so that we can write unit tests against the builder.
     builder: TableBuilder,
 
     current_anonymous_row_content: Vec<AnonymousTableContent<'dom, Node>>,
+
+    /// The index of the current row group, if there is one.
+    current_row_group_index: Option<usize>,
 }
 
 impl<'style, 'dom, Node> TableBuilderTraversal<'style, 'dom, Node>
@@ -417,14 +622,15 @@ where
     pub(crate) fn new(
         context: &'style LayoutContext<'style>,
         info: &'style NodeAndStyleInfo<Node>,
-        propagated_text_decoration_line: TextDecorationLine,
+        text_decoration_line: TextDecorationLine,
     ) -> Self {
         TableBuilderTraversal {
             context,
             info,
-            propagated_text_decoration_line,
+            current_text_decoration_line: text_decoration_line,
             builder: TableBuilder::new(info.style.clone()),
             current_anonymous_row_content: Vec::new(),
+            current_row_group_index: None,
         }
     }
 
@@ -434,7 +640,9 @@ where
     }
 
     fn finish_anonymous_row_if_needed(&mut self) {
-        if self.current_anonymous_row_content.is_empty() {
+        if AnonymousTableContent::contents_are_whitespace_only(&self.current_anonymous_row_content)
+        {
+            self.current_anonymous_row_content.clear();
             return;
         }
 
@@ -446,11 +654,12 @@ where
             .stylist
             .style_for_anonymous::<Node::ConcreteElement>(
                 &context.shared_context().guards,
-                &PseudoElement::ServoAnonymousTableCell,
+                &PseudoElement::ServoAnonymousTableRow,
                 &self.info.style,
             );
-        let anonymous_info = self.info.new_replacing_style(anonymous_style);
-        let mut row_builder = TableRowBuilder::new(self, &anonymous_info);
+        let anonymous_info = self.info.new_anonymous(anonymous_style.clone());
+        let mut row_builder =
+            TableRowBuilder::new(self, &anonymous_info, self.current_text_decoration_line);
 
         for cell_content in row_content {
             match cell_content {
@@ -469,6 +678,23 @@ where
         }
 
         row_builder.finish();
+
+        self.push_table_row(TableTrack {
+            base_fragment_info: (&anonymous_info).into(),
+            style: anonymous_style,
+            group_index: self.current_row_group_index,
+            is_anonymous: true,
+        });
+    }
+
+    fn push_table_row(&mut self, table_track: TableTrack) {
+        self.builder.table.rows.push(table_track);
+
+        let last_row = self.builder.table.rows.len();
+        if let Some(index) = self.current_row_group_index {
+            let row_group = &mut self.builder.table.row_groups[index];
+            row_group.track_range.end = last_row;
+        }
     }
 }
 
@@ -478,9 +704,6 @@ where
     Node: NodeExt<'dom>,
 {
     fn handle_text(&mut self, info: &NodeAndStyleInfo<Node>, text: Cow<'dom, str>) {
-        if text.chars().all(char_is_whitespace) {
-            return;
-        }
         self.current_anonymous_row_content
             .push(AnonymousTableContent::Text(info.clone(), text));
     }
@@ -499,17 +722,32 @@ where
                 DisplayLayoutInternal::TableFooterGroup |
                 DisplayLayoutInternal::TableHeaderGroup => {
                     self.finish_anonymous_row_if_needed();
-
-                    // TODO: Should we fixup `rowspan=0` to the actual resolved value and
-                    // any other rowspans that have been cut short?
                     self.builder.incoming_rowspans.clear();
+
+                    let next_row_index = self.builder.table.rows.len();
+                    self.builder.table.row_groups.push(TableTrackGroup {
+                        base_fragment_info: info.into(),
+                        style: info.style.clone(),
+                        group_type: internal.into(),
+                        track_range: next_row_index..next_row_index,
+                    });
+
+                    let previous_text_decoration_line = self.current_text_decoration_line;
+                    self.current_text_decoration_line |= info.style.clone_text_decoration_line();
+
+                    let new_row_group_index = self.builder.table.row_groups.len() - 1;
+                    self.current_row_group_index = Some(new_row_group_index);
+
                     NonReplacedContents::try_from(contents).unwrap().traverse(
                         self.context,
                         info,
                         self,
                     );
+                    self.finish_anonymous_row_if_needed();
 
-                    // TODO: Handle style for row groups here.
+                    self.current_row_group_index = None;
+                    self.current_text_decoration_line = previous_text_decoration_line;
+                    self.builder.incoming_rowspans.clear();
 
                     // We are doing this until we have actually set a Box for this `BoxSlot`.
                     ::std::mem::forget(box_slot)
@@ -519,7 +757,8 @@ where
 
                     let context = self.context;
 
-                    let mut row_builder = TableRowBuilder::new(self, info);
+                    let mut row_builder =
+                        TableRowBuilder::new(self, info, self.current_text_decoration_line);
                     NonReplacedContents::try_from(contents).unwrap().traverse(
                         context,
                         info,
@@ -527,16 +766,85 @@ where
                     );
                     row_builder.finish();
 
-                    // We are doing this until we have actually set a Box for this `BoxSlot`.
-                    ::std::mem::forget(box_slot)
-                },
-                DisplayLayoutInternal::TableCaption |
-                DisplayLayoutInternal::TableColumn |
-                DisplayLayoutInternal::TableColumnGroup => {
-                    // TODO: Handle these other types of table elements.
+                    self.push_table_row(TableTrack {
+                        base_fragment_info: info.into(),
+                        style: info.style.clone(),
+                        group_index: self.current_row_group_index,
+                        is_anonymous: false,
+                    });
 
                     // We are doing this until we have actually set a Box for this `BoxSlot`.
                     ::std::mem::forget(box_slot)
+                },
+                DisplayLayoutInternal::TableColumn => {
+                    let span = info
+                        .node
+                        .and_then(|node| node.to_threadsafe().get_span())
+                        .unwrap_or(1)
+                        .min(1000);
+
+                    for _ in 0..span + 1 {
+                        self.builder.table.columns.push(TableTrack {
+                            base_fragment_info: info.into(),
+                            style: info.style.clone(),
+                            group_index: None,
+                            is_anonymous: false,
+                        })
+                    }
+
+                    // We are doing this until we have actually set a Box for this `BoxSlot`.
+                    ::std::mem::forget(box_slot)
+                },
+                DisplayLayoutInternal::TableColumnGroup => {
+                    let column_group_index = self.builder.table.column_groups.len();
+                    let mut column_group_builder = TableColumnGroupBuilder {
+                        column_group_index,
+                        columns: Vec::new(),
+                    };
+
+                    NonReplacedContents::try_from(contents).unwrap().traverse(
+                        self.context,
+                        info,
+                        &mut column_group_builder,
+                    );
+
+                    let first_column = self.builder.table.columns.len();
+                    if column_group_builder.columns.is_empty() {
+                        let span = info
+                            .node
+                            .and_then(|node| node.to_threadsafe().get_span())
+                            .unwrap_or(1)
+                            .min(1000) as usize;
+
+                        self.builder.table.columns.extend(
+                            repeat(TableTrack {
+                                base_fragment_info: info.into(),
+                                style: info.style.clone(),
+                                group_index: Some(column_group_index),
+                                is_anonymous: true,
+                            })
+                            .take(span),
+                        );
+                    } else {
+                        self.builder
+                            .table
+                            .columns
+                            .extend(column_group_builder.columns);
+                    }
+
+                    self.builder.table.column_groups.push(TableTrackGroup {
+                        base_fragment_info: info.into(),
+                        style: info.style.clone(),
+                        group_type: internal.into(),
+                        track_range: first_column..self.builder.table.columns.len(),
+                    });
+
+                    ::std::mem::forget(box_slot);
+                },
+                DisplayLayoutInternal::TableCaption => {
+                    // TODO: Handle table captions.
+                    // We are doing this until we have actually set a Box for this `BoxSlot`.
+                    ::std::mem::forget(box_slot);
                 },
                 DisplayLayoutInternal::TableCell => {
                     self.current_anonymous_row_content
@@ -569,6 +877,9 @@ struct TableRowBuilder<'style, 'builder, 'dom, 'a, Node> {
     info: &'a NodeAndStyleInfo<Node>,
 
     current_anonymous_cell_content: Vec<AnonymousTableContent<'dom, Node>>,
+
+    /// The [`TextDecorationLine`] to use for all children of this row.
+    text_decoration_line: TextDecorationLine,
 }
 
 impl<'style, 'builder, 'dom, 'a, Node: 'dom> TableRowBuilder<'style, 'builder, 'dom, 'a, Node>
@@ -578,13 +889,17 @@ where
     fn new(
         table_traversal: &'builder mut TableBuilderTraversal<'style, 'dom, Node>,
         info: &'a NodeAndStyleInfo<Node>,
+        propagated_text_decoration_line: TextDecorationLine,
     ) -> Self {
         table_traversal.builder.start_row();
 
+        let text_decoration_line =
+            propagated_text_decoration_line | info.style.clone_text_decoration_line();
         TableRowBuilder {
             table_traversal,
             info,
             current_anonymous_cell_content: Vec::new(),
+            text_decoration_line,
         }
     }
 
@@ -594,7 +909,9 @@ where
     }
 
     fn finish_current_anonymous_cell_if_needed(&mut self) {
-        if self.current_anonymous_cell_content.is_empty() {
+        if AnonymousTableContent::contents_are_whitespace_only(&self.current_anonymous_cell_content)
+        {
+            self.current_anonymous_cell_content.clear();
             return;
         }
 
@@ -607,12 +924,9 @@ where
                 &PseudoElement::ServoAnonymousTableCell,
                 &self.info.style,
             );
-        let anonymous_info = self.info.new_replacing_style(anonymous_style);
-        let mut builder = BlockContainerBuilder::new(
-            context,
-            &anonymous_info,
-            self.table_traversal.propagated_text_decoration_line,
-        );
+        let anonymous_info = self.info.new_anonymous(anonymous_style);
+        let mut builder =
+            BlockContainerBuilder::new(context, &anonymous_info, self.text_decoration_line);
 
         for cell_content in self.current_anonymous_cell_content.drain(..) {
             match cell_content {
@@ -630,22 +944,13 @@ where
             }
         }
 
-        let tag = Tag::new_pseudo(
-            self.info.node.opaque(),
-            Some(PseudoElement::ServoAnonymousTableCell),
-        );
-        let base_fragment_info = BaseFragmentInfo {
-            tag,
-            flags: FragmentFlags::empty(),
-        };
-
         let block_container = builder.finish();
         self.table_traversal.builder.add_cell(TableSlotCell {
             contents: BlockFormattingContext::from_block_container(block_container),
             colspan: 1,
             rowspan: 1,
             style: anonymous_info.style,
-            base_fragment_info,
+            base_fragment_info: BaseFragmentInfo::anonymous(),
         });
     }
 }
@@ -656,9 +961,6 @@ where
     Node: NodeExt<'dom>,
 {
     fn handle_text(&mut self, info: &NodeAndStyleInfo<Node>, text: Cow<'dom, str>) {
-        if text.chars().all(char_is_whitespace) {
-            return;
-        }
         self.current_anonymous_cell_content
             .push(AnonymousTableContent::Text(info.clone(), text));
     }
@@ -671,6 +973,7 @@ where
         contents: Contents,
         box_slot: BoxSlot<'dom>,
     ) {
+        #[allow(clippy::collapsible_match)] //// TODO: Remove once the other cases are handled
         match display {
             DisplayGeneratingBox::LayoutInternal(internal) => match internal {
                 DisplayLayoutInternal::TableCell => {
@@ -681,9 +984,12 @@ where
                     // 65534 and `colspan` to 1000, so we also enforce the same limits
                     // when dealing with arbitrary DOM elements (perhaps created via
                     // script).
-                    let node = info.node.to_threadsafe();
-                    let rowspan = std::cmp::min(node.get_rowspan() as usize, 65534);
-                    let colspan = std::cmp::min(node.get_colspan() as usize, 1000);
+                    let (rowspan, colspan) = info.node.map_or((1, 1), |node| {
+                        let node = node.to_threadsafe();
+                        let rowspan = node.get_rowspan().unwrap_or(1).min(65534) as usize;
+                        let colspan = node.get_colspan().unwrap_or(1).min(1000) as usize;
+                        (rowspan, colspan)
+                    });
 
                     let contents = match contents.try_into() {
                         Ok(non_replaced_contents) => {
@@ -691,7 +997,7 @@ where
                                 self.table_traversal.context,
                                 info,
                                 non_replaced_contents,
-                                self.table_traversal.propagated_text_decoration_line,
+                                self.text_decoration_line,
                                 false, /* is_list_item */
                             )
                         },
@@ -732,6 +1038,53 @@ where
                         box_slot,
                     });
             },
+        }
+    }
+}
+
+struct TableColumnGroupBuilder {
+    column_group_index: usize,
+    columns: Vec<TableTrack>,
+}
+
+impl<'dom, Node: 'dom> TraversalHandler<'dom, Node> for TableColumnGroupBuilder
+where
+    Node: NodeExt<'dom>,
+{
+    fn handle_text(&mut self, _info: &NodeAndStyleInfo<Node>, _text: Cow<'dom, str>) {}
+    fn handle_element(
+        &mut self,
+        info: &NodeAndStyleInfo<Node>,
+        display: DisplayGeneratingBox,
+        _contents: Contents,
+        box_slot: BoxSlot<'dom>,
+    ) {
+        // We are doing this until we have actually set a Box for this `BoxSlot`.
+        ::std::mem::forget(box_slot);
+
+        if !matches!(
+            display,
+            DisplayGeneratingBox::LayoutInternal(DisplayLayoutInternal::TableColumn)
+        ) {
+            return;
+        }
+        self.columns.push(TableTrack {
+            base_fragment_info: info.into(),
+            style: info.style.clone(),
+            group_index: Some(self.column_group_index),
+            is_anonymous: false,
+        });
+    }
+}
+
+impl From<DisplayLayoutInternal> for TableTrackGroupType {
+    fn from(value: DisplayLayoutInternal) -> Self {
+        match value {
+            DisplayLayoutInternal::TableColumnGroup => TableTrackGroupType::ColumnGroup,
+            DisplayLayoutInternal::TableFooterGroup => TableTrackGroupType::FooterGroup,
+            DisplayLayoutInternal::TableHeaderGroup => TableTrackGroupType::HeaderGroup,
+            DisplayLayoutInternal::TableRowGroup => TableTrackGroupType::RowGroup,
+            _ => unreachable!(),
         }
     }
 }

@@ -49,7 +49,7 @@ impl Tokenizer {
             document: Dom::from_ref(document),
             current_line: 1,
             script: Default::default(),
-            parsing_algorithm: parsing_algorithm,
+            parsing_algorithm,
         };
 
         let options = TreeBuilderOpts {
@@ -75,7 +75,7 @@ impl Tokenizer {
             HtmlTokenizer::new(TreeBuilder::new(sink, options), Default::default())
         };
 
-        Tokenizer { inner: inner }
+        Tokenizer { inner }
     }
 
     #[must_use]
@@ -134,7 +134,7 @@ fn start_element<S: Serializer>(node: &Element, serializer: &mut S) -> io::Resul
             (qname, value)
         })
         .collect::<Vec<_>>();
-    let attr_refs = attrs.iter().map(|&(ref qname, ref value)| {
+    let attr_refs = attrs.iter().map(|(qname, value)| {
         let ar: AttrRef = (&qname, &**value);
         ar
     });
@@ -173,7 +173,7 @@ impl SerializationIterator {
         let mut ret = SerializationIterator { stack: vec![] };
         if skip_first || node.is::<DocumentFragment>() || node.is::<Document>() {
             for c in rev_children_iter(node) {
-                ret.push_node(&*c);
+                ret.push_node(&c);
             }
         } else {
             ret.push_node(node);
@@ -228,13 +228,13 @@ impl<'a> Serialize for &'a Node {
                 },
 
                 SerializationCommand::CloseElement(n) => {
-                    end_element(&&n, serializer)?;
+                    end_element(&n, serializer)?;
                 },
 
                 SerializationCommand::SerializeNonelement(n) => match n.type_id() {
                     NodeTypeId::DocumentType => {
                         let doctype = n.downcast::<DocumentType>().unwrap();
-                        serializer.write_doctype(&doctype.name())?;
+                        serializer.write_doctype(doctype.name())?;
                     },
 
                     NodeTypeId::CharacterData(CharacterDataTypeId::Text(_)) => {
@@ -250,7 +250,7 @@ impl<'a> Serialize for &'a Node {
                     NodeTypeId::CharacterData(CharacterDataTypeId::ProcessingInstruction) => {
                         let pi = n.downcast::<ProcessingInstruction>().unwrap();
                         let data = pi.upcast::<CharacterData>().data();
-                        serializer.write_processing_instruction(&pi.target(), &data)?;
+                        serializer.write_processing_instruction(pi.target(), &data)?;
                     },
 
                     NodeTypeId::DocumentFragment(_) => {},

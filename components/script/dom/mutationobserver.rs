@@ -80,7 +80,7 @@ impl MutationObserver {
     fn new_inherited(callback: Rc<MutationCallback>) -> MutationObserver {
         MutationObserver {
             reflector_: Reflector::new(),
-            callback: callback,
+            callback,
             record_queue: DomRefCell::new(vec![]),
             node_list: DomRefCell::new(vec![]),
         }
@@ -94,7 +94,7 @@ impl MutationObserver {
     ) -> Fallible<DomRoot<MutationObserver>> {
         global.set_exists_mut_observer();
         let observer = MutationObserver::new_with_proto(global, proto, callback);
-        ScriptThread::add_mutation_observer(&*observer);
+        ScriptThread::add_mutation_observer(&observer);
         Ok(observer)
     }
 
@@ -125,7 +125,7 @@ impl MutationObserver {
             if !queue.is_empty() {
                 let _ = mo
                     .callback
-                    .Call_(&**mo, queue, &**mo, ExceptionHandling::Report);
+                    .Call_(&**mo, queue, mo, ExceptionHandling::Report);
             }
         }
         // TODO: Step 6 (slot signals)
@@ -169,7 +169,7 @@ impl MutationObserver {
                                 .options
                                 .attribute_filter
                                 .iter()
-                                .any(|s| &**s == &**name)
+                                .any(|s| **s == **name)
                             {
                                 continue;
                             }
@@ -181,9 +181,9 @@ impl MutationObserver {
                             None
                         };
                         // Step 3.1.1
-                        let idx = interested_observers.iter().position(|&(ref o, _)| {
-                            &**o as *const _ == &*registered.observer as *const _
-                        });
+                        let idx = interested_observers
+                            .iter()
+                            .position(|(o, _)| std::ptr::eq(&**o, &*registered.observer));
                         if let Some(idx) = idx {
                             interested_observers[idx].1 = paired_string;
                         } else {
@@ -202,9 +202,9 @@ impl MutationObserver {
                             None
                         };
                         // Step 3.1.1
-                        let idx = interested_observers.iter().position(|&(ref o, _)| {
-                            &**o as *const _ == &*registered.observer as *const _
-                        });
+                        let idx = interested_observers
+                            .iter()
+                            .position(|(o, _)| std::ptr::eq(&**o, &*registered.observer));
                         if let Some(idx) = idx {
                             interested_observers[idx].1 = paired_string;
                         } else {
@@ -260,7 +260,7 @@ impl MutationObserver {
 impl MutationObserverMethods for MutationObserver {
     /// <https://dom.spec.whatwg.org/#dom-mutationobserver-observe>
     fn Observe(&self, target: &Node, options: &MutationObserverInit) -> Fallible<()> {
-        let attribute_filter = options.attributeFilter.clone().unwrap_or(vec![]);
+        let attribute_filter = options.attributeFilter.clone().unwrap_or_default();
         let attribute_old_value = options.attributeOldValue.unwrap_or(false);
         let mut attributes = options.attributes.unwrap_or(false);
         let mut character_data = options.characterData.unwrap_or(false);

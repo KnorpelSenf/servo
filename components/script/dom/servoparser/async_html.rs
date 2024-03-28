@@ -241,7 +241,7 @@ impl Tokenizer {
             receiver: tokenizer_receiver,
             html_tokenizer_sender: to_html_tokenizer_sender,
             nodes: HashMap::new(),
-            url: url,
+            url,
             parsing_algorithm: algorithm,
         };
         tokenizer.insert_node(0, Dom::from_ref(document.upcast()));
@@ -425,7 +425,7 @@ impl Tokenizer {
                 let element = create_element_for_token(
                     name,
                     attrs,
-                    &*self.document,
+                    &self.document,
                     ElementCreator::ParserCreated(current_line),
                     ParsingAlgorithm::Normal,
                 );
@@ -433,7 +433,7 @@ impl Tokenizer {
             },
             ParseOperation::CreateComment { text, node } => {
                 let comment = Comment::new(DOMString::from(text), document, None);
-                self.insert_node(node, Dom::from_ref(&comment.upcast()));
+                self.insert_node(node, Dom::from_ref(comment.upcast()));
             },
             ParseOperation::AppendBeforeSibling { sibling, node } => {
                 self.append_before_sibling(sibling, node);
@@ -480,12 +480,14 @@ impl Tokenizer {
             },
             ParseOperation::RemoveFromParent { target } => {
                 if let Some(ref parent) = self.get_node(&target).GetParentNode() {
-                    parent.RemoveChild(&**self.get_node(&target)).unwrap();
+                    parent.RemoveChild(self.get_node(&target)).unwrap();
                 }
             },
             ParseOperation::MarkScriptAlreadyStarted { node } => {
                 let script = self.get_node(&node).downcast::<HTMLScriptElement>();
-                script.map(|script| script.set_already_started(true));
+                if let Some(script) = script {
+                    script.set_already_started(true)
+                }
             },
             ParseOperation::ReparentChildren { parent, new_parent } => {
                 let parent = self.get_node(&parent);
@@ -627,7 +629,7 @@ impl Sink {
                 id: 0,
                 qual_name: None,
             },
-            sender: sender,
+            sender,
         };
         let data = ParseNodeData::default();
         sink.insert_parse_node_data(0, data);
@@ -640,7 +642,7 @@ impl Sink {
         self.insert_parse_node_data(id, data);
         self.next_parse_node_id.set(id + 1);
         ParseNode {
-            id: id,
+            id,
             qual_name: None,
         }
     }

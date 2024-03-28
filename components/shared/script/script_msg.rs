@@ -29,8 +29,8 @@ use webrender_api::units::{DeviceIntPoint, DeviceIntSize};
 
 use crate::{
     AnimationState, AuxiliaryBrowsingContextLoadInfo, BroadcastMsg, DocumentState,
-    IFrameLoadInfoWithData, LayoutControlMsg, LoadData, MessagePortMsg, PortMessageTask,
-    StructuredSerializedData, WindowSizeType, WorkerGlobalScopeInit, WorkerScriptLoadOrigin,
+    IFrameLoadInfoWithData, LoadData, MessagePortMsg, PortMessageTask, StructuredSerializedData,
+    WindowSizeType, WorkerGlobalScopeInit, WorkerScriptLoadOrigin,
 };
 
 /// An iframe sizing operation.
@@ -215,21 +215,20 @@ pub enum ScriptMsg {
     /// Notification that this iframe should be removed.
     /// Returns a list of pipelines which were closed.
     RemoveIFrame(BrowsingContextId, IpcSender<Vec<PipelineId>>),
-    /// Notifies constellation that an iframe's visibility has been changed.
-    VisibilityChangeComplete(bool),
+    /// Successful response to [crate::ConstellationControlMsg::SetThrottled].
+    SetThrottledComplete(bool),
     /// A load has been requested in an IFrame.
     ScriptLoadedURLInIFrame(IFrameLoadInfoWithData),
     /// A load of the initial `about:blank` has been completed in an IFrame.
-    ScriptNewIFrame(IFrameLoadInfoWithData, IpcSender<LayoutControlMsg>),
+    ScriptNewIFrame(IFrameLoadInfoWithData),
     /// Script has opened a new auxiliary browsing context.
-    ScriptNewAuxiliary(
-        AuxiliaryBrowsingContextLoadInfo,
-        IpcSender<LayoutControlMsg>,
-    ),
+    ScriptNewAuxiliary(AuxiliaryBrowsingContextLoadInfo),
     /// Mark a new document as active
     ActivateDocument,
     /// Set the document state for a pipeline (used by screenshot / reftests)
     SetDocumentState(DocumentState),
+    /// Update the layout epoch in the constellation (used by screenshot / reftests).
+    SetLayoutEpoch(Epoch, IpcSender<bool>),
     /// Update the pipeline Url, which can change after redirections.
     SetFinalUrl(ServoUrl),
     /// Script has handled a touch event, and either prevented or allowed default actions.
@@ -305,12 +304,13 @@ impl fmt::Debug for ScriptMsg {
             ReplaceHistoryState(..) => "ReplaceHistoryState",
             JointSessionHistoryLength(..) => "JointSessionHistoryLength",
             RemoveIFrame(..) => "RemoveIFrame",
-            VisibilityChangeComplete(..) => "VisibilityChangeComplete",
+            SetThrottledComplete(..) => "SetThrottledComplete",
             ScriptLoadedURLInIFrame(..) => "ScriptLoadedURLInIFrame",
             ScriptNewIFrame(..) => "ScriptNewIFrame",
             ScriptNewAuxiliary(..) => "ScriptNewAuxiliary",
             ActivateDocument => "ActivateDocument",
             SetDocumentState(..) => "SetDocumentState",
+            SetLayoutEpoch(..) => "SetLayoutEpoch",
             SetFinalUrl(..) => "SetFinalUrl",
             TouchEventProcessed(..) => "TouchEventProcessed",
             LogEntry(..) => "LogEntry",
@@ -402,6 +402,7 @@ pub enum JobError {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[allow(clippy::large_enum_variant)]
 /// Messages sent from Job algorithms steps running in the SW manager,
 /// in order to resolve or reject the job promise.
 pub enum JobResult {

@@ -30,6 +30,7 @@ use net_traits::request::CorsSettings;
 use net_traits::ReferrerPolicy;
 use script_layout_interface::message::ReflowGoal;
 use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
+use selectors::bloom::{BloomFilter, BLOOM_HASH_MASK};
 use selectors::matching::{ElementSelectorFlags, MatchingContext};
 use selectors::sink::Push;
 use selectors::Element as SelectorsElement;
@@ -64,6 +65,7 @@ use xml5ever::serialize::TraversalScope::{
 };
 use xml5ever::serialize::{SerializeOpts as XmlSerializeOpts, TraversalScope as XmlTraversalScope};
 
+use super::htmltablecolelement::{HTMLTableColElement, HTMLTableColElementLayoutHelpers};
 use crate::dom::activation::Activatable;
 use crate::dom::attr::{Attr, AttrHelpersForLayout};
 use crate::dom::bindings::cell::{ref_filter_map, DomRefCell, Ref, RefMut};
@@ -238,7 +240,7 @@ impl FromStr for AdjacentPosition {
     type Err = Error;
 
     fn from_str(position: &str) -> Result<Self, Self::Err> {
-        match_ignore_ascii_case! { &*position,
+        match_ignore_ascii_case! { position,
             "beforebegin" => Ok(AdjacentPosition::BeforeBegin),
             "afterbegin"  => Ok(AdjacentPosition::AfterBegin),
             "beforeend"   => Ok(AdjacentPosition::BeforeEnd),
@@ -287,9 +289,9 @@ impl Element {
     ) -> Element {
         Element {
             node: Node::new_inherited(document),
-            local_name: local_name,
+            local_name,
             tag_name: TagName::new(),
-            namespace: namespace,
+            namespace,
             prefix: DomRefCell::new(prefix),
             attrs: DomRefCell::new(vec![]),
             id_attribute: DomRefCell::new(None),
@@ -533,14 +535,14 @@ impl Element {
         }
 
         // Steps 4, 5 and 6.
-        let shadow_root = ShadowRoot::new(self, &*self.node.owner_doc());
+        let shadow_root = ShadowRoot::new(self, &self.node.owner_doc());
         self.ensure_rare_data().shadow_root = Some(Dom::from_ref(&*shadow_root));
         shadow_root
             .upcast::<Node>()
             .set_containing_shadow_root(Some(&shadow_root));
 
         if self.is_connected() {
-            self.node.owner_doc().register_shadow_root(&*shadow_root);
+            self.node.owner_doc().register_shadow_root(&shadow_root);
         }
 
         self.upcast::<Node>().dirty(NodeDamage::OtherNodeDamage);
@@ -614,8 +616,9 @@ pub trait LayoutElementHelpers<'dom> {
     fn synthesize_presentational_hints_for_legacy_attributes<V>(self, hints: &mut V)
     where
         V: Push<ApplicableDeclarationBlock>;
-    fn get_colspan(self) -> u32;
-    fn get_rowspan(self) -> u32;
+    fn get_span(self) -> Option<u32>;
+    fn get_colspan(self) -> Option<u32>;
+    fn get_rowspan(self) -> Option<u32>;
     fn is_html_element(self) -> bool;
     fn id_attribute(self) -> *const Option<Atom>;
     fn style_attribute(self) -> *const Option<Arc<Locked<PropertyDeclarationBlock>>>;
@@ -1019,24 +1022,22 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
         }
     }
 
-    fn get_colspan(self) -> u32 {
-        if let Some(this) = self.downcast::<HTMLTableCellElement>() {
-            this.get_colspan().unwrap_or(1)
-        } else {
-            // Don't panic since `display` can cause this to be called on arbitrary
-            // elements.
-            1
-        }
+    fn get_span(self) -> Option<u32> {
+        // Don't panic since `display` can cause this to be called on arbitrary elements.
+        self.downcast::<HTMLTableColElement>()
+            .and_then(|element| element.get_span())
     }
 
-    fn get_rowspan(self) -> u32 {
-        if let Some(this) = self.downcast::<HTMLTableCellElement>() {
-            this.get_rowspan().unwrap_or(1)
-        } else {
-            // Don't panic since `display` can cause this to be called on arbitrary
-            // elements.
-            1
-        }
+    fn get_colspan(self) -> Option<u32> {
+        // Don't panic since `display` can cause this to be called on arbitrary elements.
+        self.downcast::<HTMLTableCellElement>()
+            .and_then(|element| element.get_colspan())
+    }
+
+    fn get_rowspan(self) -> Option<u32> {
+        // Don't panic since `display` can cause this to be called on arbitrary elements.
+        self.downcast::<HTMLTableCellElement>()
+            .and_then(|element| element.get_rowspan())
     }
 
     #[inline]
@@ -1046,22 +1047,22 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
 
     #[allow(unsafe_code)]
     fn id_attribute(self) -> *const Option<Atom> {
-        unsafe { (*self.unsafe_get()).id_attribute.borrow_for_layout() }
+        unsafe { (self.unsafe_get()).id_attribute.borrow_for_layout() }
     }
 
     #[allow(unsafe_code)]
     fn style_attribute(self) -> *const Option<Arc<Locked<PropertyDeclarationBlock>>> {
-        unsafe { (*self.unsafe_get()).style_attribute.borrow_for_layout() }
+        unsafe { (self.unsafe_get()).style_attribute.borrow_for_layout() }
     }
 
     #[allow(unsafe_code)]
     fn local_name(self) -> &'dom LocalName {
-        unsafe { &(*self.unsafe_get()).local_name }
+        unsafe { &(self.unsafe_get()).local_name }
     }
 
     #[allow(unsafe_code)]
     fn namespace(self) -> &'dom Namespace {
-        unsafe { &(*self.unsafe_get()).namespace }
+        unsafe { &(self.unsafe_get()).namespace }
     }
 
     fn get_lang_for_layout(self) -> String {
@@ -1090,7 +1091,7 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
     #[inline]
     #[allow(unsafe_code)]
     fn get_state_for_layout(self) -> ElementState {
-        unsafe { (*self.unsafe_get()).state.get() }
+        unsafe { (self.unsafe_get()).state.get() }
     }
 
     #[inline]
@@ -1098,7 +1099,7 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
     fn insert_selector_flags(self, flags: ElementSelectorFlags) {
         debug_assert!(thread_state::get().is_layout());
         unsafe {
-            let f = &(*self.unsafe_get()).selector_flags;
+            let f = &(self.unsafe_get()).selector_flags;
             f.set(f.get() | flags);
         }
     }
@@ -1106,7 +1107,7 @@ impl<'dom> LayoutElementHelpers<'dom> for LayoutDom<'dom, Element> {
     #[inline]
     #[allow(unsafe_code)]
     fn has_selector_flags(self, flags: ElementSelectorFlags) -> bool {
-        unsafe { (*self.unsafe_get()).selector_flags.get().contains(flags) }
+        unsafe { (self.unsafe_get()).selector_flags.get().contains(flags) }
     }
 
     #[inline]
@@ -1190,23 +1191,40 @@ impl Element {
 
     // Element branch of https://dom.spec.whatwg.org/#locate-a-namespace
     pub fn locate_namespace(&self, prefix: Option<DOMString>) -> Namespace {
-        let prefix = prefix.map(String::from).map(LocalName::from);
+        let namespace_prefix = prefix.clone().map(|s| Prefix::from(&*s));
+
+        // "1. If prefix is "xml", then return the XML namespace."
+        if namespace_prefix == Some(namespace_prefix!("xml")) {
+            return ns!(xml);
+        }
+
+        // "2. If prefix is "xmlns", then return the XMLNS namespace."
+        if namespace_prefix == Some(namespace_prefix!("xmlns")) {
+            return ns!(xmlns);
+        }
+
+        let prefix = prefix.map(|s| LocalName::from(&*s));
 
         let inclusive_ancestor_elements = self
             .upcast::<Node>()
             .inclusive_ancestors(ShadowIncluding::No)
             .filter_map(DomRoot::downcast::<Self>);
 
-        // Steps 3-4.
+        // "5. If its parent element is null, then return null."
+        // "6. Return the result of running locate a namespace on its parent element using prefix."
         for element in inclusive_ancestor_elements {
-            // Step 1.
+            // "3. If its namespace is non-null and its namespace prefix is prefix, then return
+            // namespace."
             if element.namespace() != &ns!() &&
                 element.prefix().as_ref().map(|p| &**p) == prefix.as_ref().map(|p| &**p)
             {
                 return element.namespace().clone();
             }
 
-            // Step 2.
+            // "4. If it has an attribute whose namespace is the XMLNS namespace, namespace prefix
+            // is "xmlns", and local name is prefix, or if prefix is null and it has an attribute
+            // whose namespace is the XMLNS namespace, namespace prefix is null, and local name is
+            // "xmlns", then return its value if it is not the empty string, and null otherwise."
             let attr = ref_filter_map(self.attrs(), |attrs| {
                 attrs.iter().find(|attr| {
                     if attr.namespace() != &ns!(xmlns) {
@@ -1281,7 +1299,7 @@ impl Element {
             &mut writer,
             &self.upcast::<Node>(),
             SerializeOpts {
-                traversal_scope: traversal_scope,
+                traversal_scope,
                 ..Default::default()
             },
         ) {
@@ -1298,7 +1316,7 @@ impl Element {
             &mut writer,
             &self.upcast::<Node>(),
             XmlSerializeOpts {
-                traversal_scope: traversal_scope,
+                traversal_scope,
                 ..Default::default()
             },
         ) {
@@ -1567,7 +1585,7 @@ impl Element {
             .attrs
             .borrow()
             .iter()
-            .find(|attr| find(&attr))
+            .find(|attr| find(attr))
             .map(|js| DomRoot::from_ref(&**js));
         if let Some(attr) = attr {
             attr.set_value(value, self);
@@ -1607,7 +1625,7 @@ impl Element {
     where
         F: Fn(&Attr) -> bool,
     {
-        let idx = self.attrs.borrow().iter().position(|attr| find(&attr));
+        let idx = self.attrs.borrow().iter().position(|attr| find(attr));
         idx.map(|idx| {
             let attr = DomRoot::from_ref(&*(*self.attrs.borrow())[idx]);
             self.will_mutate_attr(&attr);
@@ -1785,9 +1803,9 @@ impl Element {
                 }
             },
             AdjacentPosition::AfterBegin => {
-                Node::pre_insert(node, &self_node, self_node.GetFirstChild().as_deref()).map(Some)
+                Node::pre_insert(node, self_node, self_node.GetFirstChild().as_deref()).map(Some)
             },
-            AdjacentPosition::BeforeEnd => Node::pre_insert(node, &self_node, None).map(Some),
+            AdjacentPosition::BeforeEnd => Node::pre_insert(node, self_node, None).map(Some),
             AdjacentPosition::AfterEnd => {
                 if let Some(parent) = self_node.GetParentNode() {
                     Node::pre_insert(node, &parent, self_node.GetNextSibling().as_deref()).map(Some)
@@ -2204,7 +2222,7 @@ impl ElementMethods for Element {
             self.attrs.borrow_mut()[position] = Dom::from_ref(attr);
             old_attr.set_owner(None);
             if attr.namespace() == &ns!() {
-                vtable.attribute_mutated(&attr, AttributeMutation::Set(Some(&old_attr.value())));
+                vtable.attribute_mutated(attr, AttributeMutation::Set(Some(&old_attr.value())));
             }
 
             // Step 6.
@@ -2389,7 +2407,7 @@ impl ElementMethods for Element {
 
         // Step 9
         let point = node.scroll_offset();
-        return point.y.abs() as f64;
+        point.y.abs() as f64
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-element-scrolltop
@@ -2485,7 +2503,7 @@ impl ElementMethods for Element {
 
         // Step 9
         let point = node.scroll_offset();
-        return point.x.abs() as f64;
+        point.x.abs() as f64
     }
 
     // https://drafts.csswg.org/cssom-view/#dom-element-scrollleft
@@ -2577,9 +2595,9 @@ impl ElementMethods for Element {
             self.local_name().clone(),
         );
         if document_from_node(self).is_html_document() {
-            return self.serialize(ChildrenOnly(Some(qname)));
+            self.serialize(ChildrenOnly(Some(qname)))
         } else {
-            return self.xmlSerialize(XmlChildrenOnly(Some(qname)));
+            self.xmlSerialize(XmlChildrenOnly(Some(qname)))
         }
     }
 
@@ -2616,9 +2634,9 @@ impl ElementMethods for Element {
     // https://dvcs.w3.org/hg/innerhtml/raw-file/tip/index.html#widl-Element-outerHTML
     fn GetOuterHTML(&self) -> Fallible<DOMString> {
         if document_from_node(self).is_html_document() {
-            return self.serialize(IncludeNode);
+            self.serialize(IncludeNode)
         } else {
-            return self.xmlSerialize(XmlIncludeNode);
+            self.xmlSerialize(XmlIncludeNode)
         }
     }
 
@@ -2849,9 +2867,9 @@ impl ElementMethods for Element {
         match self.as_maybe_activatable() {
             Some(a) => {
                 a.enter_formal_activation_state();
-                return Ok(());
+                Ok(())
             },
-            None => return Err(Error::NotSupported),
+            None => Err(Error::NotSupported),
         }
     }
 
@@ -2861,7 +2879,7 @@ impl ElementMethods for Element {
                 a.exit_formal_activation_state();
                 return Ok(());
             },
-            None => return Err(Error::NotSupported),
+            None => Err(Error::NotSupported),
         }
     }
 
@@ -3058,7 +3076,7 @@ impl VirtualMethods for Element {
         let doc = document_from_node(self);
 
         if let Some(ref shadow_root) = self.shadow_root() {
-            doc.register_shadow_root(&shadow_root);
+            doc.register_shadow_root(shadow_root);
             let shadow_root = shadow_root.upcast::<Node>();
             shadow_root.set_flag(NodeFlags::IS_CONNECTED, context.tree_connected);
             for node in shadow_root.children() {
@@ -3106,7 +3124,7 @@ impl VirtualMethods for Element {
         let doc = document_from_node(self);
 
         if let Some(ref shadow_root) = self.shadow_root() {
-            doc.unregister_shadow_root(&shadow_root);
+            doc.unregister_shadow_root(shadow_root);
             let shadow_root = shadow_root.upcast::<Node>();
             shadow_root.set_flag(NodeFlags::IS_CONNECTED, false);
             for node in shadow_root.children() {
@@ -3287,7 +3305,7 @@ impl<'a> SelectorsElement for DomRoot<Element> {
             // a string containing commas (separating each language tag in
             // a list) but the pseudo-class instead should be parsing and
             // storing separate <ident> or <string>s for each language tag.
-            NonTSPseudoClass::Lang(ref lang) => extended_filtering(&*self.get_lang(), &*lang),
+            NonTSPseudoClass::Lang(ref lang) => extended_filtering(&self.get_lang(), lang),
 
             NonTSPseudoClass::ReadOnly => !Element::state(self).contains(pseudo_class.state_flag()),
 
@@ -3328,7 +3346,7 @@ impl<'a> SelectorsElement for DomRoot<Element> {
         self.id_attribute
             .borrow()
             .as_ref()
-            .map_or(false, |atom| case_sensitivity.eq_atom(&*id, atom))
+            .map_or(false, |atom| case_sensitivity.eq_atom(id, atom))
     }
 
     fn is_part(&self, _name: &AtomIdent) -> bool {
@@ -3340,7 +3358,7 @@ impl<'a> SelectorsElement for DomRoot<Element> {
     }
 
     fn has_class(&self, name: &AtomIdent, case_sensitivity: CaseSensitivity) -> bool {
-        Element::has_class(&**self, &name, case_sensitivity)
+        Element::has_class(self, name, case_sensitivity)
     }
 
     fn is_html_element_in_html_document(&self) -> bool {
@@ -3375,6 +3393,34 @@ impl<'a> SelectorsElement for DomRoot<Element> {
                 }
             }
         }
+    }
+
+    fn add_element_unique_hashes(&self, filter: &mut BloomFilter) -> bool {
+        let mut f = |hash| filter.insert_hash(hash & BLOOM_HASH_MASK);
+
+        // We can't use style::bloom::each_relevant_element_hash(*self, f)
+        // since DomRoot<Element> doesn't have the TElement trait.
+        f(Element::local_name(self).get_hash());
+        f(Element::namespace(self).get_hash());
+
+        if let Some(ref id) = *self.id_attribute.borrow() {
+            f(id.get_hash());
+        }
+
+        if let Some(attr) = self.get_attribute(&ns!(), &local_name!("class")) {
+            for class in attr.value().as_tokens() {
+                f(AtomIdent::cast(class).get_hash());
+            }
+        }
+
+        for attr in self.attrs.borrow().iter() {
+            let name = style::values::GenericAtomIdent::cast(attr.local_name());
+            if !style::bloom::is_attr_name_excluded_from_filter(name) {
+                f(name.get_hash());
+            }
+        }
+
+        true
     }
 }
 
@@ -3794,9 +3840,9 @@ impl ElementPerformFullscreenEnter {
         error: bool,
     ) -> Box<ElementPerformFullscreenEnter> {
         Box::new(ElementPerformFullscreenEnter {
-            element: element,
-            promise: promise,
-            error: error,
+            element,
+            promise,
+            error,
         })
     }
 }
@@ -3845,10 +3891,7 @@ impl ElementPerformFullscreenExit {
         element: Trusted<Element>,
         promise: TrustedPromise,
     ) -> Box<ElementPerformFullscreenExit> {
-        Box::new(ElementPerformFullscreenExit {
-            element: element,
-            promise: promise,
-        })
+        Box::new(ElementPerformFullscreenExit { element, promise })
     }
 }
 
@@ -3917,7 +3960,7 @@ pub fn reflect_referrer_policy_attribute(element: &Element) -> DOMString {
             return val;
         }
     }
-    return DOMString::new();
+    DOMString::new()
 }
 
 pub(crate) fn referrer_policy_for_element(element: &Element) -> Option<ReferrerPolicy> {

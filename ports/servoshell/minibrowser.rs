@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
 
-use egui::{CentralPanel, Frame, InnerResponse, Key, Modifiers, PaintCallback, TopBottomPanel};
+use egui::{CentralPanel, Color32, Frame, Key, Modifiers, PaintCallback, Spinner, TopBottomPanel};
 use egui_glow::CallbackFn;
 use egui_winit::EventResponse;
 use euclid::{Length, Point2D, Scale};
@@ -24,7 +24,7 @@ use crate::egui_glue::EguiGlow;
 use crate::events_loop::EventsLoop;
 use crate::geometry::winit_position_to_euclid_point;
 use crate::parser::location_bar_input_to_url;
-use crate::webview::WebViewManager;
+use crate::webview::{LoadStatus, WebViewManager};
 use crate::window_trait::WindowPortsMethods;
 
 pub struct Minibrowser {
@@ -42,6 +42,8 @@ pub struct Minibrowser {
 
     /// Whether the location has been edited by the user without clicking Go.
     location_dirty: Cell<bool>,
+
+    load_status: LoadStatus,
 }
 
 pub enum MinibrowserEvent {
@@ -83,6 +85,7 @@ impl Minibrowser {
             last_mouse_position: None,
             location: RefCell::new(initial_url.to_string()),
             location_dirty: false.into(),
+            load_status: LoadStatus::LoadComplete,
         }
     }
 
@@ -142,53 +145,63 @@ impl Minibrowser {
         } = self;
         let widget_fbo = *widget_surface_fbo;
         let _duration = context.run(window, |ctx| {
-            let InnerResponse { inner: height, .. } =
-                TopBottomPanel::top("toolbar").show(ctx, |ui| {
-                    ui.allocate_ui_with_layout(
-                        ui.available_size(),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            if ui.button("back").clicked() {
-                                event_queue.borrow_mut().push(MinibrowserEvent::Back);
-                            }
-                            if ui.button("forward").clicked() {
-                                event_queue.borrow_mut().push(MinibrowserEvent::Forward);
-                            }
-                            ui.allocate_ui_with_layout(
-                                ui.available_size(),
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.button("go").clicked() {
-                                        event_queue.borrow_mut().push(MinibrowserEvent::Go);
-                                        location_dirty.set(false);
-                                    }
+            TopBottomPanel::top("toolbar").show(ctx, |ui| {
+                ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if ui.button("back").clicked() {
+                            event_queue.borrow_mut().push(MinibrowserEvent::Back);
+                        }
+                        if ui.button("forward").clicked() {
+                            event_queue.borrow_mut().push(MinibrowserEvent::Forward);
+                        }
+                        ui.allocate_ui_with_layout(
+                            ui.available_size(),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui.button("go").clicked() {
+                                    event_queue.borrow_mut().push(MinibrowserEvent::Go);
+                                    location_dirty.set(false);
+                                }
 
-                                    let location_field = ui.add_sized(
-                                        ui.available_size(),
-                                        egui::TextEdit::singleline(&mut *location.borrow_mut()),
-                                    );
+                                match self.load_status {
+                                    LoadStatus::LoadStart => {
+                                        ui.add(Spinner::new().color(Color32::GRAY));
+                                    },
+                                    LoadStatus::HeadParsed => {
+                                        ui.add(Spinner::new().color(Color32::WHITE));
+                                    },
+                                    LoadStatus::LoadComplete => { /* No Spinner */ },
+                                }
 
-                                    if location_field.changed() {
-                                        location_dirty.set(true);
-                                    }
-                                    if ui.input(|i| {
-                                        i.clone().consume_key(Modifiers::COMMAND, Key::L)
-                                    }) {
-                                        location_field.request_focus();
-                                    }
-                                    if location_field.lost_focus() &&
-                                        ui.input(|i| i.clone().key_pressed(Key::Enter))
-                                    {
-                                        event_queue.borrow_mut().push(MinibrowserEvent::Go);
-                                        location_dirty.set(false);
-                                    }
-                                },
-                            );
-                        },
-                    );
-                    ui.cursor().min.y
-                });
-            *toolbar_height = Length::new(height);
+                                let location_field = ui.add_sized(
+                                    ui.available_size(),
+                                    egui::TextEdit::singleline(&mut *location.borrow_mut()),
+                                );
+
+                                if location_field.changed() {
+                                    location_dirty.set(true);
+                                }
+                                if ui.input(|i| i.clone().consume_key(Modifiers::COMMAND, Key::L)) {
+                                    location_field.request_focus();
+                                }
+                                if location_field.lost_focus() &&
+                                    ui.input(|i| i.clone().key_pressed(Key::Enter))
+                                {
+                                    event_queue.borrow_mut().push(MinibrowserEvent::Go);
+                                    location_dirty.set(false);
+                                }
+                            },
+                        );
+                    },
+                );
+            });
+
+            // The toolbar height is where the Context’s available rect starts.
+            // For reasons that are unclear, the TopBottomPanel’s ui cursor exceeds this by one egui
+            // point, but the Context is correct and the TopBottomPanel is wrong.
+            *toolbar_height = Length::new(ctx.available_rect().min.y);
 
             CentralPanel::default()
                 .frame(Frame::none())
@@ -198,7 +211,9 @@ impl Minibrowser {
                     let rect = egui::Rect::from_min_size(min, size);
                     ui.allocate_space(size);
 
-                    let Some(servo_fbo) = servo_framebuffer_id else { return };
+                    let Some(servo_fbo) = servo_framebuffer_id else {
+                        return;
+                    };
                     ui.painter().add(PaintCallback {
                         rect,
                         callback: Arc::new(CallbackFn::new(move |info, painter| {
@@ -293,7 +308,7 @@ impl Minibrowser {
         }
     }
 
-    /// Updates the location field from the given [BrowserManager], unless the user has started
+    /// Updates the location field from the given [WebViewManager], unless the user has started
     /// editing it without clicking Go, returning true iff it has changed (needing an egui update).
     pub fn update_location_in_toolbar(
         &mut self,
@@ -311,5 +326,29 @@ impl Minibrowser {
             },
             _ => false,
         }
+    }
+
+    /// Updates the spinner from the given [WebViewManager], returning true iff it has changed
+    /// (needing an egui update).
+    pub fn update_spinner_in_toolbar(
+        &mut self,
+        browser: &mut WebViewManager<dyn WindowPortsMethods>,
+    ) -> bool {
+        let need_update = browser.load_status() != self.load_status;
+        self.load_status = browser.load_status();
+        return need_update;
+    }
+
+    /// Updates all fields taken from the given [WebViewManager], such as the location field.
+    /// Returns true iff the egui needs an update.
+    pub fn update_webview_data(
+        &mut self,
+        browser: &mut WebViewManager<dyn WindowPortsMethods>,
+    ) -> bool {
+        // Note: We must use the "bitwise OR" (|) operator here instead of "logical OR" (||)
+        //       because logical OR would short-circuit if any of the functions return true.
+        //       We want to ensure that all functions are called. The "bitwise OR" operator
+        //       does not short-circuit.
+        return self.update_location_in_toolbar(browser) | self.update_spinner_in_toolbar(browser);
     }
 }

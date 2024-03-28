@@ -215,13 +215,13 @@ impl WebGLExtensions {
         self.extensions
             .borrow()
             .iter()
-            .filter(|ref v| {
+            .filter(|v| {
                 if let WebGLExtensionSpec::Specific(version) = v.1.spec() {
                     if self.webgl_version != version {
                         return false;
                     }
                 }
-                v.1.is_supported(&self)
+                v.1.is_supported(self)
             })
             .map(|ref v| v.1.name())
             .collect()
@@ -458,10 +458,10 @@ impl WebGLExtensions {
     }
 
     pub fn effective_type(&self, type_: u32) -> u32 {
-        if type_ == OESTextureHalfFloatConstants::HALF_FLOAT_OES {
-            if !self.supports_gl_extension("GL_OES_texture_half_float") {
-                return gl::HALF_FLOAT;
-            }
+        if type_ == OESTextureHalfFloatConstants::HALF_FLOAT_OES &&
+            !self.supports_gl_extension("GL_OES_texture_half_float")
+        {
+            return gl::HALF_FLOAT;
         }
         type_
     }

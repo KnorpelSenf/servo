@@ -10,6 +10,19 @@ for help getting started.
 
 Visit the [Servo Project page](https://servo.org/) for news and guides.
 
+## Getting Servo
+
+``` sh
+git clone https://github.com/servo/servo
+cd servo
+```
+
+ - Your CARGO_HOME needs to point to (or be in) the same drive as your 
+   Servo repository ([#28530](https://github.com/servo/servo/issues/28530)).
+ - The Servo repository is big! If you have an unreliable network connection, consider
+   [making a shallow clone](https://github.blog/2020-12-21-get-up-to-speed-with-partial-clone-and-shallow-clone/).
+
+
 ## Build Setup
 
 * [macOS](#macos)
@@ -69,7 +82,7 @@ See also [Windows Troubleshooting Tips][windows-tips].
 - Install the latest version of the [Android command-line
   tools](https://developer.android.com/studio#command-tools) to
   `$ANDROID_SDK_ROOT/cmdline-tools/latest`.
-- Run the following command to install the necessary components and the path t
+- Run the following command to install the necessary components:
   ```shell
   sudo $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install
    "build-tools;33.0.2" \
@@ -81,13 +94,6 @@ See also [Windows Troubleshooting Tips][windows-tips].
   ```
 For information about building and running the Android build, see
 the [Android documentation][android-docs].
-
-### Cloning the Repo
-Your CARGO_HOME needs to point to (or be in) the same drive as your Servo repository (See [#28530](https://github.com/servo/servo/issues/28530)).
-``` sh
-git clone https://github.com/servo/servo
-cd servo
-```
 
 ## Building
 
@@ -187,13 +193,15 @@ Run Servo with the command:
 #### Linux
 
 * `GStreamer` >=1.18
+* `gst-plugins-base` >=1.18
+* `gst-plugins-good` >=1.18
 * `gst-plugins-bad` >=1.18
+* `gst-plugins-ugly` >=1.18
 * `libXcursor`
 * `libXrandr`
 * `libXi`
 * `libxkbcommon`
 * `vulkan-loader`
-* `libegl1-mesa-dev`
 
 ## Developing
 
@@ -205,4 +213,4 @@ The generated documentation can be found on https://doc.servo.org/servo/index.ht
 
 [manual-build]: https://github.com/servo/servo/wiki/Building#manual-build-setup
 [windows-tips]: https://github.com/servo/servo/wiki/Building#troubleshooting-the-windows-build
-[android-docs]: https://github.com/servo/servo/wiki/Android
+[android-docs]: https://github.com/servo/servo/wiki/Building-for-Android

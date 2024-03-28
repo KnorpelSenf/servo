@@ -13,17 +13,29 @@ pub mod rpc;
 pub mod wrapper_traits;
 
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::atomic::AtomicIsize;
+use std::sync::Arc;
 
 use atomic_refcell::AtomicRefCell;
 use canvas_traits::canvas::{CanvasId, CanvasMsg};
+use gfx::font_cache_thread::FontCacheThread;
+use gfx_traits::Epoch;
 use ipc_channel::ipc::IpcSender;
 use libc::c_void;
 use malloc_size_of_derive::MallocSizeOf;
-use net_traits::image_cache::PendingImageId;
-use script_traits::UntrustedNodeAddress;
+use metrics::PaintTimeMetrics;
+use msg::constellation_msg::PipelineId;
+use net_traits::image_cache::{ImageCache, PendingImageId};
+use profile_traits::time;
+use script_traits::{
+    ConstellationControlMsg, InitialScriptState, LayoutControlMsg, LayoutMsg, LoadData,
+    UntrustedNodeAddress, WebrenderIpcSender, WindowSizeData,
+};
+use servo_arc::Arc as ServoArc;
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style::data::ElementData;
+use style::stylesheets::Stylesheet;
 use webrender_api::ImageKey;
 
 #[derive(MallocSizeOf)]
@@ -39,11 +51,11 @@ pub struct StyleData {
     pub parallel: DomParallelInfo,
 }
 
-impl StyleData {
-    pub fn new() -> Self {
+impl Default for StyleData {
+    fn default() -> Self {
         Self {
             element_data: AtomicRefCell::new(ElementData::default()),
-            parallel: DomParallelInfo::new(),
+            parallel: DomParallelInfo::default(),
         }
     }
 }
@@ -76,18 +88,10 @@ impl StyleAndOpaqueLayoutData {
 }
 
 /// Information that we need stored in each DOM node.
-#[derive(MallocSizeOf)]
+#[derive(Default, MallocSizeOf)]
 pub struct DomParallelInfo {
     /// The number of children remaining to process during bottom-up traversal.
     pub children_to_process: AtomicIsize,
-}
-
-impl DomParallelInfo {
-    pub fn new() -> DomParallelInfo {
-        DomParallelInfo {
-            children_to_process: AtomicIsize::new(0),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -161,4 +165,74 @@ pub struct PendingImage {
 
 pub struct HTMLMediaData {
     pub current_frame: Option<(ImageKey, i32, i32)>,
+}
+
+pub struct LayoutConfig {
+    pub id: PipelineId,
+    pub url: ServoUrl,
+    pub is_iframe: bool,
+    pub constellation_chan: IpcSender<LayoutMsg>,
+    pub script_chan: IpcSender<ConstellationControlMsg>,
+    pub image_cache: Arc<dyn ImageCache>,
+    pub font_cache_thread: FontCacheThread,
+    pub time_profiler_chan: time::ProfilerChan,
+    pub webrender_api_sender: WebrenderIpcSender,
+    pub paint_time_metrics: PaintTimeMetrics,
+    pub window_size: WindowSizeData,
+}
+
+pub trait LayoutFactory: Send + Sync {
+    fn create(&self, config: LayoutConfig) -> Box<dyn Layout>;
+}
+
+pub trait Layout {
+    /// Process a single message from script.
+    fn process(&mut self, msg: message::Msg);
+
+    /// Handle a single message from the Constellation.
+    fn handle_constellation_msg(&mut self, msg: LayoutControlMsg);
+
+    /// Handle a a single mesasge from the FontCacheThread.
+    fn handle_font_cache_msg(&mut self);
+
+    /// Return the interface used for scipt queries.
+    /// TODO: Make this part of the the Layout interface itself now that the
+    /// layout thread has been removed.
+    fn rpc(&self) -> Box<dyn rpc::LayoutRPC>;
+
+    /// Whether or not this layout is waiting for fonts from loaded stylesheets to finish loading.
+    fn waiting_for_web_fonts_to_load(&self) -> bool;
+
+    /// The currently laid out Epoch that this Layout has finished.
+    fn current_epoch(&self) -> Epoch;
+
+    /// Load all fonts from the given stylesheet, returning the number of fonts that
+    /// need to be loaded.
+    fn load_web_fonts_from_stylesheet(&self, stylesheet: ServoArc<Stylesheet>);
+
+    /// Add a stylesheet to this Layout. This will add it to the Layout's `Stylist` as well as
+    /// loading all web fonts defined in the stylesheet. The second stylesheet is the insertion
+    /// point (if it exists, the sheet needs to be inserted before it).
+    fn add_stylesheet(
+        &mut self,
+        stylesheet: ServoArc<Stylesheet>,
+        before_stylsheet: Option<ServoArc<Stylesheet>>,
+    );
+
+    /// Removes a stylesheet from the Layout.
+    fn remove_stylesheet(&mut self, stylesheet: ServoArc<Stylesheet>);
+}
+
+/// This trait is part of `script_layout_interface` because it depends on both `script_traits`
+/// and also `LayoutFactory` from this crate. If it was in `script_traits` there would be a
+/// circular dependency.
+pub trait ScriptThreadFactory {
+    /// Create a `ScriptThread`.
+    fn create(
+        state: InitialScriptState,
+        layout_factory: Arc<dyn LayoutFactory>,
+        font_cache_thread: FontCacheThread,
+        load_data: LoadData,
+        user_agent: Cow<'static, str>,
+    );
 }

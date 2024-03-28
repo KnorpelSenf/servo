@@ -30,7 +30,8 @@ pub enum ImageUpdate {
 }
 
 pub trait WebrenderApi {
-    fn generate_key(&self) -> Result<ImageKey, ()>;
+    /// Attempt to generate an [`ImageKey`], returning `None` in case of failure.
+    fn generate_key(&self) -> Option<ImageKey>;
     fn update_images(&self, updates: Vec<ImageUpdate>);
     fn clone(&self) -> Box<dyn WebrenderApi>;
 }
@@ -130,7 +131,7 @@ impl<'a> CanvasPaintThread<'a> {
 
         let font_cache_thread = self.font_cache_thread.clone();
 
-        let canvas_id = self.next_canvas_id.clone();
+        let canvas_id = self.next_canvas_id;
         self.next_canvas_id.0 += 1;
 
         let canvas_data = CanvasData::new(
@@ -139,7 +140,7 @@ impl<'a> CanvasPaintThread<'a> {
             antialias,
             font_cache_thread,
         );
-        self.canvases.insert(canvas_id.clone(), canvas_data);
+        self.canvases.insert(canvas_id, canvas_data);
 
         canvas_id
     }
@@ -181,7 +182,7 @@ impl<'a> CanvasPaintThread<'a> {
                 source_rect,
                 smoothing_enabled,
             ) => self.canvas(canvas_id).draw_image(
-                &*image_data,
+                image_data,
                 image_size,
                 dest_rect,
                 source_rect,

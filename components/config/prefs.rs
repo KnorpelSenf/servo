@@ -4,10 +4,12 @@
 
 use std::borrow::ToOwned;
 use std::collections::HashMap;
+use std::convert::{TryFrom, TryInto};
 
 use embedder_traits::resources::{self, Resource};
 use gen::Prefs;
 use lazy_static::lazy_static;
+use log::warn;
 use serde_json::{self, Value};
 
 use crate::pref_util::Preferences;
@@ -17,7 +19,11 @@ lazy_static! {
     static ref PREFS: Preferences<'static, Prefs> = {
         let def_prefs: Prefs = serde_json::from_str(&resources::read_string(Resource::Preferences))
             .expect("Failed to initialize config preferences.");
-        Preferences::new(def_prefs, &gen::PREF_ACCESSORS)
+        let result = Preferences::new(def_prefs, &gen::PREF_ACCESSORS);
+        for (key, value) in result.iter() {
+            set_stylo_pref_ref(&key, &value);
+        }
+        result
     };
 }
 
@@ -38,9 +44,11 @@ macro_rules! pref {
 #[macro_export]
 macro_rules! set_pref {
     ($($segment: ident).+, $value: expr) => {{
+        let value = $value;
+        $crate::prefs::set_stylo_pref(stringify!($($segment).+), value);
         let values = $crate::prefs::pref_map().values();
         let mut lock = values.write().unwrap();
-        lock$ (.$segment)+ = $value;
+        lock$ (.$segment)+ = value;
     }};
 }
 
@@ -56,14 +64,65 @@ pub fn pref_map() -> &'static Preferences<'static, Prefs> {
 }
 
 pub fn add_user_prefs(prefs: HashMap<String, PrefValue>) {
-    if let Err(error) = PREFS.set_all(prefs.into_iter()) {
+    for (key, value) in prefs.iter() {
+        set_stylo_pref_ref(key, value);
+    }
+    if let Err(error) = PREFS.set_all(prefs) {
         panic!("Error setting preference: {:?}", error);
+    }
+}
+
+pub fn set_stylo_pref(key: &str, value: impl Into<PrefValue>) {
+    set_stylo_pref_ref(key, &value.into());
+}
+
+fn set_stylo_pref_ref(key: &str, value: &PrefValue) {
+    match value.try_into() {
+        Ok(StyloPrefValue::Bool(value)) => style_config::set_bool(key, value),
+        Ok(StyloPrefValue::Int(value)) => style_config::set_i32(key, value),
+        Err(TryFromPrefValueError::IntegerOverflow(value)) => {
+            // TODO: logging doesn’t actually work this early, so we should
+            // split PrefValue into i32 and i64 variants.
+            warn!("Pref value too big for Stylo: {} ({})", key, value);
+        },
+        Err(TryFromPrefValueError::UnmappedType) => {
+            // Most of Servo’s prefs will hit this. When adding a new pref type
+            // in Stylo, update TryFrom<&PrefValue> for StyloPrefValue as well.
+        },
+    }
+}
+
+enum StyloPrefValue {
+    Bool(bool),
+    Int(i32),
+}
+
+enum TryFromPrefValueError {
+    IntegerOverflow(i64),
+    UnmappedType,
+}
+
+impl TryFrom<&PrefValue> for StyloPrefValue {
+    type Error = TryFromPrefValueError;
+
+    fn try_from(value: &PrefValue) -> Result<Self, Self::Error> {
+        match *value {
+            PrefValue::Int(value) => {
+                if let Ok(value) = value.try_into() {
+                    Ok(Self::Int(value))
+                } else {
+                    Err(TryFromPrefValueError::IntegerOverflow(value))
+                }
+            },
+            PrefValue::Bool(value) => Ok(Self::Bool(value)),
+            _ => Err(TryFromPrefValueError::UnmappedType),
+        }
     }
 }
 
 pub fn read_prefs_map(txt: &str) -> Result<HashMap<String, PrefValue>, PrefError> {
     let prefs: HashMap<String, Value> =
-        serde_json::from_str(txt).map_err(|e| PrefError::JsonParseErr(e))?;
+        serde_json::from_str(txt).map_err(PrefError::JsonParseErr)?;
     prefs
         .into_iter()
         .map(|(k, pref_value)| {
@@ -74,7 +133,7 @@ pub fn read_prefs_map(txt: &str) -> Result<HashMap<String, PrefValue>, PrefError
                     Value::Number(n) if n.is_f64() => PrefValue::Float(n.as_f64().unwrap()),
                     Value::String(s) => PrefValue::Str(s.to_owned()),
                     Value::Array(v) => {
-                        let mut array = v.iter().map(|v| PrefValue::from_json_value(v));
+                        let mut array = v.iter().map(PrefValue::from_json_value);
                         if array.all(|v| v.is_some()) {
                             PrefValue::Array(array.flatten().collect())
                         } else {
@@ -460,9 +519,6 @@ mod gen {
                     enabled: bool,
                 },
                 legacy_layout: bool,
-                tables: {
-                    enabled: bool,
-                },
                 #[serde(default = "default_layout_threads")]
                 threads: i64,
                 writing_mode: {

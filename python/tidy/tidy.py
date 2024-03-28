@@ -271,14 +271,14 @@ def is_unsplittable(file_name, line):
 def check_whatwg_specific_url(idx, line):
     match = re.search(br"https://html\.spec\.whatwg\.org/multipage/[\w-]+\.html#([\w\'\:-]+)", line)
     if match is not None:
-        preferred_link = "https://html.spec.whatwg.org/multipage/#{}".format(match.group(1))
+        preferred_link = "https://html.spec.whatwg.org/multipage/#{}".format(match.group(1).decode("utf-8"))
         yield (idx + 1, "link to WHATWG may break in the future, use this format instead: {}".format(preferred_link))
 
 
 def check_whatwg_single_page_url(idx, line):
     match = re.search(br"https://html\.spec\.whatwg\.org/#([\w\'\:-]+)", line)
     if match is not None:
-        preferred_link = "https://html.spec.whatwg.org/multipage/#{}".format(match.group(1))
+        preferred_link = "https://html.spec.whatwg.org/multipage/#{}".format(match.group(1).decode("utf-8"))
         yield (idx + 1, "links to WHATWG single-page url, change to multi page: {}".format(preferred_link))
 
 
@@ -799,7 +799,7 @@ def run_wpt_lints(only_changed_files: bool):
         yield (WPT_CONFIG_INI_PATH, 0, f"{WPT_CONFIG_INI_PATH} is required but was not found")
         return
 
-    if not list(FileList("./tests/wpt", only_changed_files=True, progress=False)):
+    if not list(FileList("./tests/wpt", only_changed_files=only_changed_files, progress=False)):
         print("\r ➤  Skipping WPT lint checks, because no relevant files changed.")
         return
 

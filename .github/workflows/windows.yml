@@ -49,13 +49,11 @@ jobs:
     name: Windows Build
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         if: github.event_name != 'pull_request_target'
-        with:
-          fetch-depth: 2
       # This is necessary to checkout the pull request if this run was triggered via a
       # `pull_request_target` event.
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         if: github.event_name == 'pull_request_target'
         with:
           ref: refs/pull/${{ github.event.number }}/head
@@ -63,7 +61,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2
       - name: Install taplo
-        uses: baptiste0928/cargo-install@v2
+        uses: baptiste0928/cargo-install@v3
         with:
           crate: taplo-cli
           locked: true
@@ -80,9 +78,14 @@ jobs:
           python mach fetch
           python mach bootstrap-gstreamer
           cargo install --path support/crown
+      # For some reason WiX isn't currently on the GitHub runner path. This is a
+      # temporary workaround until that is fixed.
+      - name: Add WiX to Path
+        run: |
+          "$env:WIX\bin" >> $env:GITHUB_PATH
       - name: Build (${{ inputs.profile }})
         run: |
-          python mach build --${{ inputs.profile }}
+          python mach build --locked --${{ inputs.profile }}
           cp C:\a\servo\servo\target\cargo-timings C:\a\servo\servo\target\cargo-timings-windows -Recurse
       - name: Copy resources
         run: cp D:\a\servo\servo\resources C:\a\servo\servo -Recurse
@@ -90,7 +93,7 @@ jobs:
         run: python mach smoketest --angle --${{ inputs.profile }}
       - name: Unit tests
         if: ${{ inputs.unit-tests }}
-        uses: nick-fields/retry@v2
+        uses: nick-fields/retry@v3
         with:
           timeout_minutes: 30
           max_attempts: 3 # https://github.com/servo/servo/issues/30683

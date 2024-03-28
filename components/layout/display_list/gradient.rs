@@ -4,10 +4,13 @@
 
 use app_units::Au;
 use euclid::default::{Point2D, Size2D, Vector2D};
+use style::color::mix::ColorInterpolationMethod;
 use style::properties::ComputedValues;
 use style::values::computed::image::{EndingShape, LineDirection};
 use style::values::computed::{Angle, Color, LengthPercentage, Percentage, Position};
-use style::values::generics::image::{Circle, ColorStop, Ellipse, GradientItem, ShapeExtent};
+use style::values::generics::image::{
+    Circle, ColorStop, Ellipse, GradientFlags, GradientItem, ShapeExtent,
+};
 use webrender_api::{ExtendMode, Gradient, GradientBuilder, GradientStop, RadialGradient};
 
 use crate::display_list::ToLayout;
@@ -240,10 +243,12 @@ pub fn linear(
     size: Size2D<Au>,
     stops: &[GradientItem<Color, LengthPercentage>],
     direction: LineDirection,
-    repeating: bool,
+    _color_interpolation_method: &ColorInterpolationMethod,
+    flags: GradientFlags,
 ) -> (Gradient, Vec<GradientStop>) {
     use style::values::specified::position::HorizontalPositionKeyword::*;
     use style::values::specified::position::VerticalPositionKeyword::*;
+    let repeating = flags.contains(GradientFlags::REPEATING);
     let angle = match direction {
         LineDirection::Angle(angle) => angle.radians(),
         LineDirection::Horizontal(x) => match x {
@@ -307,8 +312,10 @@ pub fn radial(
     stops: &[GradientItem<Color, LengthPercentage>],
     shape: &EndingShape,
     center: &Position,
-    repeating: bool,
+    _color_interpolation_method: &ColorInterpolationMethod,
+    flags: GradientFlags,
 ) -> (RadialGradient, Vec<GradientStop>) {
+    let repeating = flags.contains(GradientFlags::REPEATING);
     let center = Point2D::new(
         center.horizontal.to_used_value(size.width),
         center.vertical.to_used_value(size.height),

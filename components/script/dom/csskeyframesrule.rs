@@ -37,7 +37,7 @@ impl CSSKeyframesRule {
     ) -> CSSKeyframesRule {
         CSSKeyframesRule {
             cssrule: CSSRule::new_inherited(parent_stylesheet),
-            keyframesrule: keyframesrule,
+            keyframesrule,
             rulelist: MutNullableDom::new(None),
         }
     }
@@ -159,6 +159,8 @@ impl SpecificCSSRule for CSSKeyframesRule {
     }
 
     fn deparent_children(&self) {
-        self.rulelist.get().map(|list| list.deparent_all());
+        if let Some(list) = self.rulelist.get() {
+            list.deparent_all()
+        }
     }
 }

@@ -62,10 +62,10 @@ impl WebGLFramebufferAttachment {
     fn root(&self) -> WebGLFramebufferAttachmentRoot {
         match *self {
             WebGLFramebufferAttachment::Renderbuffer(ref rb) => {
-                WebGLFramebufferAttachmentRoot::Renderbuffer(DomRoot::from_ref(&rb))
+                WebGLFramebufferAttachmentRoot::Renderbuffer(DomRoot::from_ref(rb))
             },
             WebGLFramebufferAttachment::Texture { ref texture, .. } => {
-                WebGLFramebufferAttachmentRoot::Texture(DomRoot::from_ref(&texture))
+                WebGLFramebufferAttachmentRoot::Texture(DomRoot::from_ref(texture))
             },
         }
     }
@@ -116,7 +116,7 @@ impl WebGLFramebuffer {
         Self {
             webgl_object: WebGLObject::new_inherited(context),
             webgl_version: context.webgl_version(),
-            id: id,
+            id,
             target: Cell::new(None),
             is_deleted: Cell::new(false),
             size: Cell::new(None),
@@ -147,7 +147,7 @@ impl WebGLFramebuffer {
         context: &WebGLRenderingContext,
         size: Size2D<i32, Viewport>,
     ) -> Option<DomRoot<Self>> {
-        let framebuffer = Self::maybe_new(&*context)?;
+        let framebuffer = Self::maybe_new(context)?;
         framebuffer.size.set(Some((size.width, size.height)));
         framebuffer.status.set(constants::FRAMEBUFFER_COMPLETE);
         framebuffer.xr_session.set(Some(session));
@@ -421,7 +421,7 @@ impl WebGLFramebuffer {
             let attachment = attachment.borrow();
             let constraints = color_constraints.clone();
             if let Err(errnum) =
-                self.check_attachment_constraints(&*attachment, constraints, &mut fb_size)
+                self.check_attachment_constraints(&attachment, constraints, &mut fb_size)
             {
                 return self.status.set(errnum);
             }
@@ -715,7 +715,7 @@ impl WebGLFramebuffer {
             Some(texture) => {
                 *binding.borrow_mut() = Some(WebGLFramebufferAttachment::Texture {
                     texture: Dom::from_ref(texture),
-                    level: level,
+                    level,
                 });
                 texture.attach_to_framebuffer(self);
 
@@ -780,7 +780,7 @@ impl WebGLFramebuffer {
 
                 *binding.borrow_mut() = Some(WebGLFramebufferAttachment::Texture {
                     texture: Dom::from_ref(texture),
-                    level: level,
+                    level,
                 });
                 texture.attach_to_framebuffer(self);
 
@@ -851,13 +851,10 @@ impl WebGLFramebuffer {
             attachment: &DomRefCell<Option<WebGLFramebufferAttachment>>,
             target: &WebGLTextureId,
         ) -> bool {
-            match *attachment.borrow() {
-                Some(WebGLFramebufferAttachment::Texture {
-                    texture: ref att_texture,
-                    ..
-                }) if att_texture.id() == *target => true,
-                _ => false,
-            }
+            matches!(*attachment.borrow(), Some(WebGLFramebufferAttachment::Texture {
+                                     texture: ref att_texture,
+                                     ..
+                                }) if att_texture.id() == *target)
         }
 
         for (attachment, name) in &attachments {
@@ -985,7 +982,7 @@ impl WebGLFramebuffer {
 
 impl Drop for WebGLFramebuffer {
     fn drop(&mut self) {
-        let _ = self.delete(Operation::Fallible);
+        self.delete(Operation::Fallible);
     }
 }
 

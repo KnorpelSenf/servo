@@ -46,7 +46,7 @@ pub fn handle_evaluate_js(global: &GlobalScope, eval: String, reply: IpcSender<E
             "<eval>",
             rval.handle_mut(),
             1,
-            ScriptFetchOptions::default_classic_script(&global),
+            ScriptFetchOptions::default_classic_script(global),
             global.api_base_url(),
         );
 
@@ -122,8 +122,8 @@ pub fn handle_get_children(
     node_id: String,
     reply: IpcSender<Option<Vec<NodeInfo>>>,
 ) {
-    match find_node_by_unique_id(documents, pipeline, &*node_id) {
-        None => return reply.send(None).unwrap(),
+    match find_node_by_unique_id(documents, pipeline, &node_id) {
+        None => reply.send(None).unwrap(),
         Some(parent) => {
             let children = parent.children().map(|child| child.summarize()).collect();
 
@@ -138,7 +138,7 @@ pub fn handle_get_layout(
     node_id: String,
     reply: IpcSender<Option<ComputedNodeLayout>>,
 ) {
-    let node = match find_node_by_unique_id(documents, pipeline, &*node_id) {
+    let node = match find_node_by_unique_id(documents, pipeline, &node_id) {
         None => return reply.send(None).unwrap(),
         Some(found_node) => found_node,
     };
@@ -175,8 +175,8 @@ pub fn handle_get_layout(
             paddingRight: String::from(computed_style.PaddingRight()),
             paddingBottom: String::from(computed_style.PaddingBottom()),
             paddingLeft: String::from(computed_style.PaddingLeft()),
-            width: width,
-            height: height,
+            width,
+            height,
         }))
         .unwrap();
 }
@@ -198,7 +198,7 @@ pub fn handle_modify_attribute(
     node_id: String,
     modifications: Vec<Modification>,
 ) {
-    let node = match find_node_by_unique_id(documents, pipeline, &*node_id) {
+    let node = match find_node_by_unique_id(documents, pipeline, &node_id) {
         None => {
             return warn!(
                 "node id {} for pipeline id {} is not found",

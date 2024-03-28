@@ -23,7 +23,7 @@ libloading = "0.8"
 libservo = { path = "../../components/servo" }
 log = { workspace = true }
 serde_json = { workspace = true }
-servo-media = { git = "https://github.com/servo/media" }
+servo-media = { workspace = true }
 surfman = { workspace = true, features = ["sm-angle-default"] }
 webxr = { git = "https://github.com/servo/webxr" }
 
@@ -44,7 +44,7 @@ js_backtrace = ["libservo/js_backtrace"]
 max_log_level = ["log/release_max_level_info"]
 media-gstreamer = ["libservo/media-gstreamer"]
 native-bluetooth = ["libservo/native-bluetooth"]
-no_static_freetype = ["libservo/no_static_freetype"]
+dynamic_freetype = ["libservo/dynamic_freetype"]
 no-wgl = ["libservo/no-wgl"]
 profilemozjs = ["libservo/profilemozjs"]
 refcell_backtrace = ["libservo/refcell_backtrace"]

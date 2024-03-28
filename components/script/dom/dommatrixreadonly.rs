@@ -15,6 +15,7 @@ use js::typedarray::{Float32Array, Float64Array};
 use style::parser::ParserContext;
 use url::Url;
 
+use crate::dom::bindings::buffer_source::create_buffer_source;
 use crate::dom::bindings::cell::{DomRefCell, Ref};
 use crate::dom::bindings::codegen::Bindings::DOMMatrixBinding::{DOMMatrixInit, DOMMatrixMethods};
 use crate::dom::bindings::codegen::Bindings::DOMMatrixReadOnlyBinding::DOMMatrixReadOnlyMethods;
@@ -25,7 +26,6 @@ use crate::dom::bindings::error::Fallible;
 use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::reflector::{reflect_dom_object_with_proto, DomObject, Reflector};
 use crate::dom::bindings::root::DomRoot;
-use crate::dom::bindings::typedarrays::create_typed_array;
 use crate::dom::dommatrix::DOMMatrix;
 use crate::dom::dompoint::DOMPoint;
 use crate::dom::globalscope::GlobalScope;
@@ -102,7 +102,7 @@ impl DOMMatrixReadOnly {
 
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-frommatrix
     pub fn FromMatrix(global: &GlobalScope, other: &DOMMatrixInit) -> Fallible<DomRoot<Self>> {
-        dommatrixinit_to_matrix(&other).map(|(is2D, matrix)| Self::new(global, is2D, matrix))
+        dommatrixinit_to_matrix(other).map(|(is2D, matrix)| Self::new(global, is2D, matrix))
     }
 
     pub fn matrix(&self) -> Ref<Transform3D<f64>> {
@@ -196,7 +196,7 @@ impl DOMMatrixReadOnly {
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrix-multiplyself
     pub fn multiply_self(&self, other: &DOMMatrixInit) -> Fallible<()> {
         // Step 1.
-        dommatrixinit_to_matrix(&other).map(|(is2D, other_matrix)| {
+        dommatrixinit_to_matrix(other).map(|(is2D, other_matrix)| {
             // Step 2.
             let mut matrix = self.matrix.borrow_mut();
             *matrix = other_matrix.then(&matrix);
@@ -211,7 +211,7 @@ impl DOMMatrixReadOnly {
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrix-premultiplyself
     pub fn pre_multiply_self(&self, other: &DOMMatrixInit) -> Fallible<()> {
         // Step 1.
-        dommatrixinit_to_matrix(&other).map(|(is2D, other_matrix)| {
+        dommatrixinit_to_matrix(other).map(|(is2D, other_matrix)| {
             // Step 2.
             let mut matrix = self.matrix.borrow_mut();
             *matrix = matrix.then(&other_matrix);
@@ -631,7 +631,7 @@ impl DOMMatrixReadOnlyMethods for DOMMatrixReadOnly {
 
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-multiply
     fn Multiply(&self, other: &DOMMatrixInit) -> Fallible<DomRoot<DOMMatrix>> {
-        DOMMatrix::from_readonly(&self.global(), self).MultiplySelf(&other)
+        DOMMatrix::from_readonly(&self.global(), self).MultiplySelf(other)
     }
 
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-flipx
@@ -686,14 +686,14 @@ impl DOMMatrixReadOnlyMethods for DOMMatrixReadOnly {
             .map(|&x| x as f32)
             .collect();
         rooted!(in (*cx) let mut array = ptr::null_mut::<JSObject>());
-        create_typed_array(cx, &vec, array.handle_mut())
+        create_buffer_source(cx, &vec, array.handle_mut())
             .expect("Converting matrix to float32 array should never fail")
     }
 
     // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-tofloat64array
     fn ToFloat64Array(&self, cx: JSContext) -> Float64Array {
         rooted!(in (*cx) let mut array = ptr::null_mut::<JSObject>());
-        create_typed_array(cx, &self.matrix.borrow().to_array(), array.handle_mut())
+        create_buffer_source(cx, &self.matrix.borrow().to_array(), array.handle_mut())
             .expect("Converting matrix to float64 array should never fail")
     }
 }
@@ -731,9 +731,9 @@ fn create_3d_matrix(entries: &[f64]) -> Transform3D<f64> {
 // https://drafts.fxtf.org/geometry-1/#dom-dommatrixreadonly-dommatrixreadonly-numbersequence
 pub fn entries_to_matrix(entries: &[f64]) -> Fallible<(bool, Transform3D<f64>)> {
     if entries.len() == 6 {
-        Ok((true, create_2d_matrix(&entries)))
+        Ok((true, create_2d_matrix(entries)))
     } else if entries.len() == 16 {
-        Ok((false, create_3d_matrix(&entries)))
+        Ok((false, create_3d_matrix(entries)))
     } else {
         let err_msg = format!("Expected 6 or 16 entries, but found {}.", entries.len());
         Err(error::Error::Type(err_msg.to_owned()))

@@ -24,7 +24,7 @@ pub struct BluetoothUUID {
 }
 
 //https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx
-const BLUETOOTH_ASSIGNED_SERVICES: &'static [(&'static str, u32)] = &[
+const BLUETOOTH_ASSIGNED_SERVICES: &[(&str, u32)] = &[
     ("org.bluetooth.service.alert_notification", 0x1811_u32),
     ("org.bluetooth.service.automation_io", 0x1815_u32),
     ("org.bluetooth.service.battery_service", 0x180f_u32),
@@ -75,7 +75,7 @@ const BLUETOOTH_ASSIGNED_SERVICES: &'static [(&'static str, u32)] = &[
 ];
 
 //https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx
-const BLUETOOTH_ASSIGNED_CHARCTERISTICS: &'static [(&'static str, u32)] = &[
+const BLUETOOTH_ASSIGNED_CHARCTERISTICS: &[(&str, u32)] = &[
     (
         "org.bluetooth.characteristic.aerobic_heart_rate_lower_limit",
         0x2a7e_u32,
@@ -523,7 +523,7 @@ const BLUETOOTH_ASSIGNED_CHARCTERISTICS: &'static [(&'static str, u32)] = &[
 ];
 
 //https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx
-const BLUETOOTH_ASSIGNED_DESCRIPTORS: &'static [(&'static str, u32)] = &[
+const BLUETOOTH_ASSIGNED_DESCRIPTORS: &'static [(&str, u32)] = &[
     (
         "org.bluetooth.descriptor.gatt.characteristic_extended_properties",
         0x2900_u32,
@@ -562,26 +562,24 @@ const BLUETOOTH_ASSIGNED_DESCRIPTORS: &'static [(&'static str, u32)] = &[
     ("org.bluetooth.descriptor.time_trigger_setting", 0x290e_u32),
 ];
 
-const BASE_UUID: &'static str = "-0000-1000-8000-00805f9b34fb";
-const SERVICE_PREFIX: &'static str = "org.bluetooth.service";
-const CHARACTERISTIC_PREFIX: &'static str = "org.bluetooth.characteristic";
-const DESCRIPTOR_PREFIX: &'static str = "org.bluetooth.descriptor";
-const VALID_UUID_REGEX: &'static str =
-    "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+const BASE_UUID: &str = "-0000-1000-8000-00805f9b34fb";
+const SERVICE_PREFIX: &str = "org.bluetooth.service";
+const CHARACTERISTIC_PREFIX: &str = "org.bluetooth.characteristic";
+const DESCRIPTOR_PREFIX: &str = "org.bluetooth.descriptor";
+const VALID_UUID_REGEX: &str = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 // https://cs.chromium.org/chromium/src/third_party/WebKit/Source/modules/bluetooth/BluetoothUUID.cpp?l=314
-const UUID_ERROR_MESSAGE: &'static str = "It must be a valid UUID alias (e.g. 0x1234), \
+const UUID_ERROR_MESSAGE: &str = "It must be a valid UUID alias (e.g. 0x1234), \
     UUID (lowercase hex characters e.g. '00001234-0000-1000-8000-00805f9b34fb'),\nor recognized standard name from";
 // https://cs.chromium.org/chromium/src/third_party/WebKit/Source/modules/bluetooth/BluetoothUUID.cpp?l=321
-const SERVICES_ERROR_MESSAGE: &'static str =
+const SERVICES_ERROR_MESSAGE: &str =
     "https://developer.bluetooth.org/gatt/services/Pages/ServicesHome.aspx\
      \ne.g. 'alert_notification'.";
 // https://cs.chromium.org/chromium/src/third_party/WebKit/Source/modules/bluetooth/BluetoothUUID.cpp?l=327
-const CHARACTERISTIC_ERROR_MESSAGE: &'static str =
+const CHARACTERISTIC_ERROR_MESSAGE: &str =
     "https://developer.bluetooth.org/gatt/characteristics/Pages/\
      CharacteristicsHome.aspx\ne.g. 'aerobic_heart_rate_lower_limit'.";
 // https://cs.chromium.org/chromium/src/third_party/WebKit/Source/modules/bluetooth/BluetoothUUID.cpp?l=333
-const DESCRIPTOR_ERROR_MESSAGE: &'static str =
-    "https://developer.bluetooth.org/gatt/descriptors/Pages/\
+const DESCRIPTOR_ERROR_MESSAGE: &str = "https://developer.bluetooth.org/gatt/descriptors/Pages/\
      DescriptorsHomePage.aspx\ne.g. 'gatt.characteristic_presentation_format'.";
 
 #[allow(non_snake_case)]
@@ -628,7 +626,7 @@ impl BluetoothUUID {
 impl Clone for StringOrUnsignedLong {
     fn clone(&self) -> StringOrUnsignedLong {
         match self {
-            &StringOrUnsignedLong::String(ref s) => StringOrUnsignedLong::String(s.clone()),
+            StringOrUnsignedLong::String(s) => StringOrUnsignedLong::String(s.clone()),
             &StringOrUnsignedLong::UnsignedLong(ul) => StringOrUnsignedLong::UnsignedLong(ul),
         }
     }
@@ -650,7 +648,7 @@ fn resolve_uuid_name(
         StringOrUnsignedLong::String(dstring) => {
             // Step 2.
             let regex = Regex::new(VALID_UUID_REGEX).unwrap();
-            if regex.is_match(&*dstring) {
+            if regex.is_match(&dstring) {
                 Ok(dstring)
             } else {
                 // Step 3.
@@ -668,10 +666,10 @@ fn resolve_uuid_name(
                             _ => unreachable!(),
                         };
                         // Step 4.
-                        return Err(Type(format!(
+                        Err(Type(format!(
                             "Invalid {} name : '{}'.\n{} {}",
                             attribute_type, dstring, UUID_ERROR_MESSAGE, error_url_message
-                        )));
+                        )))
                     },
                 }
             }

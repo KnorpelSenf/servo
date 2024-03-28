@@ -35,8 +35,8 @@ impl TreeWalker {
             reflector_: Reflector::new(),
             root_node: Dom::from_ref(root_node),
             current_node: MutDom::new(root_node),
-            what_to_show: what_to_show,
-            filter: filter,
+            what_to_show,
+            filter,
             active: Cell::new(false),
         }
     }
@@ -317,7 +317,7 @@ impl TreeWalker {
                             //     return null."
                             None => return Ok(None),
                             Some(ref parent)
-                                if self.is_root_node(&parent) || self.is_current_node(&parent) =>
+                                if self.is_root_node(parent) || self.is_current_node(parent) =>
                             {
                                 return Ok(None);
                             },
@@ -382,7 +382,7 @@ impl TreeWalker {
             match node.GetParentNode() {
                 // "4. If node is null or is root, return null."
                 None => return Ok(None),
-                Some(ref n) if self.is_root_node(&n) => return Ok(None),
+                Some(ref n) if self.is_root_node(n) => return Ok(None),
                 // "5. Filter node and if the return value is FILTER_ACCEPT, then return null."
                 Some(n) => {
                     node = n;

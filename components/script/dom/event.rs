@@ -214,7 +214,7 @@ impl Event {
         // related to shadow DOM requirements that aren't otherwise
         // implemented right now. The path also needs to contain
         // various flags instead of just bare event targets.
-        let path = self.construct_event_path(&target);
+        let path = self.construct_event_path(target);
         rooted_vec!(let event_path <- path.into_iter());
 
         // Step 5.4
@@ -277,7 +277,7 @@ impl Event {
 
         // Step 5.13
         for object in event_path.iter().rev() {
-            if &**object == &*target {
+            if &**object == target {
                 self.phase.set(EventPhase::AtTarget);
             } else {
                 self.phase.set(EventPhase::Capturing);
@@ -298,7 +298,7 @@ impl Event {
 
         // Step 5.14
         for object in event_path.iter() {
-            let at_target = &**object == &*target;
+            let at_target = &**object == target;
             if at_target || self.bubbles.get() {
                 self.phase.set(if at_target {
                     EventPhase::AtTarget
@@ -333,7 +333,7 @@ impl Event {
         if !self.DefaultPrevented() {
             if let Some(target) = self.GetTarget() {
                 if let Some(node) = target.downcast::<Node>() {
-                    let vtable = vtable_for(&node);
+                    let vtable = vtable_for(node);
                     vtable.handle_event(self);
                 }
             }
@@ -360,7 +360,7 @@ impl Event {
             }
         }
 
-        return self.status();
+        self.status()
     }
 
     pub fn status(&self) -> EventStatus {
@@ -712,7 +712,7 @@ fn inner_invoke(
 
         // Step 2.5.
         if let CompiledEventListener::Listener(event_listener) = listener {
-            object.remove_listener_if_once(&event.type_(), &event_listener);
+            object.remove_listener_if_once(&event.type_(), event_listener);
         }
 
         // Step 2.6
@@ -741,7 +741,7 @@ fn inner_invoke(
 
         // Step 2.12
         if let Some(window) = global.downcast::<Window>() {
-            window.set_current_event(current_event.as_ref().map(|e| &**e));
+            window.set_current_event(current_event.as_deref());
         }
 
         // Step 2.13: short-circuit instead of going to next listener
@@ -755,10 +755,7 @@ fn inner_invoke(
 }
 
 impl Default for EventBinding::EventInit {
-    fn default() -> EventBinding::EventInit {
-        EventBinding::EventInit {
-            bubbles: false,
-            cancelable: false,
-        }
+    fn default() -> Self {
+        Self::empty()
     }
 }

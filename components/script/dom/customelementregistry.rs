@@ -290,7 +290,7 @@ impl CustomElementRegistryMethods for CustomElementRegistry {
             .definitions
             .borrow()
             .iter()
-            .any(|(_, ref def)| def.constructor == constructor_)
+            .any(|(_, def)| def.constructor == constructor_)
         {
             return Err(Error::NotSupported);
         }
@@ -391,7 +391,7 @@ impl CustomElementRegistryMethods for CustomElementRegistry {
                 *candidate.namespace() == ns!(html) &&
                 (extends.is_none() || is.as_ref() == Some(&name))
             {
-                ScriptThread::enqueue_upgrade_reaction(&*candidate, definition.clone());
+                ScriptThread::enqueue_upgrade_reaction(&candidate, definition.clone());
             }
         }
 
@@ -433,7 +433,7 @@ impl CustomElementRegistryMethods for CustomElementRegistry {
         // Step 1
         if !is_valid_custom_element_name(&name) {
             let promise = Promise::new_in_current_realm(comp);
-            promise.reject_native(&DOMException::new(&global_scope, DOMErrorName::SyntaxError));
+            promise.reject_native(&DOMException::new(global_scope, DOMErrorName::SyntaxError));
             return promise;
         }
 
@@ -526,11 +526,11 @@ impl CustomElementDefinition {
         callbacks: LifecycleCallbacks,
     ) -> CustomElementDefinition {
         CustomElementDefinition {
-            name: name,
-            local_name: local_name,
-            constructor: constructor,
-            observed_attributes: observed_attributes,
-            callbacks: callbacks,
+            name,
+            local_name,
+            constructor,
+            observed_attributes,
+            callbacks,
             construction_stack: Default::default(),
         }
     }
@@ -786,7 +786,7 @@ impl CustomElementReaction {
                     .iter()
                     .map(|arg| unsafe { HandleValue::from_raw(arg.handle()) })
                     .collect();
-                let _ = callback.Call_(&*element, arguments, ExceptionHandling::Report);
+                let _ = callback.Call_(element, arguments, ExceptionHandling::Report);
             },
         }
     }
@@ -1035,7 +1035,7 @@ pub fn is_valid_custom_element_name(name: &str) -> bool {
     // PotentialCustomElementName ::= [a-z] (PCENChar)* '-' (PCENChar)*
 
     let mut chars = name.chars();
-    if !chars.next().map_or(false, |c| c >= 'a' && c <= 'z') {
+    if !chars.next().map_or(false, |c| c.is_ascii_lowercase()) {
         return false;
     }
 
@@ -1078,19 +1078,19 @@ fn is_potential_custom_element_char(c: char) -> bool {
         c == '.' ||
         c == '_' ||
         c == '\u{B7}' ||
-        (c >= '0' && c <= '9') ||
-        (c >= 'a' && c <= 'z') ||
-        (c >= '\u{C0}' && c <= '\u{D6}') ||
-        (c >= '\u{D8}' && c <= '\u{F6}') ||
-        (c >= '\u{F8}' && c <= '\u{37D}') ||
-        (c >= '\u{37F}' && c <= '\u{1FFF}') ||
-        (c >= '\u{200C}' && c <= '\u{200D}') ||
-        (c >= '\u{203F}' && c <= '\u{2040}') ||
-        (c >= '\u{2070}' && c <= '\u{2FEF}') ||
-        (c >= '\u{3001}' && c <= '\u{D7FF}') ||
-        (c >= '\u{F900}' && c <= '\u{FDCF}') ||
-        (c >= '\u{FDF0}' && c <= '\u{FFFD}') ||
-        (c >= '\u{10000}' && c <= '\u{EFFFF}')
+        c.is_ascii_digit() ||
+        c.is_ascii_lowercase() ||
+        ('\u{C0}'..='\u{D6}').contains(&c) ||
+        ('\u{D8}'..='\u{F6}').contains(&c) ||
+        ('\u{F8}'..='\u{37D}').contains(&c) ||
+        ('\u{37F}'..='\u{1FFF}').contains(&c) ||
+        ('\u{200C}'..='\u{200D}').contains(&c) ||
+        ('\u{203F}'..='\u{2040}').contains(&c) ||
+        ('\u{2070}'..='\u{2FEF}').contains(&c) ||
+        ('\u{3001}'..='\u{D7FF}').contains(&c) ||
+        ('\u{F900}'..='\u{FDCF}').contains(&c) ||
+        ('\u{FDF0}'..='\u{FFFD}').contains(&c) ||
+        ('\u{10000}'..='\u{EFFFF}').contains(&c)
 }
 
 fn is_extendable_element_interface(element: &str) -> bool {

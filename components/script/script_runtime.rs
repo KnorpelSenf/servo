@@ -686,9 +686,7 @@ unsafe extern "C" fn get_size(obj: *mut JSObject) -> usize {
             let mut ops = MallocSizeOfOps::new(servo_allocator::usable_size, None, None);
             (v.malloc_size_of)(&mut ops, dom_object)
         },
-        Err(_e) => {
-            return 0;
-        },
+        Err(_e) => 0,
     }
 }
 
@@ -702,11 +700,7 @@ pub fn get_reports(cx: *mut RawJSContext, path_seg: String) -> Vec<Report> {
             let mut report = |mut path_suffix, kind, size| {
                 let mut path = path![path_seg, "js"];
                 path.append(&mut path_suffix);
-                reports.push(Report {
-                    path: path,
-                    kind: kind,
-                    size: size as usize,
-                })
+                reports.push(Report { path, kind, size })
             };
 
             // A note about possibly confusing terminology: the JS GC "heap" is allocated via
@@ -812,6 +806,10 @@ thread_local!(
     static THREAD_ACTIVE: Cell<bool> = Cell::new(true);
 );
 
+pub(crate) fn runtime_is_alive() -> bool {
+    THREAD_ACTIVE.with(|t| t.get())
+}
+
 #[allow(unsafe_code)]
 unsafe extern "C" fn trace_rust_roots(tr: *mut JSTracer, _data: *mut os::raw::c_void) {
     if !THREAD_ACTIVE.with(|t| t.get()) {
@@ -916,7 +914,7 @@ impl StreamConsumer {
     pub fn consume_chunk(&self, stream: &[u8]) -> bool {
         unsafe {
             let stream_ptr = stream.as_ptr();
-            return StreamConsumerConsumeChunk(self.0, stream_ptr, stream.len());
+            StreamConsumerConsumeChunk(self.0, stream_ptr, stream.len())
         }
     }
 
@@ -1037,7 +1035,7 @@ unsafe extern "C" fn consume_stream(
         );
         return false;
     }
-    return true;
+    true
 }
 
 #[allow(unsafe_code)]

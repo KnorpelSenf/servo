@@ -134,13 +134,16 @@
 #![deny(missing_docs)]
 #![deny(non_snake_case)]
 
+pub mod buffer_source;
 pub mod callback;
 pub mod cell;
 pub mod constant;
 pub mod conversions;
 pub mod error;
+pub mod finalize;
 pub mod guard;
 pub mod htmlconstructor;
+pub mod import;
 pub mod inheritance;
 pub mod interface;
 pub mod iterable;
@@ -159,7 +162,6 @@ pub mod str;
 pub mod structuredclone;
 pub mod trace;
 pub mod transferable;
-pub mod typedarrays;
 pub mod utils;
 pub mod weakref;
 pub mod xmlname;
@@ -174,17 +176,25 @@ pub mod codegen {
     pub mod InterfaceObjectMap {
         include!(concat!(env!("OUT_DIR"), "/InterfaceObjectMap.rs"));
     }
-    #[allow(dead_code, unused_imports)]
+    #[allow(dead_code, unused_imports, clippy::enum_variant_names)]
     pub mod InheritTypes {
         include!(concat!(env!("OUT_DIR"), "/InheritTypes.rs"));
     }
+    #[allow(clippy::upper_case_acronyms)]
     pub mod PrototypeList {
         include!(concat!(env!("OUT_DIR"), "/PrototypeList.rs"));
     }
     pub mod RegisterBindings {
         include!(concat!(env!("OUT_DIR"), "/RegisterBindings.rs"));
     }
-    #[allow(non_camel_case_types, unused_imports, unused_variables)]
+    #[allow(
+        non_camel_case_types,
+        unused_imports,
+        unused_variables,
+        clippy::large_enum_variant,
+        clippy::upper_case_acronyms,
+        clippy::enum_variant_names
+    )]
     pub mod UnionTypes {
         include!(concat!(env!("OUT_DIR"), "/UnionTypes.rs"));
     }

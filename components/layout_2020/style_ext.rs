@@ -3,7 +3,6 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use app_units::Au;
-use servo_config::pref;
 use style::computed_values::mix_blend_mode::T as ComputedMixBlendMode;
 use style::computed_values::position::T as ComputedPosition;
 use style::computed_values::transform_style::T as ComputedTransformStyle;
@@ -14,16 +13,17 @@ use style::properties::longhands::column_span::computed_value::T as ColumnSpan;
 use style::properties::ComputedValues;
 use style::values::computed::image::Image as ComputedImageLayer;
 use style::values::computed::{Length, LengthPercentage, NonNegativeLengthPercentage, Size};
-use style::values::generics::box_::{GenericVerticalAlign, Perspective, VerticalAlignKeyword};
+use style::values::generics::box_::Perspective;
 use style::values::generics::length::MaxSize;
-use style::values::specified::box_::DisplayOutside as StyloDisplayOutside;
 use style::values::specified::{box_ as stylo, Overflow};
 use style::Zero;
 use webrender_api as wr;
 
 use crate::dom_traversal::Contents;
+use crate::fragment_tree::FragmentFlags;
 use crate::geom::{
-    LengthOrAuto, LengthPercentageOrAuto, LogicalSides, LogicalVec2, PhysicalSides, PhysicalSize,
+    AuOrAuto, LengthOrAuto, LengthPercentageOrAuto, LogicalSides, LogicalVec2, PhysicalSides,
+    PhysicalSize,
 };
 use crate::ContainingBlock;
 
@@ -34,7 +34,7 @@ pub(crate) enum Display {
     GeneratingBox(DisplayGeneratingBox),
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DisplayGeneratingBox {
     OutsideInside {
         outside: DisplayOutside,
@@ -72,13 +72,13 @@ impl DisplayGeneratingBox {
     }
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DisplayOutside {
     Block,
     Inline,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DisplayInside {
     // “list-items are limited to the Flow Layout display types”
     // <https://drafts.csswg.org/css-display/#list-items>
@@ -89,6 +89,7 @@ pub(crate) enum DisplayInside {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::enum_variant_names)]
 /// <https://drafts.csswg.org/css-display-3/#layout-specific-display>
 pub(crate) enum DisplayLayoutInternal {
     TableCaption,
@@ -118,7 +119,7 @@ impl DisplayLayoutInternal {
 pub(crate) struct PaddingBorderMargin {
     pub padding: LogicalSides<Au>,
     pub border: LogicalSides<Au>,
-    pub margin: LogicalSides<LengthOrAuto>,
+    pub margin: LogicalSides<AuOrAuto>,
 
     /// Pre-computed sums in each axis
     pub padding_border_sums: LogicalVec2<Au>,
@@ -179,16 +180,21 @@ pub(crate) trait ComputedValuesExt {
         &self,
         containing_block_writing_mode: WritingMode,
     ) -> LogicalSides<LengthPercentageOrAuto<'_>>;
-    fn has_transform_or_perspective(&self) -> bool;
+    fn has_transform_or_perspective(&self, fragment_flags: FragmentFlags) -> bool;
     fn effective_z_index(&self) -> i32;
     fn establishes_block_formatting_context(&self) -> bool;
-    fn establishes_stacking_context(&self) -> bool;
+    fn establishes_stacking_context(&self, fragment_flags: FragmentFlags) -> bool;
     fn establishes_scroll_container(&self) -> bool;
-    fn establishes_containing_block_for_absolute_descendants(&self) -> bool;
-    fn establishes_containing_block_for_all_descendants(&self) -> bool;
+    fn establishes_containing_block_for_absolute_descendants(
+        &self,
+        fragment_flags: FragmentFlags,
+    ) -> bool;
+    fn establishes_containing_block_for_all_descendants(
+        &self,
+        fragment_flags: FragmentFlags,
+    ) -> bool;
     fn background_is_transparent(&self) -> bool;
     fn get_webrender_primitive_flags(&self) -> wr::PrimitiveFlags;
-    fn effective_vertical_align_for_inline_layout(&self) -> GenericVerticalAlign<LengthPercentage>;
 }
 
 impl ComputedValuesExt for ComputedValues {
@@ -349,8 +355,11 @@ impl ComputedValuesExt for ComputedValues {
         let cbis = containing_block.inline_size;
         let padding = self
             .padding(containing_block.style.writing_mode)
-            .percentages_relative_to(cbis);
+            .percentages_relative_to(cbis.into());
         let border = self.border_width(containing_block.style.writing_mode);
+        let margin = self
+            .margin(containing_block.style.writing_mode)
+            .percentages_relative_to(cbis.into());
         PaddingBorderMargin {
             padding_border_sums: LogicalVec2 {
                 inline: (padding.inline_sum() + border.inline_sum()).into(),
@@ -358,9 +367,7 @@ impl ComputedValuesExt for ComputedValues {
             },
             padding: padding.into(),
             border: border.into(),
-            margin: self
-                .margin(containing_block.style.writing_mode)
-                .percentages_relative_to(cbis),
+            margin: margin.map(|t| t.map(|m| m.into())),
         }
     }
 
@@ -411,7 +418,7 @@ impl ComputedValuesExt for ComputedValues {
 
     /// Returns true if this style has a transform, or perspective property set and
     /// it applies to this element.
-    fn has_transform_or_perspective(&self) -> bool {
+    fn has_transform_or_perspective(&self, fragment_flags: FragmentFlags) -> bool {
         // "A transformable element is an element in one of these categories:
         //   * all elements whose layout is governed by the CSS box model except for
         //     non-replaced inline boxes, table-column boxes, and table-column-group
@@ -420,8 +427,9 @@ impl ComputedValuesExt for ComputedValues {
         //     elements with the exception of any descendant element of text content
         //     elements."
         // https://drafts.csswg.org/css-transforms/#transformable-element
-        // FIXME(mrobinson): Properly handle tables and replaced elements here.
-        if self.get_box().display.is_inline_flow() {
+        if self.get_box().display.is_inline_flow() &&
+            !fragment_flags.contains(FragmentFlags::IS_REPLACED)
+        {
             return false;
         }
 
@@ -464,7 +472,7 @@ impl ComputedValuesExt for ComputedValues {
     }
 
     /// Returns true if this fragment establishes a new stacking context and false otherwise.
-    fn establishes_stacking_context(&self) -> bool {
+    fn establishes_stacking_context(&self, fragment_flags: FragmentFlags) -> bool {
         let effects = self.get_effects();
         if effects.opacity != 1.0 {
             return true;
@@ -474,7 +482,7 @@ impl ComputedValuesExt for ComputedValues {
             return true;
         }
 
-        if self.has_transform_or_perspective() {
+        if self.has_transform_or_perspective(fragment_flags) {
             return true;
         }
 
@@ -513,8 +521,11 @@ impl ComputedValuesExt for ComputedValues {
     /// descendants) this method will return true, but a true return value does
     /// not imply that the style establishes a containing block for all descendants.
     /// Use `establishes_containing_block_for_all_descendants()` instead.
-    fn establishes_containing_block_for_absolute_descendants(&self) -> bool {
-        if self.establishes_containing_block_for_all_descendants() {
+    fn establishes_containing_block_for_absolute_descendants(
+        &self,
+        fragment_flags: FragmentFlags,
+    ) -> bool {
+        if self.establishes_containing_block_for_all_descendants(fragment_flags) {
             return true;
         }
 
@@ -525,8 +536,11 @@ impl ComputedValuesExt for ComputedValues {
     /// all descendants, including fixed descendants (`position: fixed`).
     /// Note that this also implies that it establishes a containing block
     /// for absolute descendants (`position: absolute`).
-    fn establishes_containing_block_for_all_descendants(&self) -> bool {
-        if self.has_transform_or_perspective() {
+    fn establishes_containing_block_for_all_descendants(
+        &self,
+        fragment_flags: FragmentFlags,
+    ) -> bool {
+        if self.has_transform_or_perspective(fragment_flags) {
             return true;
         }
 
@@ -558,18 +572,6 @@ impl ComputedValuesExt for ComputedValues {
             BackfaceVisiblity::Hidden => wr::PrimitiveFlags::empty(),
         }
     }
-
-    /// Get the effective `vertical-align` property for inline layout. Essentially, if this style
-    /// has outside block display, this is the inline formatting context root and `vertical-align`
-    /// doesn't come into play for inline layout.
-    fn effective_vertical_align_for_inline_layout(&self) -> GenericVerticalAlign<LengthPercentage> {
-        match self.clone_display().outside() {
-            StyloDisplayOutside::Block => {
-                GenericVerticalAlign::Keyword(VerticalAlignKeyword::Baseline)
-            },
-            _ => self.clone_vertical_align(),
-        }
-    }
 }
 
 impl From<stylo::Display> for Display {
@@ -580,13 +582,12 @@ impl From<stylo::Display> for Display {
         let outside = match outside {
             stylo::DisplayOutside::Block => DisplayOutside::Block,
             stylo::DisplayOutside::Inline => DisplayOutside::Inline,
-            stylo::DisplayOutside::TableCaption if pref!(layout.tables.enabled) => {
+            stylo::DisplayOutside::TableCaption => {
                 return Display::GeneratingBox(DisplayGeneratingBox::LayoutInternal(
                     DisplayLayoutInternal::TableCaption,
                 ));
             },
-            stylo::DisplayOutside::TableCaption => DisplayOutside::Block,
-            stylo::DisplayOutside::InternalTable if pref!(layout.tables.enabled) => {
+            stylo::DisplayOutside::InternalTable => {
                 let internal = match inside {
                     stylo::DisplayInside::TableRowGroup => DisplayLayoutInternal::TableRowGroup,
                     stylo::DisplayInside::TableColumn => DisplayLayoutInternal::TableColumn,
@@ -605,7 +606,6 @@ impl From<stylo::Display> for Display {
                 };
                 return Display::GeneratingBox(DisplayGeneratingBox::LayoutInternal(internal));
             },
-            stylo::DisplayOutside::InternalTable => DisplayOutside::Block,
             // This should not be a value of DisplayInside, but oh well
             // special-case display: contents because we still want it to work despite the early return
             stylo::DisplayOutside::None if inside == stylo::DisplayInside::Contents => {
@@ -627,17 +627,14 @@ impl From<stylo::Display> for Display {
             stylo::DisplayInside::None => return Display::None,
             stylo::DisplayInside::Contents => return Display::Contents,
 
-            stylo::DisplayInside::Table if pref!(layout.tables.enabled) => DisplayInside::Table,
-            stylo::DisplayInside::Table |
+            stylo::DisplayInside::Table => DisplayInside::Table,
             stylo::DisplayInside::TableRowGroup |
             stylo::DisplayInside::TableColumn |
             stylo::DisplayInside::TableColumnGroup |
             stylo::DisplayInside::TableHeaderGroup |
             stylo::DisplayInside::TableFooterGroup |
             stylo::DisplayInside::TableRow |
-            stylo::DisplayInside::TableCell => DisplayInside::Flow {
-                is_list_item: packed.is_list_item(),
-            },
+            stylo::DisplayInside::TableCell => unreachable!("Internal DisplayInside found"),
         };
         Display::GeneratingBox(DisplayGeneratingBox::OutsideInside { outside, inside })
     }

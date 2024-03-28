@@ -127,7 +127,7 @@ pub trait CallbackContainer {
     ///
     /// ["callback context"]: https://heycam.github.io/webidl/#dfn-callback-context
     fn incumbent(&self) -> Option<&GlobalScope> {
-        self.callback_holder().incumbent.as_ref().map(Dom::deref)
+        self.callback_holder().incumbent.as_deref()
     }
 }
 
@@ -253,9 +253,9 @@ impl CallSetup {
         let ais = callback.incumbent().map(AutoIncumbentScript::new);
         CallSetup {
             exception_global: global,
-            cx: cx,
+            cx,
             old_realm: unsafe { EnterRealm(*cx, callback.callback()) },
-            handling: handling,
+            handling,
             entry_script: Some(aes),
             incumbent_script: ais,
         }

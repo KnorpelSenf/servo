@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Data needed by the layout thread.
+//! Data needed by layout.
 
 use std::cell::{RefCell, RefMut};
 use std::collections::HashMap;
@@ -55,6 +55,9 @@ pub fn malloc_size_of_persistent_local_context(ops: &mut MallocSizeOfOps) -> usi
     })
 }
 
+type WebrenderImageCache =
+    HashMap<(ServoUrl, UsePlaceholder), WebRenderImageInfo, BuildHasherDefault<FnvHasher>>;
+
 /// Layout information shared among all workers. This must be thread-safe.
 pub struct LayoutContext<'a> {
     /// The pipeline id of this LayoutContext.
@@ -73,11 +76,7 @@ pub struct LayoutContext<'a> {
     pub font_cache_thread: Mutex<FontCacheThread>,
 
     /// A cache of WebRender image info.
-    pub webrender_image_cache: Arc<
-        RwLock<
-            HashMap<(ServoUrl, UsePlaceholder), WebRenderImageInfo, BuildHasherDefault<FnvHasher>>,
-        >,
-    >,
+    pub webrender_image_cache: Arc<RwLock<WebrenderImageCache>>,
 
     /// Paint worklets
     pub registered_painters: &'a dyn RegisteredPainters,

@@ -71,19 +71,19 @@ jobs:
     # runners which still use 20.04.
     runs-on: ubuntu-${{ inputs.upload && '20.04' || '22.04' }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         if: github.event_name != 'pull_request_target'
         with:
-          fetch-depth: 2
+          fetch-depth: 2 # This is necessary for `test-tidy`.
       # This is necessary to checkout the pull request if this run was triggered via a
       # `pull_request_target` event.
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         if: github.event_name == 'pull_request_target'
         with:
           ref: refs/pull/${{ github.event.number }}/head
-          fetch-depth: 2
+          fetch-depth: 2 # This is necessary for `test-tidy`.
       - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.3
+        uses: mozilla-actions/sccache-action@v0.0.4
       - name: Set LIBCLANG_PATH env # needed for bindgen in mozangle
         if: ${{ !inputs.upload  }} # not needed on ubuntu 20.04 used for nightly
         run: echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> $GITHUB_ENV
@@ -91,11 +91,10 @@ jobs:
         with:
           python-version: '3.10'
       - name: Install taplo
-        uses: baptiste0928/cargo-install@v2
+        uses: baptiste0928/cargo-install@v3
         with:
           crate: taplo-cli
           locked: true
-          cache-key: ${{ inputs.upload && '20.04' || '22.04' }}
       - name: Bootstrap Python
         run: python3 -m pip install --upgrade pip
       - name: Bootstrap dependencies
@@ -106,7 +105,7 @@ jobs:
         run: python3 ./mach test-tidy --no-progress --all
       - name: Build (${{ inputs.profile }})
         run: |
-          python3 ./mach build --${{ inputs.profile }}
+          python3 ./mach build --locked --${{ inputs.profile }}
           cp -r target/cargo-timings target/cargo-timings-linux
       - name: Smoketest
         run: xvfb-run python3 ./mach smoketest --${{ inputs.profile  }}
@@ -114,7 +113,7 @@ jobs:
         run: ./mach test-scripts
       - name: Unit tests
         if: ${{ inputs.unit-tests }}
-        uses: nick-fields/retry@v2
+        uses: nick-fields/retry@v3
         with:
           timeout_minutes: 20
           max_attempts: 2 # https://github.com/servo/servo/issues/30683
@@ -125,8 +124,6 @@ jobs:
           name: cargo-timings-linux
           # Using a wildcard here ensures that the archive includes the path.
           path: target/cargo-timings-*
-      - name: Lockfile check
-        run: ./etc/ci/lockfile_changed.sh
       - name: Build mach package
         run: python3 ./mach package --${{ inputs.profile }}
       - name: Upload artifact for mach package

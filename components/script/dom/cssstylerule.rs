@@ -6,7 +6,7 @@ use std::mem;
 
 use cssparser::{Parser as CssParser, ParserInput as CssParserInput, ToCss};
 use dom_struct::dom_struct;
-use selectors::parser::SelectorList;
+use selectors::parser::{ParseRelative, SelectorList};
 use servo_arc::Arc;
 use style::selector_parser::SelectorParser;
 use style::shared_lock::{Locked, ToCssWithGuard};
@@ -39,7 +39,7 @@ impl CSSStyleRule {
     ) -> CSSStyleRule {
         CSSStyleRule {
             cssrule: CSSRule::new_inherited(parent_stylesheet),
-            stylerule: stylerule,
+            stylerule,
             style_decl: Default::default(),
         }
     }
@@ -93,7 +93,7 @@ impl CSSStyleRuleMethods for CSSStyleRule {
     fn SelectorText(&self) -> DOMString {
         let guard = self.cssrule.shared_lock().read();
         let stylerule = self.stylerule.read_with(&guard);
-        return DOMString::from_string(stylerule.selectors.to_css_string());
+        DOMString::from_string(stylerule.selectors.to_css_string())
     }
 
     // https://drafts.csswg.org/cssom/#dom-cssstylerule-selectortext
@@ -109,9 +109,11 @@ impl CSSStyleRuleMethods for CSSStyleRule {
             url_data: &url_data,
             for_supports_rule: false,
         };
-        let mut css_parser = CssParserInput::new(&*value);
+        let mut css_parser = CssParserInput::new(&value);
         let mut css_parser = CssParser::new(&mut css_parser);
-        if let Ok(mut s) = SelectorList::parse(&parser, &mut css_parser) {
+        // TODO: Maybe allow setting relative selectors from the OM, if we're in a nested style
+        // rule?
+        if let Ok(mut s) = SelectorList::parse(&parser, &mut css_parser, ParseRelative::No) {
             // This mirrors what we do in CSSStyleOwner::mutate_associated_block.
             let mut guard = self.cssrule.shared_lock().write();
             let stylerule = self.stylerule.write_with(&mut guard);

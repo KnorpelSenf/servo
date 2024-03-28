@@ -75,7 +75,7 @@ impl RTCDataChannel {
         let channel = RTCDataChannel {
             eventtarget: EventTarget::new_inherited(),
             servo_media_id,
-            peer_connection: Dom::from_ref(&peer_connection),
+            peer_connection: Dom::from_ref(peer_connection),
             label,
             ordered: options.ordered,
             max_packet_life_time: options.maxPacketLifeTime,
@@ -107,7 +107,7 @@ impl RTCDataChannel {
             global,
         );
 
-        peer_connection.register_data_channel(rtc_data_channel.servo_media_id, &*rtc_data_channel);
+        peer_connection.register_data_channel(rtc_data_channel.servo_media_id, &rtc_data_channel);
 
         rtc_data_channel
     }
@@ -200,17 +200,14 @@ impl RTCDataChannel {
     }
 
     pub fn on_state_change(&self, state: DataChannelState) {
-        match state {
-            DataChannelState::Closing => {
-                let event = Event::new(
-                    &self.global(),
-                    atom!("closing"),
-                    EventBubbles::DoesNotBubble,
-                    EventCancelable::NotCancelable,
-                );
-                event.upcast::<Event>().fire(self.upcast());
-            },
-            _ => {},
+        if let DataChannelState::Closing = state {
+            let event = Event::new(
+                &self.global(),
+                atom!("closing"),
+                EventBubbles::DoesNotBubble,
+                EventCancelable::NotCancelable,
+            );
+            event.upcast::<Event>().fire(self.upcast());
         };
         self.ready_state.set(state.into());
     }

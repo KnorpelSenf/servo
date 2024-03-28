@@ -125,7 +125,7 @@ impl MediaStreamMethods for MediaStream {
         self.tracks
             .borrow()
             .iter()
-            .find(|x| x.id().id().to_string() == &*id)
+            .find(|x| x.id().id().to_string() == *id)
             .map(|x| DomRoot::from_ref(&**x))
     }
 
@@ -154,7 +154,7 @@ impl MediaStream {
     fn clone_with_proto(&self, proto: Option<HandleObject>) -> DomRoot<MediaStream> {
         let new = MediaStream::new_with_proto(&self.global(), proto);
         for track in &*self.tracks.borrow() {
-            new.add_track(&track)
+            new.add_track(track)
         }
         new
     }

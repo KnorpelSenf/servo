@@ -107,7 +107,7 @@ impl OffscreenCanvas {
         }
 
         let data = match self.context.borrow().as_ref() {
-            Some(&OffscreenCanvasContext::OffscreenContext2d(ref context)) => {
+            Some(OffscreenCanvasContext::OffscreenContext2d(context)) => {
                 let (sender, receiver) =
                     ipc::channel(self.global().time_profiler_chan().clone()).unwrap();
                 let msg = CanvasMsg::FromScript(
@@ -171,7 +171,7 @@ impl OffscreenCanvasMethods for OffscreenCanvas {
 
     // https://html.spec.whatwg.org/multipage/#dom-offscreencanvas-width
     fn Width(&self) -> u64 {
-        return self.width.get();
+        self.width.get()
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-offscreencanvas-width
@@ -189,7 +189,7 @@ impl OffscreenCanvasMethods for OffscreenCanvas {
 
     // https://html.spec.whatwg.org/multipage/#dom-offscreencanvas-height
     fn Height(&self) -> u64 {
-        return self.height.get();
+        self.height.get()
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-offscreencanvas-height

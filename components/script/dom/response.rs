@@ -155,7 +155,7 @@ impl Response {
         } else {
             // Reset FetchResponse to an in-memory stream with empty byte sequence here for
             // no-init-body case
-            let stream = ReadableStream::new_from_bytes(&global, Vec::with_capacity(0));
+            let stream = ReadableStream::new_from_bytes(global, Vec::with_capacity(0));
             r.body_stream.set(Some(&*stream));
         }
 
@@ -299,7 +299,7 @@ impl ResponseMethods for Response {
         match *self.status.borrow() {
             Some(s) => {
                 let status_num = s.as_u16();
-                return status_num >= 200 && status_num <= 299;
+                status_num >= 200 && status_num <= 299
             },
             None => false,
         }
@@ -334,8 +334,8 @@ impl ResponseMethods for Response {
         // https://fetch.spec.whatwg.org/#concept-response-clone
         // Instead of storing a net_traits::Response internally, we
         // only store the relevant fields, and only clone them here
-        *new_response.response_type.borrow_mut() = self.response_type.borrow().clone();
-        *new_response.status.borrow_mut() = self.status.borrow().clone();
+        *new_response.response_type.borrow_mut() = *self.response_type.borrow();
+        *new_response.status.borrow_mut() = *self.status.borrow();
         *new_response.raw_status.borrow_mut() = self.raw_status.borrow().clone();
         *new_response.url.borrow_mut() = self.url.borrow().clone();
         *new_response.url_list.borrow_mut() = self.url_list.borrow().clone();

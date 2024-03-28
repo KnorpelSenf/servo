@@ -71,7 +71,7 @@ impl VertexArrayObject {
     }
 
     pub fn ever_bound(&self) -> bool {
-        return self.ever_bound.get();
+        self.ever_bound.get()
     }
 
     pub fn set_ever_bound(&self) {
@@ -116,10 +116,7 @@ impl VertexArrayObject {
             return Err(WebGLError::InvalidValue);
         }
 
-        let is_webgl2 = match self.context.webgl_version() {
-            WebGLVersion::WebGL2 => true,
-            _ => false,
-        };
+        let is_webgl2 = matches!(self.context.webgl_version(), WebGLVersion::WebGL2);
 
         let bytes_per_component: i32 = match type_ {
             constants::BYTE | constants::UNSIGNED_BYTE => 1,

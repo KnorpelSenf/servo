@@ -2,13 +2,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Utilities for querying the layout, as needed by the layout thread.
+//! Utilities for querying the layout, as needed by layout.
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use app_units::Au;
 use euclid::default::{Point2D, Rect};
-use euclid::{Size2D, Vector2D};
+use euclid::{SideOffsets2D, Size2D, Vector2D};
 use log::warn;
 use msg::constellation_msg::PipelineId;
 use script_layout_interface::rpc::{
@@ -20,18 +20,22 @@ use script_layout_interface::wrapper_traits::{
 };
 use script_traits::UntrustedNodeAddress;
 use servo_arc::Arc as ServoArc;
+use servo_url::ServoUrl;
 use style::computed_values::position::T as Position;
-use style::context::{StyleContext, ThreadLocalStyleContext};
+use style::context::{QuirksMode, SharedStyleContext, StyleContext, ThreadLocalStyleContext};
 use style::dom::{OpaqueNode, TElement};
 use style::properties::style_structs::Font;
 use style::properties::{
-    Importance, LonghandId, PropertyDeclarationBlock, PropertyDeclarationId, PropertyId,
+    parse_one_declaration_into, ComputedValues, Importance, LonghandId, PropertyDeclarationBlock,
+    PropertyDeclarationId, PropertyId, SourcePropertyDeclaration,
 };
 use style::selector_parser::PseudoElement;
+use style::shared_lock::SharedRwLock;
+use style::stylesheets::{CssRuleType, Origin, UrlExtraData};
 use style::stylist::RuleInclusion;
 use style::traversal::resolve_style;
 use style::values::generics::text::LineHeight;
-use style_traits::{CSSPixel, ToCss};
+use style_traits::{CSSPixel, ParsingMode, ToCss};
 use webrender_api::units::LayoutPixel;
 use webrender_api::{DisplayListBuilder, ExternalScrollId};
 
@@ -175,11 +179,25 @@ pub fn process_content_box_request(
     requested_node: OpaqueNode,
     fragment_tree: Option<Arc<FragmentTree>>,
 ) -> Option<Rect<Au>> {
-    fragment_tree?.get_content_box_for_node(requested_node)
+    let rects = fragment_tree?.get_content_boxes_for_node(requested_node);
+    if rects.is_empty() {
+        return None;
+    }
+
+    Some(
+        rects
+            .iter()
+            .fold(Rect::zero(), |unioned_rect, rect| rect.union(&unioned_rect)),
+    )
 }
 
-pub fn process_content_boxes_request(_requested_node: OpaqueNode) -> Vec<Rect<Au>> {
-    vec![]
+pub fn process_content_boxes_request(
+    requested_node: OpaqueNode,
+    fragment_tree: Option<Arc<FragmentTree>>,
+) -> Vec<Rect<Au>> {
+    fragment_tree
+        .map(|tree| tree.get_content_boxes_for_node(requested_node))
+        .unwrap_or_default()
 }
 
 pub fn process_node_geometry_request(
@@ -309,43 +327,57 @@ pub fn process_resolved_style_request<'dom>(
                 return None;
             }
 
-            let box_fragment = match fragment {
-                Fragment::Box(ref box_fragment) => box_fragment,
+            let (content_rect, margins, padding) = match fragment {
+                Fragment::Box(ref box_fragment) | Fragment::Float(ref box_fragment) => {
+                    if style.get_box().position != Position::Static {
+                        let resolved_insets = || {
+                            box_fragment.calculate_resolved_insets_if_positioned(containing_block)
+                        };
+                        match longhand_id {
+                            LonghandId::Top => return Some(resolved_insets().top.to_css_string()),
+                            LonghandId::Right => {
+                                return Some(resolved_insets().right.to_css_string())
+                            },
+                            LonghandId::Bottom => {
+                                return Some(resolved_insets().bottom.to_css_string())
+                            },
+                            LonghandId::Left => {
+                                return Some(resolved_insets().left.to_css_string())
+                            },
+                            _ => {},
+                        }
+                    }
+                    let content_rect = box_fragment
+                        .content_rect
+                        .to_physical(box_fragment.style.writing_mode, containing_block);
+                    let margins = box_fragment
+                        .margin
+                        .to_physical(box_fragment.style.writing_mode);
+                    let padding = box_fragment
+                        .padding
+                        .to_physical(box_fragment.style.writing_mode);
+                    (content_rect, margins, padding)
+                },
+                Fragment::Positioning(positioning_fragment) => {
+                    let content_rect = positioning_fragment
+                        .rect
+                        .to_physical(positioning_fragment.writing_mode, containing_block);
+                    (content_rect, SideOffsets2D::zero(), SideOffsets2D::zero())
+                },
                 _ => return None,
             };
 
-            if style.get_box().position != Position::Static {
-                let resolved_insets =
-                    || box_fragment.calculate_resolved_insets_if_positioned(containing_block);
-                match longhand_id {
-                    LonghandId::Top => return Some(resolved_insets().top.to_css_string()),
-                    LonghandId::Right => return Some(resolved_insets().right.to_css_string()),
-                    LonghandId::Bottom => return Some(resolved_insets().bottom.to_css_string()),
-                    LonghandId::Left => return Some(resolved_insets().left.to_css_string()),
-                    _ => {},
-                }
-            }
-
-            let content_rect = box_fragment
-                .content_rect
-                .to_physical(box_fragment.style.writing_mode, containing_block);
-            let margins = box_fragment
-                .margin
-                .to_physical(box_fragment.style.writing_mode);
-            let padding = box_fragment
-                .padding
-                .to_physical(box_fragment.style.writing_mode);
             match longhand_id {
                 LonghandId::Width => Some(content_rect.size.width),
                 LonghandId::Height => Some(content_rect.size.height),
-                LonghandId::MarginBottom => Some(margins.bottom),
-                LonghandId::MarginTop => Some(margins.top),
-                LonghandId::MarginLeft => Some(margins.left),
-                LonghandId::MarginRight => Some(margins.right),
-                LonghandId::PaddingBottom => Some(padding.bottom),
-                LonghandId::PaddingTop => Some(padding.top),
-                LonghandId::PaddingLeft => Some(padding.left),
-                LonghandId::PaddingRight => Some(padding.right),
+                LonghandId::MarginBottom => Some(margins.bottom.into()),
+                LonghandId::MarginTop => Some(margins.top.into()),
+                LonghandId::MarginLeft => Some(margins.left.into()),
+                LonghandId::MarginRight => Some(margins.right.into()),
+                LonghandId::PaddingBottom => Some(padding.bottom.into()),
+                LonghandId::PaddingTop => Some(padding.top.into()),
+                LonghandId::PaddingLeft => Some(padding.left.into()),
+                LonghandId::PaddingRight => Some(padding.right.into()),
                 _ => None,
             }
             .map(|value| value.to_css_string())
@@ -464,10 +496,12 @@ fn process_offset_parent_query_inner(
                 Fragment::Text(fragment) => fragment
                     .rect
                     .to_physical(fragment.parent_style.writing_mode, containing_block),
+                Fragment::Positioning(fragment) => fragment
+                    .rect
+                    .to_physical(fragment.writing_mode, containing_block),
                 Fragment::AbsoluteOrFixedPositioned(_) |
                 Fragment::Image(_) |
-                Fragment::IFrame(_) |
-                Fragment::Anonymous(_) => unreachable!(),
+                Fragment::IFrame(_) => unreachable!(),
             };
             let border_box = fragment_relative_rect.translate(containing_block.origin.to_vector());
 
@@ -485,12 +519,9 @@ fn process_offset_parent_query_inner(
             // "If any of the following holds true return null and terminate
             // this algorithm: [...] The element’s computed value of the
             // `position` property is `fixed`."
-            let is_fixed = match fragment {
-                Fragment::Box(fragment) if fragment.style.get_box().position == Position::Fixed => {
-                    true
-                },
-                _ => false,
-            };
+            let is_fixed = matches!(
+                fragment, Fragment::Box(fragment) if fragment.style.get_box().position == Position::Fixed
+            );
 
             if is_body_element {
                 // "If the element is the HTML body element or [...] return zero
@@ -541,10 +572,10 @@ fn process_offset_parent_query_inner(
                     }
                 },
                 Fragment::AbsoluteOrFixedPositioned(_) |
-                Fragment::Text(_) |
-                Fragment::Image(_) |
                 Fragment::IFrame(_) |
-                Fragment::Anonymous(_) => None,
+                Fragment::Image(_) |
+                Fragment::Positioning(_) |
+                Fragment::Text(_) => None,
             };
 
             while parent_node_addresses.len() <= level {
@@ -596,7 +627,7 @@ fn process_offset_parent_query_inner(
                         Fragment::Text(_) |
                         Fragment::Image(_) |
                         Fragment::IFrame(_) |
-                        Fragment::Anonymous(_) => None,
+                        Fragment::Positioning(_) => None,
                     }
                 })
                 .unwrap()
@@ -629,10 +660,107 @@ pub fn process_text_index_request(_node: OpaqueNode, _point: Point2D<Au>) -> Tex
     TextIndexResponse(None)
 }
 
-pub fn process_resolved_font_style_query<'dom>(
-    _node: impl LayoutNode<'dom>,
-    _property: &PropertyId,
-    _value: &str,
-) -> Option<ServoArc<Font>> {
-    None
+pub fn process_resolved_font_style_query<'dom, E>(
+    context: &LayoutContext,
+    node: E,
+    property: &PropertyId,
+    value: &str,
+    url_data: ServoUrl,
+    shared_lock: &SharedRwLock,
+) -> Option<ServoArc<Font>>
+where
+    E: LayoutNode<'dom>,
+{
+    fn create_font_declaration(
+        value: &str,
+        property: &PropertyId,
+        url_data: &ServoUrl,
+        quirks_mode: QuirksMode,
+    ) -> Option<PropertyDeclarationBlock> {
+        let mut declarations = SourcePropertyDeclaration::default();
+        let result = parse_one_declaration_into(
+            &mut declarations,
+            property.clone(),
+            value,
+            Origin::Author,
+            &UrlExtraData(url_data.get_arc()),
+            None,
+            ParsingMode::DEFAULT,
+            quirks_mode,
+            CssRuleType::Style,
+        );
+        let declarations = match result {
+            Ok(()) => {
+                let mut block = PropertyDeclarationBlock::new();
+                block.extend(declarations.drain(), Importance::Normal);
+                block
+            },
+            Err(_) => return None,
+        };
+        // TODO: Force to set line-height property to 'normal' font property.
+        Some(declarations)
+    }
+    fn resolve_for_declarations<'dom, E>(
+        context: &SharedStyleContext,
+        parent_style: Option<&ComputedValues>,
+        declarations: PropertyDeclarationBlock,
+        shared_lock: &SharedRwLock,
+    ) -> ServoArc<ComputedValues>
+    where
+        E: LayoutNode<'dom>,
+    {
+        let parent_style = match parent_style {
+            Some(parent) => parent,
+            None => context.stylist.device().default_computed_values(),
+        };
+        context
+            .stylist
+            .compute_for_declarations::<E::ConcreteElement>(
+                &context.guards,
+                parent_style,
+                ServoArc::new(shared_lock.wrap(declarations)),
+            )
+    }
+
+    // https://html.spec.whatwg.org/multipage/#dom-context-2d-font
+    // 1. Parse the given font property value
+    let quirks_mode = context.style_context.quirks_mode();
+    let declarations = create_font_declaration(value, property, &url_data, quirks_mode)?;
+
+    // TODO: Reject 'inherit' and 'initial' values for the font property.
+
+    // 2. Get resolved styles for the parent element
+    let element = node.as_element().unwrap();
+    let parent_style = if node.is_connected() {
+        if element.has_data() {
+            node.to_threadsafe().as_element().unwrap().resolved_style()
+        } else {
+            let mut tlc = ThreadLocalStyleContext::new();
+            let mut context = StyleContext {
+                shared: &context.style_context,
+                thread_local: &mut tlc,
+            };
+            let styles = resolve_style(&mut context, element, RuleInclusion::All, None, None);
+            styles.primary().clone()
+        }
+    } else {
+        let default_declarations =
+            create_font_declaration("10px sans-serif", property, &url_data, quirks_mode).unwrap();
+        resolve_for_declarations::<E>(
+            &context.style_context,
+            None,
+            default_declarations,
+            shared_lock,
+        )
+    };
+
+    // 3. Resolve the parsed value with resolved styles of the parent element
+    let computed_values = resolve_for_declarations::<E>(
+        &context.style_context,
+        Some(&*parent_style),
+        declarations,
+        shared_lock,
+    );
+
+    Some(computed_values.clone_font())
 }

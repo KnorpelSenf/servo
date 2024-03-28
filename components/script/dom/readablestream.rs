@@ -67,7 +67,7 @@ impl ReadableStream {
             js_stream: Heap::default(),
             js_reader: Heap::default(),
             has_reader: Default::default(),
-            external_underlying_source: external_underlying_source,
+            external_underlying_source,
         }
     }
 
@@ -103,7 +103,7 @@ impl ReadableStream {
     /// Build a stream backed by a Rust source that has already been read into memory.
     pub fn new_from_bytes(global: &GlobalScope, bytes: Vec<u8>) -> DomRoot<ReadableStream> {
         let stream = ReadableStream::new_with_external_underlying_source(
-            &global,
+            global,
             ExternalUnderlyingSource::Memory(bytes.len()),
         );
         stream.enqueue_native(bytes);
@@ -123,7 +123,7 @@ impl ReadableStream {
 
         let source = Rc::new(ExternalUnderlyingSourceController::new(source));
 
-        let stream = ReadableStream::new(&global, Some(source.clone()));
+        let stream = ReadableStream::new(global, Some(source.clone()));
 
         unsafe {
             let js_wrapper = CreateReadableStreamUnderlyingSource(
@@ -250,7 +250,7 @@ impl ReadableStream {
 
         let global = self.global();
         let _ar = enter_realm(&*global);
-        let _aes = AutoEntryScript::new(&*global);
+        let _aes = AutoEntryScript::new(&global);
 
         let cx = GlobalScope::get_cx();
 
@@ -497,7 +497,7 @@ impl ExternalUnderlyingSourceController {
     fn get_chunk_with_length(&self, length: usize) -> Vec<u8> {
         let mut buffer = self.buffer.borrow_mut();
         let buffer_len = buffer.len();
-        assert!(buffer_len >= length as usize);
+        assert!(buffer_len >= length);
         buffer.split_off(buffer_len - length)
     }
 

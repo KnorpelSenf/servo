@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use cssparser::RGBA;
+use cssparser::RgbaLegacy;
 use dom_struct::dom_struct;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::rust::HandleObject;
@@ -81,21 +81,23 @@ impl VirtualMethods for HTMLFontElement {
     }
 
     fn attribute_affects_presentational_hints(&self, attr: &Attr) -> bool {
-        if attr.local_name() == &local_name!("color") {
+        if attr.local_name() == &local_name!("color") ||
+            attr.local_name() == &local_name!("size") ||
+            attr.local_name() == &local_name!("face")
+        {
             return true;
         }
 
-        // FIXME: Should also return true for `size` and `face` changes!
         self.super_type()
             .unwrap()
             .attribute_affects_presentational_hints(attr)
     }
 
     fn parse_plain_attribute(&self, name: &LocalName, value: DOMString) -> AttrValue {
-        match name {
-            &local_name!("face") => AttrValue::from_atomic(value.into()),
-            &local_name!("color") => AttrValue::from_legacy_color(value.into()),
-            &local_name!("size") => parse_size(&value),
+        match *name {
+            local_name!("face") => AttrValue::from_atomic(value.into()),
+            local_name!("color") => AttrValue::from_legacy_color(value.into()),
+            local_name!("size") => parse_size(&value),
             _ => self
                 .super_type()
                 .unwrap()
@@ -105,13 +107,13 @@ impl VirtualMethods for HTMLFontElement {
 }
 
 pub trait HTMLFontElementLayoutHelpers {
-    fn get_color(self) -> Option<RGBA>;
+    fn get_color(self) -> Option<RgbaLegacy>;
     fn get_face(self) -> Option<Atom>;
     fn get_size(self) -> Option<u32>;
 }
 
 impl HTMLFontElementLayoutHelpers for LayoutDom<'_, HTMLFontElement> {
-    fn get_color(self) -> Option<RGBA> {
+    fn get_color(self) -> Option<RgbaLegacy> {
         self.upcast::<Element>()
             .get_attr_for_layout(&ns!(), &local_name!("color"))
             .and_then(AttrValue::as_color)
@@ -174,7 +176,7 @@ fn parse_size(mut input: &str) -> AttrValue {
 
     // Step 9
     match parse_mode {
-        ParseMode::RelativePlus => value = 3 + value,
+        ParseMode::RelativePlus => value += 3,
         ParseMode::RelativeMinus => value = 3 - value,
         ParseMode::Absolute => (),
     }

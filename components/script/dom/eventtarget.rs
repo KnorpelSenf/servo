@@ -136,11 +136,11 @@ impl EventListenerType {
         owner: &EventTarget,
         ty: &Atom,
     ) -> Option<CompiledEventListener> {
-        match self {
-            &mut EventListenerType::Inline(ref mut inline) => inline
+        match *self {
+            EventListenerType::Inline(ref mut inline) => inline
                 .get_compiled_handler(owner, ty)
                 .map(CompiledEventListener::Handler),
-            &mut EventListenerType::Additive(ref listener) => {
+            EventListenerType::Additive(ref listener) => {
                 Some(CompiledEventListener::Listener(listener.clone()))
             },
         }
@@ -415,10 +415,9 @@ impl EventTarget {
             Vacant(entry) => entry.insert(EventListeners(vec![])),
         };
 
-        let idx = entries.iter().position(|ref entry| match entry.listener {
-            EventListenerType::Inline(_) => true,
-            _ => false,
-        });
+        let idx = entries
+            .iter()
+            .position(|ref entry| matches!(entry.listener, EventListenerType::Inline(_)));
 
         match idx {
             Some(idx) => match listener {
@@ -468,11 +467,7 @@ impl EventTarget {
         ty: &str,
         source: DOMString,
     ) {
-        let handler = InternalRawUncompiledHandler {
-            source: source,
-            line: line,
-            url: url,
-        };
+        let handler = InternalRawUncompiledHandler { source, line, url };
         self.set_inline_event_listener(
             Atom::from(ty),
             Some(InlineEventListener::Uncompiled(handler)),
@@ -517,7 +512,7 @@ impl EventTarget {
 
         // Step 3.8 TODO: settings objects not implemented
         let window = document.window();
-        let _ac = enter_realm(&*window);
+        let _ac = enter_realm(window);
 
         // Step 3.9
 
@@ -565,7 +560,7 @@ impl EventTarget {
         if handler.get().is_null() {
             // Step 3.7
             unsafe {
-                let ar = enter_realm(&*self);
+                let ar = enter_realm(self);
                 // FIXME(#13152): dispatch error event.
                 report_pending_exception(*cx, false, InRealm::Entered(&ar));
             }
@@ -584,16 +579,14 @@ impl EventTarget {
             Some(CommonEventHandler::ErrorEventHandler(unsafe {
                 OnErrorEventHandlerNonNull::new(cx, funobj)
             }))
+        } else if ty == &atom!("beforeunload") {
+            Some(CommonEventHandler::BeforeUnloadEventHandler(unsafe {
+                OnBeforeUnloadEventHandlerNonNull::new(cx, funobj)
+            }))
         } else {
-            if ty == &atom!("beforeunload") {
-                Some(CommonEventHandler::BeforeUnloadEventHandler(unsafe {
-                    OnBeforeUnloadEventHandlerNonNull::new(cx, funobj)
-                }))
-            } else {
-                Some(CommonEventHandler::EventHandler(unsafe {
-                    EventHandlerNonNull::new(cx, funobj)
-                }))
-            }
+            Some(CommonEventHandler::EventHandler(unsafe {
+                EventHandlerNonNull::new(cx, funobj)
+            }))
         }
     }
 
@@ -722,7 +715,7 @@ impl EventTarget {
             ListenerPhase::Bubbling
         };
         let new_entry = EventListenerEntry {
-            phase: phase,
+            phase,
             listener: EventListenerType::Additive(listener),
             once: options.once,
         };
@@ -751,7 +744,7 @@ impl EventTarget {
                 ListenerPhase::Bubbling
             };
             let old_entry = EventListenerEntry {
-                phase: phase,
+                phase,
                 listener: EventListenerType::Additive(listener.clone()),
                 once: false,
             };

@@ -6,8 +6,9 @@ use std::cell::Cell;
 
 use dom_struct::dom_struct;
 use js::typedarray::{Float64, Float64Array};
+use script_traits::GamepadUpdateType;
 
-use super::bindings::typedarrays::HeapTypedArray;
+use super::bindings::buffer_source::HeapBufferSource;
 use crate::dom::bindings::codegen::Bindings::GamepadBinding::{GamepadHand, GamepadMethods};
 use crate::dom::bindings::codegen::Bindings::GamepadButtonListBinding::GamepadButtonListMethods;
 use crate::dom::bindings::inheritance::Castable;
@@ -23,6 +24,9 @@ use crate::dom::gamepadpose::GamepadPose;
 use crate::dom::globalscope::GlobalScope;
 use crate::script_runtime::JSContext;
 
+// This value is for determining when to consider a gamepad as having a user gesture
+// from an axis tilt. This matches the threshold in Chromium.
+const AXIS_TILT_THRESHOLD: f64 = 0.5;
 // This value is for determining when to consider a non-digital button "pressed".
 // Like Gecko and Chromium it derives from the XInput trigger threshold.
 const BUTTON_PRESS_THRESHOLD: f64 = 30.0 / 255.0;
@@ -37,13 +41,14 @@ pub struct Gamepad {
     timestamp: Cell<f64>,
     mapping_type: String,
     #[ignore_malloc_size_of = "mozjs"]
-    axes: HeapTypedArray<Float64>,
+    axes: HeapBufferSource<Float64>,
     buttons: Dom<GamepadButtonList>,
     pose: Option<Dom<GamepadPose>>,
     #[ignore_malloc_size_of = "Defined in rust-webvr"]
     hand: GamepadHand,
     axis_bounds: (f64, f64),
     button_bounds: (f64, f64),
+    exposed: Cell<bool>,
 }
 
 impl Gamepad {
@@ -62,18 +67,19 @@ impl Gamepad {
     ) -> Gamepad {
         Self {
             reflector_: Reflector::new(),
-            gamepad_id: gamepad_id,
-            id: id,
+            gamepad_id,
+            id,
             index: Cell::new(index),
             connected: Cell::new(connected),
             timestamp: Cell::new(timestamp),
-            mapping_type: mapping_type,
-            axes: HeapTypedArray::default(),
+            mapping_type,
+            axes: HeapBufferSource::default(),
             buttons: Dom::from_ref(buttons),
             pose: pose.map(Dom::from_ref),
-            hand: hand,
-            axis_bounds: axis_bounds,
-            button_bounds: button_bounds,
+            hand,
+            axis_bounds,
+            button_bounds,
+            exposed: Cell::new(false),
         }
     }
 
@@ -105,7 +111,7 @@ impl Gamepad {
                 gamepad_id,
                 id,
                 0,
-                false,
+                true,
                 0.,
                 String::from("standard"),
                 &button_list,
@@ -150,9 +156,7 @@ impl GamepadMethods for Gamepad {
 
     // https://w3c.github.io/gamepad/#dom-gamepad-axes
     fn Axes(&self, _cx: JSContext) -> Float64Array {
-        self.axes
-            .get_internal()
-            .expect("Failed to get gamepad axes.")
+        self.axes.get_buffer().expect("Failed to get gamepad axes.")
     }
 
     // https://w3c.github.io/gamepad/#dom-gamepad-buttons
@@ -177,7 +181,7 @@ impl Gamepad {
         self.gamepad_id
     }
 
-    pub fn update_connected(&self, connected: bool) {
+    pub fn update_connected(&self, connected: bool, has_gesture: bool) {
         if self.connected.get() == connected {
             return;
         }
@@ -189,7 +193,9 @@ impl Gamepad {
             GamepadEventType::Disconnected
         };
 
-        self.notify_event(event_type);
+        if has_gesture {
+            self.notify_event(event_type);
+        }
     }
 
     pub fn update_index(&self, index: i32) {
@@ -201,7 +207,7 @@ impl Gamepad {
     }
 
     pub fn notify_event(&self, event_type: GamepadEventType) {
-        let event = GamepadEvent::new_with_type(&self.global(), event_type, &self);
+        let event = GamepadEvent::new_with_type(&self.global(), event_type, self);
         event
             .upcast::<Event>()
             .fire(self.global().as_window().upcast::<EventTarget>());
@@ -232,7 +238,7 @@ impl Gamepad {
             if normalized_value.is_finite() {
                 let mut axis_vec = self
                     .axes
-                    .internal_to_option()
+                    .buffer_to_option()
                     .expect("Axes have not been initialized!");
                 unsafe {
                     axis_vec.as_mut_slice()[axis_index] = normalized_value;
@@ -265,4 +271,26 @@ impl Gamepad {
             warn!("Button bounds difference is either 0 or non-finite!");
         }
     }
+
+    /// <https://www.w3.org/TR/gamepad/#dfn-exposed>
+    pub fn exposed(&self) -> bool {
+        self.exposed.get()
+    }
+
+    /// <https://www.w3.org/TR/gamepad/#dfn-exposed>
+    pub fn set_exposed(&self, exposed: bool) {
+        self.exposed.set(exposed);
+    }
+}
+
+/// <https://www.w3.org/TR/gamepad/#dfn-gamepad-user-gesture>
+pub fn contains_user_gesture(update_type: GamepadUpdateType) -> bool {
+    match update_type {
+        GamepadUpdateType::Axis(_, value) => {
+            return value.abs() > AXIS_TILT_THRESHOLD;
+        },
+        GamepadUpdateType::Button(_, value) => {
+            return value > BUTTON_PRESS_THRESHOLD;
+        },
+    };
 }

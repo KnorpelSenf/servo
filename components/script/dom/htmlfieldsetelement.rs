@@ -158,8 +158,8 @@ impl VirtualMethods for HTMLFieldSetElement {
 
     fn attribute_mutated(&self, attr: &Attr, mutation: AttributeMutation) {
         self.super_type().unwrap().attribute_mutated(attr, mutation);
-        match attr.local_name() {
-            &local_name!("disabled") => {
+        match *attr.local_name() {
+            local_name!("disabled") => {
                 let disabled_state = match mutation {
                     AttributeMutation::Set(None) => true,
                     AttributeMutation::Set(Some(_)) => {
@@ -186,20 +186,19 @@ impl VirtualMethods for HTMLFieldSetElement {
                 let fields = children.flat_map(|child| {
                     child
                         .traverse_preorder(ShadowIncluding::No)
-                        .filter(|descendant| match descendant.type_id() {
-                            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                                HTMLElementTypeId::HTMLButtonElement,
-                            )) |
-                            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                                HTMLElementTypeId::HTMLInputElement,
-                            )) |
-                            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                                HTMLElementTypeId::HTMLSelectElement,
-                            )) |
-                            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                                HTMLElementTypeId::HTMLTextAreaElement,
-                            )) => true,
-                            _ => false,
+                        .filter(|descendant| {
+                            matches!(
+                                descendant.type_id(),
+                                NodeTypeId::Element(ElementTypeId::HTMLElement(
+                                    HTMLElementTypeId::HTMLButtonElement,
+                                )) | NodeTypeId::Element(ElementTypeId::HTMLElement(
+                                    HTMLElementTypeId::HTMLInputElement,
+                                )) | NodeTypeId::Element(ElementTypeId::HTMLElement(
+                                    HTMLElementTypeId::HTMLSelectElement,
+                                )) | NodeTypeId::Element(ElementTypeId::HTMLElement(
+                                    HTMLElementTypeId::HTMLTextAreaElement,
+                                ))
+                            )
                         })
                 });
                 if disabled_state {
@@ -219,7 +218,7 @@ impl VirtualMethods for HTMLFieldSetElement {
                 }
                 el.update_sequentially_focusable_status();
             },
-            &local_name!("form") => {
+            local_name!("form") => {
                 self.form_attribute_mutated(mutation);
             },
             _ => {},
@@ -236,7 +235,7 @@ impl FormControl for HTMLFieldSetElement {
         self.form_owner.set(form);
     }
 
-    fn to_element<'a>(&'a self) -> &'a Element {
+    fn to_element(&self) -> &Element {
         self.upcast::<Element>()
     }
 }

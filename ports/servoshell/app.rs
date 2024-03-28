@@ -51,7 +51,7 @@ enum PumpResult {
     /// The caller should shut down Servo and its related context.
     Shutdown,
     Continue {
-        history_changed: bool,
+        update: bool,
         present: Present,
     },
 }
@@ -84,11 +84,9 @@ impl App {
 
         // Handle browser state.
         let webviews = WebViewManager::new(window.clone());
-        let initial_url = get_default_url(
-            url.as_ref().map(String::as_str),
-            env::current_dir().unwrap(),
-            |path| fs::metadata(path).is_ok(),
-        );
+        let initial_url = get_default_url(url.as_deref(), env::current_dir().unwrap(), |path| {
+            fs::metadata(path).is_ok()
+        });
 
         let mut app = App {
             event_queue: RefCell::new(vec![]),
@@ -142,19 +140,7 @@ impl App {
         let ev_waker = events_loop.create_event_loop_waker();
         events_loop.run_forever(move |event, w, control_flow| {
             let now = Instant::now();
-            match event {
-                // Uncomment to filter out logging of common events, which can be very noisy.
-                // winit::event::Event::DeviceEvent { .. } => {},
-                // winit::event::Event::WindowEvent {
-                //     event: WindowEvent::CursorMoved { .. },
-                //     ..
-                // } => {},
-                // winit::event::Event::MainEventsCleared => {},
-                // winit::event::Event::RedrawEventsCleared => {},
-                // winit::event::Event::UserEvent(..) => {},
-                // winit::event::Event::NewEvents(..) => {},
-                _ => trace!("@{:?} (+{:?}) {:?}", now - t_start, now - t, event),
-            }
+            trace_winit_event!(event, "@{:?} (+{:?}) {event:?}", now - t_start, now - t);
             t = now;
             match event {
                 winit::event::Event::NewEvents(winit::event::StartCause::Init) => {
@@ -270,7 +256,7 @@ impl App {
                         window.winit_window().unwrap().request_redraw();
                     },
                     winit::event::Event::WindowEvent { ref event, .. } => {
-                        let response = minibrowser.on_event(&event);
+                        let response = minibrowser.on_event(event);
                         if response.repaint {
                             // Request a winit redraw event, so we can recomposite, update and paint
                             // the minibrowser, and present the new frame.
@@ -312,14 +298,11 @@ impl App {
                         minibrowser.context.destroy();
                     }
                 },
-                PumpResult::Continue {
-                    history_changed,
-                    present,
-                } => {
-                    if history_changed {
+                PumpResult::Continue { update, present } => {
+                    if update {
                         if let Some(mut minibrowser) = app.minibrowser() {
                             let webviews = &mut app.webviews.borrow_mut();
-                            if minibrowser.update_location_in_toolbar(webviews) {
+                            if minibrowser.update_webview_data(webviews) {
                                 // Update the minibrowser immediately. While we could update by requesting a
                                 // redraw, doing so would delay the location update by two frames.
                                 minibrowser.update(
@@ -438,7 +421,7 @@ impl App {
 
         // Catch some keyboard events, and push the rest onto the WebViewManager event queue.
         webviews.handle_window_events(embedder_events);
-        if webviews.webview_id().is_some() {
+        if pref!(dom.gamepad.enabled) && webviews.webview_id().is_some() {
             webviews.handle_gamepad_events();
         }
 
@@ -446,12 +429,12 @@ impl App {
         let mut embedder_messages = self.servo.as_mut().unwrap().get_events();
         let mut need_resize = false;
         let mut need_present = false;
-        let mut history_changed = false;
+        let mut need_update = false;
         loop {
             // Consume and handle those embedder messages.
             let servo_event_response = webviews.handle_servo_events(embedder_messages);
             need_present |= servo_event_response.need_present;
-            history_changed |= servo_event_response.history_changed;
+            need_update |= servo_event_response.need_update;
 
             // Route embedder events from the WebViewManager to the relevant Servo components,
             // receives and collects embedder messages from various Servo components,
@@ -481,7 +464,7 @@ impl App {
         };
 
         PumpResult::Continue {
-            history_changed,
+            update: need_update,
             present,
         }
     }

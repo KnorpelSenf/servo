@@ -229,7 +229,7 @@ impl DissimilarOriginWindow {
         let target_origin = match target_origin.0[..].as_ref() {
             "*" => None,
             "/" => Some(source_origin.clone()),
-            url => match ServoUrl::parse(&url) {
+            url => match ServoUrl::parse(url) {
                 Ok(url) => Some(url.origin().clone()),
                 Err(_) => return Err(Error::Syntax),
             },
@@ -239,7 +239,7 @@ impl DissimilarOriginWindow {
             source: incumbent.pipeline_id(),
             source_origin,
             target_origin,
-            data: data,
+            data,
         };
         // Step 8
         let _ = incumbent.script_to_constellation_chan().send(msg);

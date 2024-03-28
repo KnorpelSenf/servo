@@ -126,7 +126,6 @@ impl HTMLStyleElement {
             Some(&loader),
             css_error_reporter,
             doc.quirks_mode(),
-            self.line_number as u32,
             AllowImportRules::Yes,
         );
 
@@ -276,8 +275,21 @@ impl StylesheetOwner for HTMLStyleElement {
 }
 
 impl HTMLStyleElementMethods for HTMLStyleElement {
-    // https://drafts.csswg.org/cssom/#dom-linkstyle-sheet
+    /// <https://drafts.csswg.org/cssom/#dom-linkstyle-sheet>
     fn GetSheet(&self) -> Option<DomRoot<DOMStyleSheet>> {
         self.get_cssom_stylesheet().map(DomRoot::upcast)
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-style-disabled>
+    fn Disabled(&self) -> bool {
+        self.get_cssom_stylesheet()
+            .map_or(false, |sheet| sheet.disabled())
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-style-disabled>
+    fn SetDisabled(&self, value: bool) {
+        if let Some(sheet) = self.get_cssom_stylesheet() {
+            sheet.set_disabled(value);
+        }
     }
 }

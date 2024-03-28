@@ -270,10 +270,10 @@ impl<T: ClipboardProvider> TextInput<T> {
             edit_point: Default::default(),
             selection_origin: None,
             multiline: lines == Lines::Multiple,
-            clipboard_provider: clipboard_provider,
-            max_length: max_length,
-            min_length: min_length,
-            selection_direction: selection_direction,
+            clipboard_provider,
+            max_length,
+            min_length,
+            selection_direction,
             was_last_change_by_set_content: true,
         };
         i.set_content(initial);
@@ -467,7 +467,7 @@ impl<T: ClipboardProvider> TextInput<T> {
         };
 
         let UTF8Bytes(last_char_index) =
-            len_of_first_n_code_units(&*insert, allowed_to_insert_count);
+            len_of_first_n_code_units(&insert, allowed_to_insert_count);
         let to_insert = &insert[..last_char_index];
 
         let (start, end) = self.sorted_selection_bounds();
@@ -481,7 +481,7 @@ impl<T: ClipboardProvider> TextInput<T> {
             let lines_suffix = &self.lines[end.line + 1..];
 
             let mut insert_lines = if self.multiline {
-                to_insert.split('\n').map(|s| DOMString::from(s)).collect()
+                to_insert.split('\n').map(DOMString::from).collect()
             } else {
                 vec![DOMString::from(to_insert)]
             };
@@ -610,7 +610,7 @@ impl<T: ClipboardProvider> TextInput<T> {
                 Direction::Backward => current_line[..current_offset].graphemes(true).next_back(),
             };
             match next_ch {
-                Some(c) => UTF8Bytes(c.len() as usize),
+                Some(c) => UTF8Bytes(c.len()),
                 None => UTF8Bytes::one(), // Going to the next line is a "one byte" offset
             }
         };
@@ -627,15 +627,13 @@ impl<T: ClipboardProvider> TextInput<T> {
             if self.selection_origin.is_none() {
                 self.selection_origin = Some(self.edit_point);
             }
-        } else {
-            if self.has_selection() {
-                self.edit_point = match adjust {
-                    Direction::Backward => self.selection_start(),
-                    Direction::Forward => self.selection_end(),
-                };
-                self.clear_selection();
-                return true;
-            }
+        } else if self.has_selection() {
+            self.edit_point = match adjust {
+                Direction::Backward => self.selection_start(),
+                Direction::Forward => self.selection_end(),
+            };
+            self.clear_selection();
+            return true;
         }
         false
     }
@@ -761,7 +759,7 @@ impl<T: ClipboardProvider> TextInput<T> {
                         match iter.next() {
                             None => break,
                             Some(x) => {
-                                shift_temp += UTF8Bytes(x.len() as usize);
+                                shift_temp += UTF8Bytes(x.len());
                                 if x.chars().any(|x| x.is_alphabetic() || x.is_numeric()) {
                                     break;
                                 }
@@ -786,7 +784,7 @@ impl<T: ClipboardProvider> TextInput<T> {
                         match iter.next() {
                             None => break,
                             Some(x) => {
-                                shift_temp += UTF8Bytes(x.len() as usize);
+                                shift_temp += UTF8Bytes(x.len());
                                 if x.chars().any(|x| x.is_alphabetic() || x.is_numeric()) {
                                     break;
                                 }
@@ -828,7 +826,7 @@ impl<T: ClipboardProvider> TextInput<T> {
             },
             Direction::Forward => {
                 self.edit_point.line = &self.lines.len() - 1;
-                self.edit_point.index = (&self.lines[&self.lines.len() - 1]).len_utf8();
+                self.edit_point.index = (self.lines[&self.lines.len() - 1]).len_utf8();
             },
         }
     }
@@ -1019,7 +1017,7 @@ impl<T: ClipboardProvider> TextInput<T> {
     pub fn get_content(&self) -> DOMString {
         let mut content = "".to_owned();
         for (i, line) in self.lines.iter().enumerate() {
-            content.push_str(&line);
+            content.push_str(line);
             if i < self.lines.len() - 1 {
                 content.push('\n');
             }
@@ -1093,10 +1091,7 @@ impl<T: ClipboardProvider> TextInput<T> {
                 }
             });
 
-        TextPoint {
-            line: line,
-            index: index,
-        }
+        TextPoint { line, index }
     }
 
     pub fn set_selection_range(&mut self, start: u32, end: u32, direction: SelectionDirection) {

@@ -4,7 +4,7 @@
 
 use std::cell::Cell;
 
-use cssparser::RGBA;
+use cssparser::RgbaLegacy;
 use dom_struct::dom_struct;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::rust::HandleObject;
@@ -144,9 +144,9 @@ impl HTMLTableElement {
 
         let section =
             HTMLTableSectionElement::new(atom.clone(), None, &document_from_node(self), None);
-        match atom {
-            &local_name!("thead") => self.SetTHead(Some(&section)),
-            &local_name!("tfoot") => self.SetTFoot(Some(&section)),
+        match *atom {
+            local_name!("thead") => self.SetTHead(Some(&section)),
+            local_name!("tfoot") => self.SetTFoot(Some(&section)),
             _ => unreachable!("unexpected section type"),
         }
         .expect("unexpected section type");
@@ -425,7 +425,7 @@ impl HTMLTableElementMethods for HTMLTableElement {
 }
 
 pub trait HTMLTableElementLayoutHelpers {
-    fn get_background_color(self) -> Option<RGBA>;
+    fn get_background_color(self) -> Option<RgbaLegacy>;
     fn get_border(self) -> Option<u32>;
     fn get_cellpadding(self) -> Option<u32>;
     fn get_cellspacing(self) -> Option<u32>;
@@ -433,7 +433,7 @@ pub trait HTMLTableElementLayoutHelpers {
 }
 
 impl HTMLTableElementLayoutHelpers for LayoutDom<'_, HTMLTableElement> {
-    fn get_background_color(self) -> Option<RGBA> {
+    fn get_background_color(self) -> Option<RgbaLegacy> {
         self.upcast::<Element>()
             .get_attr_for_layout(&ns!(), &local_name!("bgcolor"))
             .and_then(AttrValue::as_color)
@@ -442,17 +442,17 @@ impl HTMLTableElementLayoutHelpers for LayoutDom<'_, HTMLTableElement> {
 
     #[allow(unsafe_code)]
     fn get_border(self) -> Option<u32> {
-        unsafe { (*self.unsafe_get()).border.get() }
+        unsafe { (self.unsafe_get()).border.get() }
     }
 
     #[allow(unsafe_code)]
     fn get_cellpadding(self) -> Option<u32> {
-        unsafe { (*self.unsafe_get()).cellpadding.get() }
+        unsafe { (self.unsafe_get()).cellpadding.get() }
     }
 
     #[allow(unsafe_code)]
     fn get_cellspacing(self) -> Option<u32> {
-        unsafe { (*self.unsafe_get()).cellspacing.get() }
+        unsafe { (self.unsafe_get()).cellspacing.get() }
     }
 
     fn get_width(self) -> LengthOrPercentageOrAuto {

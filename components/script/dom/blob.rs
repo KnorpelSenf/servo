@@ -116,7 +116,7 @@ impl Serializable for Blob {
             _ => panic!("Unexpected variant of StructuredDataHolder"),
         };
 
-        let blob_id = self.blob_id.clone();
+        let blob_id = self.blob_id;
 
         // 1. Get a clone of the blob impl.
         let blob_impl = self.global().serialize_blob(&blob_id);
@@ -126,7 +126,7 @@ impl Serializable for Blob {
 
         // 2. Store the object at a given key.
         let blobs = blob_impls.get_or_insert_with(|| HashMap::new());
-        blobs.insert(new_blob_id.clone(), blob_impl);
+        blobs.insert(new_blob_id, blob_impl);
 
         let PipelineNamespaceId(name_space) = new_blob_id.namespace_id;
         let BlobIndex(index) = new_blob_id.index;
@@ -152,10 +152,9 @@ impl Serializable for Blob {
     ) -> Result<(), ()> {
         // 1. Re-build the key for the storage location
         // of the serialized object.
-        let namespace_id = PipelineNamespaceId(storage_key.name_space.clone());
-        let index = BlobIndex(
-            NonZeroU32::new(storage_key.index.clone()).expect("Deserialized blob index is zero"),
-        );
+        let namespace_id = PipelineNamespaceId(storage_key.name_space);
+        let index =
+            BlobIndex(NonZeroU32::new(storage_key.index).expect("Deserialized blob index is zero"));
 
         let id = BlobId {
             namespace_id,
@@ -180,7 +179,7 @@ impl Serializable for Blob {
             *blob_impls = None;
         }
 
-        let deserialized_blob = Blob::new(&*owner, blob_impl);
+        let deserialized_blob = Blob::new(owner, blob_impl);
 
         let blobs = blobs.get_or_insert_with(|| HashMap::new());
         blobs.insert(storage_key, deserialized_blob);
@@ -245,8 +244,8 @@ impl BlobMethods for Blob {
         let type_string =
             normalize_type_string(&content_type.unwrap_or(DOMString::from("")).to_string());
         let rel_pos = RelativePos::from_opts(start, end);
-        let blob_impl = BlobImpl::new_sliced(rel_pos, self.blob_id.clone(), type_string);
-        Blob::new(&*self.global(), blob_impl)
+        let blob_impl = BlobImpl::new_sliced(rel_pos, self.blob_id, type_string);
+        Blob::new(&self.global(), blob_impl)
     }
 
     // https://w3c.github.io/FileAPI/#text-method-algo

@@ -86,7 +86,7 @@ impl Request {
             // Step 5
             RequestInfo::USVString(USVString(ref usv_string)) => {
                 // Step 5.1
-                let parsed_url = base_url.join(&usv_string);
+                let parsed_url = base_url.join(usv_string);
                 // Step 5.2
                 if parsed_url.is_err() {
                     return Err(Error::Type("Url could not be parsed".to_string()));
@@ -179,7 +179,7 @@ impl Request {
         // Step 14
         if let Some(init_referrer) = init.referrer.as_ref() {
             // Step 14.1
-            let ref referrer = init_referrer.0;
+            let referrer = &init_referrer.0;
             // Step 14.2
             if referrer.is_empty() {
                 request.referrer = NetTraitsRequestReferrer::NoReferrer;
@@ -208,16 +208,12 @@ impl Request {
 
         // Step 15
         if let Some(init_referrerpolicy) = init.referrerPolicy.as_ref() {
-            let init_referrer_policy = init_referrerpolicy.clone().into();
+            let init_referrer_policy = (*init_referrerpolicy).into();
             request.referrer_policy = Some(init_referrer_policy);
         }
 
         // Step 16
-        let mode = init
-            .mode
-            .as_ref()
-            .map(|m| m.clone().into())
-            .or(fallback_mode);
+        let mode = init.mode.as_ref().map(|m| (*m).into()).or(fallback_mode);
 
         // Step 17
         if let Some(NetTraitsRequestMode::Navigate) = mode {
@@ -231,28 +227,28 @@ impl Request {
 
         // Step 19
         if let Some(init_credentials) = init.credentials.as_ref() {
-            let credentials = init_credentials.clone().into();
+            let credentials = (*init_credentials).into();
             request.credentials_mode = credentials;
         }
 
         // Step 20
         if let Some(init_cache) = init.cache.as_ref() {
-            let cache = init_cache.clone().into();
+            let cache = (*init_cache).into();
             request.cache_mode = cache;
         }
 
         // Step 21
-        if request.cache_mode == NetTraitsRequestCache::OnlyIfCached {
-            if request.mode != NetTraitsRequestMode::SameOrigin {
-                return Err(Error::Type(
-                    "Cache is 'only-if-cached' and mode is not 'same-origin'".to_string(),
-                ));
-            }
+        if request.cache_mode == NetTraitsRequestCache::OnlyIfCached &&
+            request.mode != NetTraitsRequestMode::SameOrigin
+        {
+            return Err(Error::Type(
+                "Cache is 'only-if-cached' and mode is not 'same-origin'".to_string(),
+            ));
         }
 
         // Step 22
         if let Some(init_redirect) = init.redirect.as_ref() {
-            let redirect = init_redirect.clone().into();
+            let redirect = (*init_redirect).into();
             request.redirect_mode = redirect;
         }
 
@@ -266,11 +262,11 @@ impl Request {
 
         // Step 25.1
         if let Some(init_method) = init.method.as_ref() {
-            if !is_method(&init_method) {
+            if !is_method(init_method) {
                 return Err(Error::Type("Method is not a method".to_string()));
             }
             // Step 25.2
-            if is_forbidden_method(&init_method) {
+            if is_forbidden_method(init_method) {
                 return Err(Error::Type("Method is forbidden".to_string()));
             }
             // Step 25.3
@@ -497,17 +493,15 @@ fn is_method(m: &ByteString) -> bool {
 
 // https://fetch.spec.whatwg.org/#forbidden-method
 fn is_forbidden_method(m: &ByteString) -> bool {
-    match m.to_lower().as_str() {
-        Some("connect") => true,
-        Some("trace") => true,
-        Some("track") => true,
-        _ => false,
-    }
+    matches!(
+        m.to_lower().as_str(),
+        Some("connect") | Some("trace") | Some("track")
+    )
 }
 
 // https://fetch.spec.whatwg.org/#cors-safelisted-method
 fn is_cors_safelisted_method(m: &HttpMethod) -> bool {
-    m == &HttpMethod::GET || m == &HttpMethod::HEAD || m == &HttpMethod::POST
+    m == HttpMethod::GET || m == HttpMethod::HEAD || m == HttpMethod::POST
 }
 
 // https://url.spec.whatwg.org/#include-credentials
@@ -672,9 +666,9 @@ impl BodyMixin for Request {
     }
 }
 
-impl Into<NetTraitsRequestCache> for RequestCache {
-    fn into(self) -> NetTraitsRequestCache {
-        match self {
+impl From<RequestCache> for NetTraitsRequestCache {
+    fn from(cache: RequestCache) -> Self {
+        match cache {
             RequestCache::Default => NetTraitsRequestCache::Default,
             RequestCache::No_store => NetTraitsRequestCache::NoStore,
             RequestCache::Reload => NetTraitsRequestCache::Reload,
@@ -685,9 +679,9 @@ impl Into<NetTraitsRequestCache> for RequestCache {
     }
 }
 
-impl Into<RequestCache> for NetTraitsRequestCache {
-    fn into(self) -> RequestCache {
-        match self {
+impl From<NetTraitsRequestCache> for RequestCache {
+    fn from(cache: NetTraitsRequestCache) -> Self {
+        match cache {
             NetTraitsRequestCache::Default => RequestCache::Default,
             NetTraitsRequestCache::NoStore => RequestCache::No_store,
             NetTraitsRequestCache::Reload => RequestCache::Reload,
@@ -698,9 +692,9 @@ impl Into<RequestCache> for NetTraitsRequestCache {
     }
 }
 
-impl Into<NetTraitsRequestCredentials> for RequestCredentials {
-    fn into(self) -> NetTraitsRequestCredentials {
-        match self {
+impl From<RequestCredentials> for NetTraitsRequestCredentials {
+    fn from(credentials: RequestCredentials) -> Self {
+        match credentials {
             RequestCredentials::Omit => NetTraitsRequestCredentials::Omit,
             RequestCredentials::Same_origin => NetTraitsRequestCredentials::CredentialsSameOrigin,
             RequestCredentials::Include => NetTraitsRequestCredentials::Include,
@@ -708,9 +702,9 @@ impl Into<NetTraitsRequestCredentials> for RequestCredentials {
     }
 }
 
-impl Into<RequestCredentials> for NetTraitsRequestCredentials {
-    fn into(self) -> RequestCredentials {
-        match self {
+impl From<NetTraitsRequestCredentials> for RequestCredentials {
+    fn from(credentials: NetTraitsRequestCredentials) -> Self {
+        match credentials {
             NetTraitsRequestCredentials::Omit => RequestCredentials::Omit,
             NetTraitsRequestCredentials::CredentialsSameOrigin => RequestCredentials::Same_origin,
             NetTraitsRequestCredentials::Include => RequestCredentials::Include,
@@ -718,9 +712,9 @@ impl Into<RequestCredentials> for NetTraitsRequestCredentials {
     }
 }
 
-impl Into<NetTraitsRequestDestination> for RequestDestination {
-    fn into(self) -> NetTraitsRequestDestination {
-        match self {
+impl From<RequestDestination> for NetTraitsRequestDestination {
+    fn from(destination: RequestDestination) -> Self {
+        match destination {
             RequestDestination::_empty => NetTraitsRequestDestination::None,
             RequestDestination::Audio => NetTraitsRequestDestination::Audio,
             RequestDestination::Document => NetTraitsRequestDestination::Document,
@@ -741,9 +735,9 @@ impl Into<NetTraitsRequestDestination> for RequestDestination {
     }
 }
 
-impl Into<RequestDestination> for NetTraitsRequestDestination {
-    fn into(self) -> RequestDestination {
-        match self {
+impl From<NetTraitsRequestDestination> for RequestDestination {
+    fn from(destination: NetTraitsRequestDestination) -> Self {
+        match destination {
             NetTraitsRequestDestination::None => RequestDestination::_empty,
             NetTraitsRequestDestination::Audio => RequestDestination::Audio,
             NetTraitsRequestDestination::Document => RequestDestination::Document,
@@ -769,9 +763,9 @@ impl Into<RequestDestination> for NetTraitsRequestDestination {
     }
 }
 
-impl Into<NetTraitsRequestMode> for RequestMode {
-    fn into(self) -> NetTraitsRequestMode {
-        match self {
+impl From<RequestMode> for NetTraitsRequestMode {
+    fn from(mode: RequestMode) -> Self {
+        match mode {
             RequestMode::Navigate => NetTraitsRequestMode::Navigate,
             RequestMode::Same_origin => NetTraitsRequestMode::SameOrigin,
             RequestMode::No_cors => NetTraitsRequestMode::NoCors,
@@ -780,9 +774,9 @@ impl Into<NetTraitsRequestMode> for RequestMode {
     }
 }
 
-impl Into<RequestMode> for NetTraitsRequestMode {
-    fn into(self) -> RequestMode {
-        match self {
+impl From<NetTraitsRequestMode> for RequestMode {
+    fn from(mode: NetTraitsRequestMode) -> Self {
+        match mode {
             NetTraitsRequestMode::Navigate => RequestMode::Navigate,
             NetTraitsRequestMode::SameOrigin => RequestMode::Same_origin,
             NetTraitsRequestMode::NoCors => RequestMode::No_cors,
@@ -796,9 +790,9 @@ impl Into<RequestMode> for NetTraitsRequestMode {
 
 // TODO
 // When whatwg/fetch PR #346 is merged, fix this.
-impl Into<MsgReferrerPolicy> for ReferrerPolicy {
-    fn into(self) -> MsgReferrerPolicy {
-        match self {
+impl From<ReferrerPolicy> for MsgReferrerPolicy {
+    fn from(policy: ReferrerPolicy) -> Self {
+        match policy {
             ReferrerPolicy::_empty => MsgReferrerPolicy::NoReferrer,
             ReferrerPolicy::No_referrer => MsgReferrerPolicy::NoReferrer,
             ReferrerPolicy::No_referrer_when_downgrade => {
@@ -816,9 +810,9 @@ impl Into<MsgReferrerPolicy> for ReferrerPolicy {
     }
 }
 
-impl Into<ReferrerPolicy> for MsgReferrerPolicy {
-    fn into(self) -> ReferrerPolicy {
-        match self {
+impl From<MsgReferrerPolicy> for ReferrerPolicy {
+    fn from(policy: MsgReferrerPolicy) -> Self {
+        match policy {
             MsgReferrerPolicy::NoReferrer => ReferrerPolicy::No_referrer,
             MsgReferrerPolicy::NoReferrerWhenDowngrade => {
                 ReferrerPolicy::No_referrer_when_downgrade
@@ -835,9 +829,9 @@ impl Into<ReferrerPolicy> for MsgReferrerPolicy {
     }
 }
 
-impl Into<NetTraitsRequestRedirect> for RequestRedirect {
-    fn into(self) -> NetTraitsRequestRedirect {
-        match self {
+impl From<RequestRedirect> for NetTraitsRequestRedirect {
+    fn from(redirect: RequestRedirect) -> Self {
+        match redirect {
             RequestRedirect::Follow => NetTraitsRequestRedirect::Follow,
             RequestRedirect::Error => NetTraitsRequestRedirect::Error,
             RequestRedirect::Manual => NetTraitsRequestRedirect::Manual,
@@ -845,9 +839,9 @@ impl Into<NetTraitsRequestRedirect> for RequestRedirect {
     }
 }
 
-impl Into<RequestRedirect> for NetTraitsRequestRedirect {
-    fn into(self) -> RequestRedirect {
-        match self {
+impl From<NetTraitsRequestRedirect> for RequestRedirect {
+    fn from(redirect: NetTraitsRequestRedirect) -> Self {
+        match redirect {
             NetTraitsRequestRedirect::Follow => RequestRedirect::Follow,
             NetTraitsRequestRedirect::Error => RequestRedirect::Error,
             NetTraitsRequestRedirect::Manual => RequestRedirect::Manual,
@@ -858,10 +852,10 @@ impl Into<RequestRedirect> for NetTraitsRequestRedirect {
 impl Clone for HeadersInit {
     fn clone(&self) -> HeadersInit {
         match self {
-            &HeadersInit::ByteStringSequenceSequence(ref b) => {
+            HeadersInit::ByteStringSequenceSequence(b) => {
                 HeadersInit::ByteStringSequenceSequence(b.clone())
             },
-            &HeadersInit::ByteStringByteStringRecord(ref m) => {
+            HeadersInit::ByteStringByteStringRecord(m) => {
                 HeadersInit::ByteStringByteStringRecord(m.clone())
             },
         }

@@ -64,7 +64,7 @@ where
     pub unsafe fn new(value: T) -> Self {
         unsafe fn add_to_root_list(object: *const dyn JSTraceable) -> *const RootCollection {
             assert_in_script();
-            STACK_ROOTS.with(|ref root_list| {
+            STACK_ROOTS.with(|root_list| {
                 let root_list = &*root_list.get().unwrap();
                 root_list.root(object);
                 root_list
@@ -121,7 +121,7 @@ where
                 if self.0.reflector().get_jsobject().is_null() {
                     self.0.trace(tracer);
                 } else {
-                    trace_reflector(tracer, "on stack", &self.0.reflector());
+                    trace_reflector(tracer, "on stack", self.0.reflector());
                 }
             }
         }
@@ -208,7 +208,7 @@ where
     T: DomObject,
 {
     fn clone(&self) -> DomRoot<T> {
-        DomRoot::from_ref(&*self)
+        DomRoot::from_ref(self)
     }
 }
 
@@ -244,7 +244,7 @@ impl<'a> ThreadLocalStackRoots<'a> {
 
 impl<'a> Drop for ThreadLocalStackRoots<'a> {
     fn drop(&mut self) {
-        STACK_ROOTS.with(|ref r| r.set(None));
+        STACK_ROOTS.with(|r| r.set(None));
     }
 }
 
@@ -282,7 +282,7 @@ impl RootCollection {
 /// SM Callback that traces the rooted reflectors
 pub unsafe fn trace_roots(tracer: *mut JSTracer) {
     debug!("tracing stack roots");
-    STACK_ROOTS.with(|ref collection| {
+    STACK_ROOTS.with(|collection| {
         let collection = &*(*collection.get().unwrap()).roots.get();
         for root in collection {
             (**root).trace(tracer);
@@ -509,9 +509,7 @@ impl<T> Clone for Dom<T> {
     #[allow(crown::unrooted_must_root)]
     fn clone(&self) -> Self {
         assert_in_script();
-        Dom {
-            ptr: self.ptr.clone(),
-        }
+        Dom { ptr: self.ptr }
     }
 }
 
@@ -718,7 +716,7 @@ where
         F: FnOnce() -> DomRoot<T>,
     {
         assert_in_script();
-        &self.ptr.get_or_init(|| Dom::from_ref(&cb()))
+        self.ptr.get_or_init(|| Dom::from_ref(&cb()))
     }
 }
 

@@ -75,7 +75,7 @@ impl WebGLTexture {
     ) -> Self {
         Self {
             webgl_object: WebGLObject::new_inherited(context),
-            id: id,
+            id,
             target: Cell::new(None),
             is_deleted: Cell::new(false),
             owner: owner
@@ -163,11 +163,11 @@ impl WebGLTexture {
         data_type: Option<TexDataType>,
     ) -> WebGLResult<()> {
         let image_info = ImageInfo {
-            width: width,
-            height: height,
-            depth: depth,
-            internal_format: internal_format,
-            data_type: data_type,
+            width,
+            height,
+            depth,
+            internal_format,
+            data_type,
         };
 
         let face_index = self.face_index_for_target(&target);
@@ -312,7 +312,7 @@ impl WebGLTexture {
             },
             constants::TEXTURE_MAG_FILTER => match int_value as u32 {
                 constants::NEAREST | constants::LINEAR => update_filter(&self.mag_filter),
-                _ => return Err(WebGLError::InvalidEnum),
+                _ => Err(WebGLError::InvalidEnum),
             },
             constants::TEXTURE_WRAP_S | constants::TEXTURE_WRAP_T => match int_value as u32 {
                 constants::CLAMP_TO_EDGE | constants::MIRRORED_REPEAT | constants::REPEAT => {
@@ -347,12 +347,14 @@ impl WebGLTexture {
 
     pub fn is_using_linear_filtering(&self) -> bool {
         let filters = [self.min_filter.get(), self.mag_filter.get()];
-        filters.iter().any(|filter| match *filter {
-            constants::LINEAR |
-            constants::NEAREST_MIPMAP_LINEAR |
-            constants::LINEAR_MIPMAP_NEAREST |
-            constants::LINEAR_MIPMAP_LINEAR => true,
-            _ => false,
+        filters.iter().any(|filter| {
+            matches!(
+                *filter,
+                constants::LINEAR |
+                    constants::NEAREST_MIPMAP_LINEAR |
+                    constants::LINEAR_MIPMAP_NEAREST |
+                    constants::LINEAR_MIPMAP_LINEAR
+            )
         })
     }
 
@@ -431,7 +433,7 @@ impl WebGLTexture {
     }
 
     pub fn image_info_for_target(&self, target: &TexImageTarget, level: u32) -> Option<ImageInfo> {
-        let face_index = self.face_index_for_target(&target);
+        let face_index = self.face_index_for_target(target);
         self.image_info_at_face(face_index, level)
     }
 

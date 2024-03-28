@@ -50,17 +50,11 @@ impl PseudoElementType {
     }
 
     pub fn is_before(&self) -> bool {
-        match *self {
-            PseudoElementType::Before => true,
-            _ => false,
-        }
+        matches!(*self, PseudoElementType::Before)
     }
 
     pub fn is_replaced_content(&self) -> bool {
-        match *self {
-            PseudoElementType::Before | PseudoElementType::After => true,
-            _ => false,
-        }
+        matches!(*self, PseudoElementType::Before | PseudoElementType::After)
     }
 
     pub fn style_pseudo_element(&self) -> PseudoElement {
@@ -138,9 +132,8 @@ where
     ConcreteNode: LayoutNode<'dom>,
 {
     fn new(root: ConcreteNode) -> TreeIterator<ConcreteNode> {
-        let mut stack = vec![];
-        stack.push(root);
-        TreeIterator { stack: stack }
+        let stack = vec![root];
+        TreeIterator { stack }
     }
 
     pub fn next_skipping_children(&mut self) -> Option<ConcreteNode> {
@@ -155,7 +148,9 @@ where
     type Item = ConcreteNode;
     fn next(&mut self) -> Option<ConcreteNode> {
         let ret = self.stack.pop();
-        ret.map(|node| self.stack.extend(node.rev_children()));
+        if let Some(node) = ret {
+            self.stack.extend(node.rev_children())
+        }
         ret
     }
 }
@@ -294,9 +289,9 @@ pub trait ThreadSafeLayoutNode<'dom>:
     /// not an iframe element, fails. Returns None if there is no nested browsing context.
     fn iframe_pipeline_id(&self) -> Option<PipelineId>;
 
-    fn get_colspan(&self) -> u32;
-
-    fn get_rowspan(&self) -> u32;
+    fn get_span(&self) -> Option<u32>;
+    fn get_colspan(&self) -> Option<u32>;
+    fn get_rowspan(&self) -> Option<u32>;
 
     fn fragment_type(&self) -> FragmentType {
         self.get_pseudo_element_type().fragment_type()
@@ -344,6 +339,10 @@ pub trait ThreadSafeLayoutElement<'dom>:
     /// We need this so that the functions defined on this trait can call
     /// lazily_compute_pseudo_element_style, which operates on TElement.
     unsafe fn unsafe_get(self) -> Self::ConcreteElement;
+
+    /// Get the local name of this element. See
+    /// <https://dom.spec.whatwg.org/#concept-element-local-name>.
+    fn get_local_name(&self) -> &LocalName;
 
     fn get_attr(&self, namespace: &Namespace, name: &LocalName) -> Option<&str>;
 

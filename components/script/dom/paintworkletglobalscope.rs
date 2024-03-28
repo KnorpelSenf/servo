@@ -136,11 +136,11 @@ impl PaintWorkletGlobalScope {
                 arguments,
                 sender,
             ) => {
-                let cache_hit = (&*self.cached_name.borrow() == &name) &&
+                let cache_hit = (*self.cached_name.borrow() == name) &&
                     (self.cached_size.get() == size) &&
                     (self.cached_device_pixel_ratio.get() == device_pixel_ratio) &&
-                    (&*self.cached_properties.borrow() == &properties) &&
-                    (&*self.cached_arguments.borrow() == &arguments);
+                    (*self.cached_properties.borrow() == properties) &&
+                    (*self.cached_arguments.borrow() == arguments);
                 let result = if cache_hit {
                     debug!("Cache hit on paint worklet {}!", name);
                     self.cached_result.borrow().clone()
@@ -150,13 +150,8 @@ impl PaintWorkletGlobalScope {
                         self.upcast(),
                         properties.iter().cloned(),
                     );
-                    let result = self.draw_a_paint_image(
-                        &name,
-                        size,
-                        device_pixel_ratio,
-                        &*map,
-                        &*arguments,
-                    );
+                    let result =
+                        self.draw_a_paint_image(&name, size, device_pixel_ratio, &map, &arguments);
                     if (result.image_key.is_some()) && (result.missing_image_urls.is_empty()) {
                         *self.cached_name.borrow_mut() = name;
                         self.cached_size.set(size);
@@ -170,9 +165,9 @@ impl PaintWorkletGlobalScope {
                 let _ = sender.send(result);
             },
             PaintWorkletTask::SpeculativelyDrawAPaintImage(name, properties, arguments) => {
-                let should_speculate = (&*self.cached_name.borrow() != &name) ||
-                    (&*self.cached_properties.borrow() != &properties) ||
-                    (&*self.cached_arguments.borrow() != &arguments);
+                let should_speculate = (*self.cached_name.borrow() != name) ||
+                    (*self.cached_properties.borrow() != properties) ||
+                    (*self.cached_arguments.borrow() != arguments);
                 if should_speculate {
                     let size = self.cached_size.get();
                     let device_pixel_ratio = self.cached_device_pixel_ratio.get();
@@ -180,13 +175,8 @@ impl PaintWorkletGlobalScope {
                         self.upcast(),
                         properties.iter().cloned(),
                     );
-                    let result = self.draw_a_paint_image(
-                        &name,
-                        size,
-                        device_pixel_ratio,
-                        &*map,
-                        &*arguments,
-                    );
+                    let result =
+                        self.draw_a_paint_image(&name, size, device_pixel_ratio, &map, &arguments);
                     if (result.image_key.is_some()) && (result.missing_image_urls.is_empty()) {
                         *self.cached_name.borrow_mut() = name;
                         *self.cached_properties.borrow_mut() = properties;
@@ -322,7 +312,7 @@ impl PaintWorkletGlobalScope {
             .map(|argument| ObjectValue(argument.reflector().get_jsobject().get()))
             .collect();
         let arguments_value_array =
-            unsafe { HandleValueArray::from_rooted_slice(&*arguments_value_vec) };
+            unsafe { HandleValueArray::from_rooted_slice(&arguments_value_vec) };
         rooted!(in(*cx) let argument_object = unsafe { NewArrayObject(*cx, &arguments_value_array) });
 
         let args_slice = [
@@ -366,8 +356,8 @@ impl PaintWorkletGlobalScope {
             width: size_in_dpx.width,
             height: size_in_dpx.height,
             format: PixelFormat::BGRA8,
-            image_key: image_key,
-            missing_image_urls: missing_image_urls,
+            image_key,
+            missing_image_urls,
         }
     }
 
@@ -379,11 +369,11 @@ impl PaintWorkletGlobalScope {
     ) -> DrawAPaintImageResult {
         debug!("Returning an invalid image.");
         DrawAPaintImageResult {
-            width: size.width as u32,
-            height: size.height as u32,
+            width: size.width,
+            height: size.height,
             format: PixelFormat::BGRA8,
             image_key: None,
-            missing_image_urls: missing_image_urls,
+            missing_image_urls,
         }
     }
 
@@ -439,7 +429,7 @@ impl PaintWorkletGlobalScope {
             }
         }
         Box::new(WorkletPainter {
-            name: name,
+            name,
             executor: Mutex::new(self.worklet_global.executor()),
         })
     }
@@ -492,7 +482,7 @@ impl PaintDefinition {
             paint_function: Heap::default(),
             constructor_valid_flag: Cell::new(true),
             context_alpha_flag: alpha,
-            input_arguments_len: input_arguments_len,
+            input_arguments_len,
             context: Dom::from_ref(context),
         });
         result.class_constructor.set(class_constructor.get());
@@ -576,7 +566,7 @@ impl PaintWorkletGlobalScopeMethods for PaintWorkletGlobalScope {
             paint_function.handle(),
             alpha,
             input_arguments.len(),
-            &*context,
+            &context,
         );
 
         // Step 20.

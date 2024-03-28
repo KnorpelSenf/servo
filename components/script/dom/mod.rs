@@ -197,7 +197,7 @@
 //! Layout code can access the DOM through the
 //! [`LayoutDom`](bindings/root/struct.LayoutDom.html) smart pointer. This does not
 //! keep the DOM object alive; we ensure that no DOM code (Garbage Collection
-//! in particular) runs while the layout thread is accessing the DOM.
+//! in particular) runs while layout is accessing the DOM.
 //!
 //! Methods accessible to layout are implemented on `LayoutDom<Foo>` using
 //! `LayoutFooHelpers` traits.
@@ -209,6 +209,7 @@ pub mod types {
     include!(concat!(env!("OUT_DIR"), "/InterfaceTypes.rs"));
 }
 
+pub mod abstractrange;
 pub mod abstractworker;
 pub mod abstractworkerglobalscope;
 pub mod activation;
@@ -263,6 +264,8 @@ pub mod cssgroupingrule;
 pub mod cssimportrule;
 pub mod csskeyframerule;
 pub mod csskeyframesrule;
+pub mod csslayerblockrule;
+pub mod csslayerstatementrule;
 pub mod cssmediarule;
 pub mod cssnamespacerule;
 pub mod cssrule;
@@ -334,6 +337,7 @@ pub mod gpucompilationinfo;
 pub mod gpucompilationmessage;
 pub mod gpucomputepassencoder;
 pub mod gpucomputepipeline;
+pub mod gpuconvert;
 pub mod gpudevice;
 pub mod gpudevicelostinfo;
 pub mod gpumapmode;
@@ -521,6 +525,7 @@ pub mod serviceworkerglobalscope;
 pub mod serviceworkerregistration;
 pub mod servoparser;
 pub mod shadowroot;
+pub mod staticrange;
 pub mod stereopannernode;
 pub mod storage;
 pub mod storageevent;

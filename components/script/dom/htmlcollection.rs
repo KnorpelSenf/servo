@@ -43,7 +43,7 @@ impl OptionU32 {
 
     fn some(bits: u32) -> OptionU32 {
         assert_ne!(bits, u32::max_value());
-        OptionU32 { bits: bits }
+        OptionU32 { bits }
     }
 
     fn none() -> OptionU32 {
@@ -77,7 +77,7 @@ impl HTMLCollection {
         HTMLCollection {
             reflector_: Reflector::new(),
             root: Dom::from_ref(root),
-            filter: filter,
+            filter,
             // Default values for the cache
             cached_version: Cell::new(root.inclusive_descendants_version()),
             cached_cursor_element: MutNullableDom::new(None),
@@ -185,7 +185,7 @@ impl HTMLCollection {
 
         let filter = HtmlDocumentFilter {
             ascii_lower_qualified_name: qualified_name.to_ascii_lowercase(),
-            qualified_name: qualified_name,
+            qualified_name,
         };
         HTMLCollection::create(window, root, Box::new(filter))
     }
@@ -195,7 +195,7 @@ impl HTMLCollection {
             None => elem.local_name() == qualified_name,
             Some(prefix) => {
                 qualified_name.starts_with(&**prefix) &&
-                    qualified_name.find(":") == Some(prefix.len()) &&
+                    qualified_name.find(':') == Some(prefix.len()) &&
                     qualified_name.ends_with(&**elem.local_name())
             },
         }
@@ -230,7 +230,7 @@ impl HTMLCollection {
                         (self.qname.local == *elem.local_name()))
             }
         }
-        let filter = TagNameNSFilter { qname: qname };
+        let filter = TagNameNSFilter { qname };
         HTMLCollection::create(window, root, Box::new(filter))
     }
 
@@ -269,7 +269,7 @@ impl HTMLCollection {
             return HTMLCollection::always_empty(window, root);
         }
 
-        let filter = ClassNameFilter { classes: classes };
+        let filter = ClassNameFilter { classes };
         HTMLCollection::create(window, root, Box::new(filter))
     }
 
@@ -292,12 +292,12 @@ impl HTMLCollection {
         after
             .following_nodes(&self.root)
             .filter_map(DomRoot::downcast)
-            .filter(move |element| self.filter.filter(&element, &self.root))
+            .filter(move |element| self.filter.filter(element, &self.root))
     }
 
-    pub fn elements_iter<'a>(&'a self) -> impl Iterator<Item = DomRoot<Element>> + 'a {
+    pub fn elements_iter(&self) -> impl Iterator<Item = DomRoot<Element>> + '_ {
         // Iterate forwards from the root.
-        self.elements_iter_after(&*self.root)
+        self.elements_iter_after(&self.root)
     }
 
     pub fn elements_iter_before<'a>(
@@ -308,7 +308,7 @@ impl HTMLCollection {
         before
             .preceding_nodes(&self.root)
             .filter_map(DomRoot::downcast)
-            .filter(move |element| self.filter.filter(&element, &self.root))
+            .filter(move |element| self.filter.filter(element, &self.root))
     }
 
     pub fn root_node(&self) -> DomRoot<Node> {

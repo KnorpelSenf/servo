@@ -27,7 +27,7 @@ use crate::dom::performanceobserverentrylist::PerformanceObserverEntryList;
 use crate::script_runtime::JSContext;
 
 /// List of allowed performance entry types, in alphabetical order.
-pub const VALID_ENTRY_TYPES: &'static [&'static str] = &[
+pub const VALID_ENTRY_TYPES: &[&str] = &[
     // "frame", //TODO Frame Timing API
     "mark",       // User Timing API
     "measure",    // User Timing API
@@ -186,13 +186,13 @@ impl PerformanceObserverMethods for PerformanceObserver {
             let entry_types = entry_types
                 .iter()
                 .filter(|e| VALID_ENTRY_TYPES.contains(&e.as_ref()))
-                .map(|e| e.clone())
+                .cloned()
                 .collect::<Vec<DOMString>>();
 
             // Step 6.3
             if entry_types.is_empty() {
                 Console::internal_warn(
-                    &*self.global(),
+                    &self.global(),
                     DOMString::from("No valid entry type provided to observe()."),
                 );
                 return Ok(());
@@ -209,7 +209,7 @@ impl PerformanceObserverMethods for PerformanceObserver {
             // Step 7.2
             if !VALID_ENTRY_TYPES.contains(&entry_type.as_ref()) {
                 Console::internal_warn(
-                    &*self.global(),
+                    &self.global(),
                     DOMString::from("No valid entry type provided to observe()."),
                 );
                 return Ok(());
@@ -244,6 +244,6 @@ impl PerformanceObserverMethods for PerformanceObserver {
             .map(|entry| DomRoot::from_ref(&**entry))
             .collect();
         entries.clear();
-        return taken;
+        taken
     }
 }

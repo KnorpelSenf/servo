@@ -47,8 +47,8 @@ impl BaseFragment {
 /// Information necessary to construct a new BaseFragment.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct BaseFragmentInfo {
-    /// The tag to use for the new BaseFragment.
-    pub tag: Tag,
+    /// The tag to use for the new BaseFragment, if it is not an anonymous Fragment.
+    pub tag: Option<Tag>,
 
     /// The flags to use for the new BaseFragment.
     pub flags: FragmentFlags,
@@ -57,7 +57,14 @@ pub(crate) struct BaseFragmentInfo {
 impl BaseFragmentInfo {
     pub(crate) fn new_for_node(node: OpaqueNode) -> Self {
         Self {
-            tag: Tag::new(node),
+            tag: Some(Tag::new(node)),
+            flags: FragmentFlags::empty(),
+        }
+    }
+
+    pub(crate) fn anonymous() -> Self {
+        Self {
+            tag: None,
             flags: FragmentFlags::empty(),
         }
     }
@@ -66,7 +73,7 @@ impl BaseFragmentInfo {
 impl From<BaseFragmentInfo> for BaseFragment {
     fn from(info: BaseFragmentInfo) -> Self {
         Self {
-            tag: Some(info.tag),
+            tag: info.tag,
             debug_id: DebugId::new(),
             flags: info.flags,
         }
@@ -77,8 +84,13 @@ bitflags! {
     /// Flags used to track various information about a DOM node during layout.
     #[derive(Clone, Copy, Debug, Serialize)]
     pub(crate) struct FragmentFlags: u8 {
-        /// Whether or not this node is a body element on an HTML document.
+        /// Whether or not the node that created this fragment is a `<body>` element on an HTML document.
         const IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT = 0b00000001;
+        /// Whether or not the node that created this Fragment is a `<br>` element.
+        const IS_BR_ELEMENT = 0b00000010;
+        /// Whether or not this Fragment was created to contain a replaced element or is
+        /// a replaced element.
+        const IS_REPLACED = 0b00000100;
     }
 }
 
@@ -108,7 +120,7 @@ impl Tag {
         self.pseudo.is_some()
     }
 
-    pub(crate) fn to_display_list_fragment_id(&self) -> u64 {
+    pub(crate) fn to_display_list_fragment_id(self) -> u64 {
         let fragment_type = match self.pseudo {
             Some(PseudoElement::Before) => FragmentType::BeforePseudoContent,
             Some(PseudoElement::After) => FragmentType::AfterPseudoContent,

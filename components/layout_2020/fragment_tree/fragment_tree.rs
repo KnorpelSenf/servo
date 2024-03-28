@@ -6,6 +6,7 @@ use app_units::Au;
 use euclid::default::{Point2D, Rect, Size2D};
 use fxhash::FxHashSet;
 use gfx_traits::print_tree::PrintTree;
+use script_traits::compositor::ScrollSensitivity;
 use serde::Serialize;
 use style::animation::AnimationSetKey;
 use style::dom::OpaqueNode;
@@ -16,7 +17,7 @@ use super::{ContainingBlockManager, Fragment, Tag};
 use crate::cell::ArcRefCell;
 use crate::display_list::StackingContext;
 use crate::flow::CanvasBackground;
-use crate::geom::PhysicalRect;
+use crate::geom::{physical_rect_to_au_rect, PhysicalRect};
 
 #[derive(Serialize)]
 pub struct FragmentTree {
@@ -40,6 +41,9 @@ pub struct FragmentTree {
     /// <https://drafts.csswg.org/css-backgrounds/#special-backgrounds>
     #[serde(skip)]
     pub(crate) canvas_background: CanvasBackground,
+
+    /// Whether or not the root element is sensitive to scroll input events.
+    pub root_scroll_sensitivity: ScrollSensitivity,
 }
 
 impl FragmentTree {
@@ -93,9 +97,13 @@ impl FragmentTree {
         });
     }
 
-    pub fn get_content_box_for_node(&self, requested_node: OpaqueNode) -> Option<Rect<Au>> {
-        let mut bounding_box = PhysicalRect::zero();
-        let mut found_any_nodes = false;
+    /// Get the vector of rectangles that surrounds the fragments of the node with the given address.
+    /// This function answers the `getClientRects()` query and the union of the rectangles answers
+    /// the `getBoundingClientRect()` query.
+    ///
+    /// TODO: This function is supposed to handle scroll offsets, but that isn't happening at all.
+    pub fn get_content_boxes_for_node(&self, requested_node: OpaqueNode) -> Vec<Rect<Au>> {
+        let mut content_boxes = Vec::new();
         let tag_to_find = Tag::new(requested_node);
         self.find(|fragment, _, containing_block| {
             if fragment.tag() != Some(tag_to_find) {
@@ -106,36 +114,23 @@ impl FragmentTree {
                 Fragment::Box(fragment) | Fragment::Float(fragment) => fragment
                     .border_rect()
                     .to_physical(fragment.style.writing_mode, containing_block),
+                Fragment::Positioning(fragment) => fragment
+                    .rect
+                    .to_physical(fragment.writing_mode, containing_block),
                 Fragment::Text(fragment) => fragment
                     .rect
                     .to_physical(fragment.parent_style.writing_mode, containing_block),
                 Fragment::AbsoluteOrFixedPositioned(_) |
                 Fragment::Image(_) |
-                Fragment::IFrame(_) |
-                Fragment::Anonymous(_) => return None,
+                Fragment::IFrame(_) => return None,
             };
 
-            found_any_nodes = true;
-            bounding_box = fragment_relative_rect
-                .translate(containing_block.origin.to_vector())
-                .union(&bounding_box);
+            content_boxes.push(physical_rect_to_au_rect(
+                fragment_relative_rect.translate(containing_block.origin.to_vector()),
+            ));
             None::<()>
         });
-
-        if found_any_nodes {
-            Some(Rect::new(
-                Point2D::new(
-                    Au::from_f32_px(bounding_box.origin.x.px()),
-                    Au::from_f32_px(bounding_box.origin.y.px()),
-                ),
-                Size2D::new(
-                    Au::from_f32_px(bounding_box.size.width.px()),
-                    Au::from_f32_px(bounding_box.size.height.px()),
-                ),
-            ))
-        } else {
-            None
-        }
+        content_boxes
     }
 
     pub fn get_border_dimensions_for_node(&self, requested_node: OpaqueNode) -> Rect<i32> {
@@ -145,37 +140,41 @@ impl FragmentTree {
                 return None;
             }
 
-            let (style, padding_rect) = match fragment {
-                Fragment::Box(fragment) => (&fragment.style, fragment.padding_rect()),
+            let rect = match fragment {
+                Fragment::Box(fragment) => {
+                    // https://drafts.csswg.org/cssom-view/#dom-element-clienttop
+                    // " If the element has no associated CSS layout box or if the
+                    //   CSS layout box is inline, return zero." For this check we
+                    // also explicitly ignore the list item portion of the display
+                    // style.
+                    if fragment.style.get_box().display.is_inline_flow() {
+                        return Some(Rect::zero());
+                    }
+
+                    let border = fragment.style.get_border();
+                    let padding_rect = fragment
+                        .padding_rect()
+                        .to_physical(fragment.style.writing_mode, containing_block);
+                    Rect::new(
+                        Point2D::new(
+                            border.border_left_width.into(),
+                            border.border_top_width.into(),
+                        ),
+                        Size2D::new(padding_rect.size.width, padding_rect.size.height),
+                    )
+                },
+                Fragment::Positioning(fragment) => fragment
+                    .rect
+                    .to_physical(fragment.writing_mode, containing_block)
+                    .cast_unit(),
                 _ => return None,
             };
 
-            // https://drafts.csswg.org/cssom-view/#dom-element-clienttop
-            // " If the element has no associated CSS layout box or if the
-            //   CSS layout box is inline, return zero." For this check we
-            // also explicitly ignore the list item portion of the display
-            // style.
-            let display = &style.get_box().display;
-            if display.inside() == style::values::specified::box_::DisplayInside::Flow &&
-                display.outside() == style::values::specified::box_::DisplayOutside::Inline
-            {
-                return Some(Rect::zero());
-            }
-
-            let border = style.get_border();
-            let padding_rect = padding_rect.to_physical(style.writing_mode, containing_block);
-            Some(
-                Rect::new(
-                    Point2D::new(
-                        border.border_left_width.to_f32_px(),
-                        border.border_top_width.to_f32_px(),
-                    ),
-                    Size2D::new(padding_rect.size.width.px(), padding_rect.size.height.px()),
-                )
-                .round()
-                .to_i32()
-                .to_untyped(),
-            )
+            let rect = Rect::new(
+                Point2D::new(rect.origin.x.px(), rect.origin.y.px()),
+                Size2D::new(rect.size.width.px(), rect.size.height.px()),
+            );
+            Some(rect.round().to_i32().to_untyped())
         })
         .unwrap_or_else(Rect::zero)
     }

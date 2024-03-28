@@ -2,10 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+#![allow(clippy::too_many_arguments)]
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use background_hang_monitor::HangMonitorRegister;
@@ -16,13 +17,12 @@ use crossbeam_channel::{unbounded, Sender};
 use devtools_traits::{DevtoolsControlMsg, ScriptToDevtoolsControlMsg};
 use embedder_traits::EventLoopWaker;
 use gfx::font_cache_thread::FontCacheThread;
+use gfx_traits::Epoch;
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 use ipc_channel::router::ROUTER;
 use ipc_channel::Error;
-use layout_traits::LayoutThreadFactory;
 use log::{debug, error, warn};
 use media::WindowGLContext;
-use metrics::PaintTimeMetrics;
 use msg::constellation_msg::{
     BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, BrowsingContextId,
     HangMonitorAlert, HistoryStateId, PipelineId, PipelineNamespace, PipelineNamespaceId,
@@ -32,10 +32,11 @@ use net::image_cache::ImageCacheImpl;
 use net_traits::image_cache::ImageCache;
 use net_traits::ResourceThreads;
 use profile_traits::{mem as profile_mem, time};
+use script_layout_interface::{LayoutFactory, ScriptThreadFactory};
 use script_traits::{
     AnimationState, ConstellationControlMsg, DiscardBrowsingContext, DocumentActivity,
-    InitialScriptState, LayoutControlMsg, LayoutMsg, LoadData, NewLayoutInfo, SWManagerMsg,
-    ScriptThreadFactory, ScriptToConstellationChan, TimerSchedulerMsg, WindowSizeData,
+    InitialScriptState, LayoutMsg, LoadData, NewLayoutInfo, SWManagerMsg,
+    ScriptToConstellationChan, TimerSchedulerMsg, WindowSizeData,
 };
 use serde::{Deserialize, Serialize};
 use servo_config::opts::{self, Opts};
@@ -47,10 +48,8 @@ use webrender_api::DocumentId;
 use crate::event_loop::EventLoop;
 use crate::sandboxing::{spawn_multiprocess, UnprivilegedContent};
 
-/// A `Pipeline` is the constellation's view of a `Document`. Each pipeline has an
-/// event loop (executed by a script thread) and a layout thread. A script thread
-/// may be responsible for many pipelines, but a layout thread is only responsible
-/// for one.
+/// A `Pipeline` is the constellation's view of a `Window`. Each pipeline has an event loop
+/// (executed by a script thread). A script thread may be responsible for many pipelines.
 pub struct Pipeline {
     /// The ID of the pipeline.
     pub id: PipelineId,
@@ -65,9 +64,6 @@ pub struct Pipeline {
 
     /// The event loop handling this pipeline.
     pub event_loop: Rc<EventLoop>,
-
-    /// A channel to layout, for performing reflows and shutdown.
-    pub layout_chan: IpcSender<LayoutControlMsg>,
 
     /// A channel to the compositor.
     pub compositor_proxy: CompositorProxy,
@@ -98,6 +94,10 @@ pub struct Pipeline {
 
     /// The title of this pipeline's document.
     pub title: String,
+
+    /// The last compositor [`Epoch`] that was laid out in this pipeline if "exit after load" is
+    /// enabled.
+    pub layout_epoch: Epoch,
 }
 
 /// Initial setup data needed to construct a pipeline.
@@ -133,8 +133,11 @@ pub struct InitialPipelineState {
     /// A channel for the background hang monitor to send messages to the constellation.
     pub background_hang_monitor_to_constellation_chan: IpcSender<HangMonitorAlert>,
 
-    /// A channel for the layout thread to send messages to the constellation.
+    /// A channel for the layout to send messages to the constellation.
     pub layout_to_constellation_chan: IpcSender<LayoutMsg>,
+
+    /// A fatory for creating layouts to be used by the ScriptThread.
+    pub layout_factory: Arc<dyn LayoutFactory>,
 
     /// A channel to schedule timer events.
     pub scheduler_chan: IpcSender<TimerSchedulerMsg>,
@@ -175,11 +178,11 @@ pub struct InitialPipelineState {
     /// Information about the page to load.
     pub load_data: LoadData,
 
-    /// Whether the browsing context in which pipeline is embedded is visible
-    /// for the purposes of scheduling and resource management. This field is
-    /// only used to notify script and compositor threads after spawning
-    /// a pipeline.
-    pub prev_visibility: bool,
+    /// Whether the browsing context in which pipeline is embedded is throttled,
+    /// using less resources by stopping animations and running timers at a
+    /// heavily limited rate. This field is only used to notify script and
+    /// compositor threads after spawning a pipeline.
+    pub prev_throttled: bool,
 
     /// Webrender api.
     pub webrender_image_api_sender: net_traits::WebrenderIpcSender,
@@ -212,17 +215,12 @@ pub struct NewPipeline {
 }
 
 impl Pipeline {
-    /// Starts a layout thread, and possibly a script thread, in
-    /// a new process if requested.
-    pub fn spawn<Message, LTF, STF>(state: InitialPipelineState) -> Result<NewPipeline, Error>
-    where
-        LTF: LayoutThreadFactory<Message = Message>,
-        STF: ScriptThreadFactory<Message = Message>,
-    {
+    /// Possibly starts a script thread, in a new process if requested.
+    pub fn spawn<STF: ScriptThreadFactory>(
+        state: InitialPipelineState,
+    ) -> Result<NewPipeline, Error> {
         // Note: we allow channel creation to panic, since recovering from this
         // probably requires a general low-memory strategy.
-        let (pipeline_chan, pipeline_port) = ipc::channel().expect("Pipeline main chan");
-
         let (script_chan, bhm_control_chan) = match state.event_loop {
             Some(script_chan) => {
                 let new_layout_info = NewLayoutInfo {
@@ -233,7 +231,6 @@ impl Pipeline {
                     opener: state.opener,
                     load_data: state.load_data.clone(),
                     window_size: state.window_size,
-                    pipeline_port: pipeline_port,
                 };
 
                 if let Err(e) =
@@ -296,10 +293,9 @@ impl Pipeline {
                     layout_to_constellation_chan: state.layout_to_constellation_chan,
                     script_chan: script_chan.clone(),
                     load_data: state.load_data.clone(),
-                    script_port: script_port,
+                    script_port,
                     opts: (*opts::get()).clone(),
                     prefs: prefs::pref_map().iter().collect(),
-                    pipeline_port: pipeline_port,
                     pipeline_namespace_id: state.pipeline_namespace_id,
                     webrender_api_sender: state.webrender_api_sender,
                     webrender_image_api_sender: state.webrender_image_api_sender,
@@ -317,14 +313,18 @@ impl Pipeline {
                     let (bhm_control_chan, bhm_control_port) =
                         ipc::channel().expect("Sampler chan");
                     unprivileged_pipeline_content.bhm_control_port = Some(bhm_control_port);
-                    let _ = unprivileged_pipeline_content.spawn_multiprocess()?;
+                    unprivileged_pipeline_content.spawn_multiprocess()?;
                     Some(bhm_control_chan)
                 } else {
                     // Should not be None in single-process mode.
                     let register = state
                         .background_monitor_register
                         .expect("Couldn't start content, no background monitor has been initiated");
-                    unprivileged_pipeline_content.start_all::<Message, LTF, STF>(false, register);
+                    unprivileged_pipeline_content.start_all::<STF>(
+                        false,
+                        state.layout_factory,
+                        register,
+                    );
                     None
                 };
 
@@ -338,9 +338,8 @@ impl Pipeline {
             state.top_level_browsing_context_id,
             state.opener,
             script_chan,
-            pipeline_chan,
             state.compositor_proxy,
-            state.prev_visibility,
+            state.prev_throttled,
             state.load_data,
         );
         Ok(NewPipeline {
@@ -349,38 +348,36 @@ impl Pipeline {
         })
     }
 
-    /// Creates a new `Pipeline`, after the script and layout threads have been
-    /// spawned.
+    /// Creates a new `Pipeline`, after the script has been spawned.
     pub fn new(
         id: PipelineId,
         browsing_context_id: BrowsingContextId,
         top_level_browsing_context_id: TopLevelBrowsingContextId,
         opener: Option<BrowsingContextId>,
         event_loop: Rc<EventLoop>,
-        layout_chan: IpcSender<LayoutControlMsg>,
         compositor_proxy: CompositorProxy,
-        is_visible: bool,
+        throttled: bool,
         load_data: LoadData,
     ) -> Pipeline {
         let pipeline = Pipeline {
-            id: id,
-            browsing_context_id: browsing_context_id,
-            top_level_browsing_context_id: top_level_browsing_context_id,
-            opener: opener,
-            event_loop: event_loop,
-            layout_chan: layout_chan,
-            compositor_proxy: compositor_proxy,
+            id,
+            browsing_context_id,
+            top_level_browsing_context_id,
+            opener,
+            event_loop,
+            compositor_proxy,
             url: load_data.url.clone(),
             children: vec![],
             animation_state: AnimationState::NoAnimationsPresent,
-            load_data: load_data,
+            load_data,
             history_state_id: None,
             history_states: HashSet::new(),
             completely_loaded: false,
             title: String::new(),
+            layout_epoch: Epoch(0),
         };
 
-        pipeline.notify_visibility(is_visible);
+        pipeline.set_throttled(throttled);
 
         pipeline
     }
@@ -418,9 +415,6 @@ impl Pipeline {
         if let Err(e) = self.event_loop.send(msg) {
             warn!("Sending script exit message failed ({}).", e);
         }
-        if let Err(e) = self.layout_chan.send(LayoutControlMsg::ExitNow) {
-            warn!("Sending layout exit message failed ({}).", e);
-        }
     }
 
     /// Notify this pipeline of its activity.
@@ -434,10 +428,9 @@ impl Pipeline {
     /// The compositor's view of a pipeline.
     pub fn to_sendable(&self) -> CompositionPipeline {
         CompositionPipeline {
-            id: self.id.clone(),
-            top_level_browsing_context_id: self.top_level_browsing_context_id.clone(),
+            id: self.id,
+            top_level_browsing_context_id: self.top_level_browsing_context_id,
             script_chan: self.event_loop.sender(),
-            layout_chan: self.layout_chan.clone(),
         }
     }
 
@@ -454,22 +447,25 @@ impl Pipeline {
             .position(|id| *id == browsing_context_id)
         {
             None => {
-                return warn!(
+                warn!(
                     "Pipeline remove child already removed ({:?}).",
                     browsing_context_id
-                );
+                )
             },
-            Some(index) => self.children.remove(index),
-        };
+            Some(index) => {
+                self.children.remove(index);
+            },
+        }
     }
 
-    /// Notify the script thread that this pipeline is visible.
-    pub fn notify_visibility(&self, is_visible: bool) {
-        let script_msg = ConstellationControlMsg::ChangeFrameVisibilityStatus(self.id, is_visible);
-        let compositor_msg = CompositorMsg::PipelineVisibilityChanged(self.id, is_visible);
+    /// Set whether to make pipeline use less resources, by stopping animations and
+    /// running timers at a heavily limited rate.
+    pub fn set_throttled(&self, throttled: bool) {
+        let script_msg = ConstellationControlMsg::SetThrottled(self.id, throttled);
+        let compositor_msg = CompositorMsg::SetThrottled(self.id, throttled);
         let err = self.event_loop.send(script_msg);
         if let Err(e) = err {
-            warn!("Sending visibility change failed ({}).", e);
+            warn!("Sending SetThrottled to script failed ({}).", e);
         }
         self.compositor_proxy.send(compositor_msg);
     }
@@ -504,7 +500,6 @@ pub struct UnprivilegedPipelineContent {
     script_port: IpcReceiver<ConstellationControlMsg>,
     opts: Opts,
     prefs: HashMap<String, PrefValue>,
-    pipeline_port: IpcReceiver<LayoutControlMsg>,
     pipeline_namespace_id: PipelineNamespaceId,
     webrender_api_sender: script_traits::WebrenderIpcSender,
     webrender_image_api_sender: net_traits::WebrenderIpcSender,
@@ -516,29 +511,19 @@ pub struct UnprivilegedPipelineContent {
 }
 
 impl UnprivilegedPipelineContent {
-    pub fn start_all<Message, LTF, STF>(
+    pub fn start_all<STF: ScriptThreadFactory>(
         self,
         wait_for_completion: bool,
+        layout_factory: Arc<dyn LayoutFactory>,
         background_hang_monitor_register: Box<dyn BackgroundHangMonitorRegister>,
-    ) where
-        LTF: LayoutThreadFactory<Message = Message>,
-        STF: ScriptThreadFactory<Message = Message>,
-    {
+    ) {
         // Setup pipeline-namespace-installing for all threads in this process.
         // Idempotent in single-process mode.
         PipelineNamespace::set_installer_sender(self.namespace_request_sender);
 
         let image_cache = Arc::new(ImageCacheImpl::new(self.webrender_image_api_sender.clone()));
-        let paint_time_metrics = PaintTimeMetrics::new(
-            self.id,
-            self.time_profiler_chan.clone(),
-            self.layout_to_constellation_chan.clone(),
-            self.script_chan.clone(),
-            self.load_data.url.clone(),
-        );
         let (content_process_shutdown_chan, content_process_shutdown_port) = unbounded();
-        let layout_thread_busy_flag = Arc::new(AtomicBool::new(false));
-        let layout_pair = STF::create(
+        STF::create(
             InitialScriptState {
                 id: self.id,
                 browsing_context_id: self.browsing_context_id,
@@ -559,37 +544,18 @@ impl UnprivilegedPipelineContent {
                 devtools_chan: self.devtools_ipc_sender,
                 window_size: self.window_size,
                 pipeline_namespace_id: self.pipeline_namespace_id,
-                content_process_shutdown_chan: content_process_shutdown_chan,
+                content_process_shutdown_chan,
                 webgl_chan: self.webgl_chan,
                 webxr_registry: self.webxr_registry,
                 webrender_document: self.webrender_document,
                 webrender_api_sender: self.webrender_api_sender.clone(),
-                layout_is_busy: layout_thread_busy_flag.clone(),
                 player_context: self.player_context.clone(),
-                inherited_secure_context: self.load_data.inherited_secure_context.clone(),
+                inherited_secure_context: self.load_data.inherited_secure_context,
             },
+            layout_factory,
+            self.font_cache_thread.clone(),
             self.load_data.clone(),
             self.user_agent,
-        );
-        // denate create layout thread
-        LTF::create(
-            self.id,
-            self.top_level_browsing_context_id,
-            self.load_data.url,
-            self.parent_pipeline_id.is_some(),
-            layout_pair,
-            self.pipeline_port,
-            background_hang_monitor_register,
-            self.layout_to_constellation_chan,
-            self.script_chan,
-            image_cache,
-            self.font_cache_thread,
-            self.time_profiler_chan,
-            self.mem_profiler_chan,
-            self.webrender_api_sender,
-            paint_time_metrics,
-            layout_thread_busy_flag.clone(),
-            self.window_size,
         );
 
         if wait_for_completion {
