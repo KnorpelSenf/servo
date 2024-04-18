@@ -3911,7 +3911,7 @@ impl Document {
                     return None;
                 }
                 node.note_dirty_descendants();
-                Some((node.to_trusted_node_address(), restyle.0))
+                Some((Node::to_trusted_node_address(node), restyle.0))
             })
             .collect()
     }

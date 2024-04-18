@@ -13,6 +13,7 @@ pub mod wrapper_traits;
 
 use std::any::Any;
 use std::borrow::Cow;
+use std::rc::Rc;
 use std::sync::atomic::AtomicIsize;
 use std::sync::Arc;
 
@@ -24,7 +25,6 @@ use euclid::Size2D;
 use gfx::font_cache_thread::FontCacheThread;
 use gfx_traits::Epoch;
 use ipc_channel::ipc::IpcSender;
-use libc::c_void;
 use malloc_size_of_derive::MallocSizeOf;
 use message::NodesFromPointQueryType;
 use metrics::PaintTimeMetrics;
@@ -47,6 +47,8 @@ use style::selector_parser::PseudoElement;
 use style::stylesheets::Stylesheet;
 use style_traits::CSSPixel;
 use webrender_api::ImageKey;
+
+use crate::dom::types::Node;
 
 pub type GenericLayoutData = dyn Any + Send + Sync;
 
@@ -126,8 +128,8 @@ pub struct SVGSVGData {
 }
 
 /// The address of a node known to be valid. These are sent from script to layout.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TrustedNodeAddress(pub *const c_void);
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrustedNodeAddress(pub Rc<Node>);
 
 #[allow(unsafe_code)]
 unsafe impl Send for TrustedNodeAddress {}

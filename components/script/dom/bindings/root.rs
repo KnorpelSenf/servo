@@ -532,9 +532,9 @@ impl LayoutDom<'_, Node> {
     /// `Node` pointer.
     pub unsafe fn from_trusted_node_address(inner: TrustedNodeAddress) -> Self {
         assert_in_layout();
-        let TrustedNodeAddress(addr) = inner;
+        let TrustedNodeAddress(node) = inner;
         LayoutDom {
-            value: &*(addr as *const Node),
+            value: &node
         }
     }
 }

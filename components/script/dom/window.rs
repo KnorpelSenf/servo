@@ -1854,7 +1854,7 @@ impl Window {
             .take_dirty_root()
             .filter(|_| !stylesheets_changed)
             .or_else(|| document.GetDocumentElement())
-            .map(|root| root.upcast::<Node>().to_trusted_node_address());
+            .map(|root| Node::to_trusted_node_address(root.upcast::<Node>()));
 
         // Send new document and relevant styles to layout.
         let needs_display = reflow_goal.needs_display();
@@ -1862,7 +1862,7 @@ impl Window {
             reflow_info: Reflow {
                 page_clip_rect: self.page_clip_rect.get(),
             },
-            document: document.upcast::<Node>().to_trusted_node_address(),
+            document: Node::to_trusted_node_address(document.upcast::<Node>()),
             dirty_root,
             stylesheets_changed,
             window_size: self.window_size.get(),
@@ -2049,7 +2049,7 @@ impl Window {
         let document = self.Document();
         self.with_layout(|layout| {
             layout.query_resolved_font_style(
-                node.to_trusted_node_address(),
+                Node::to_trusted_node_address(node),
                 &value,
                 document.animations().sets.clone(),
                 document.current_animation_timeline_value(),

@@ -8,6 +8,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, UnsafeCell};
 use std::default::Default;
 use std::ops::Range;
+use std::rc::Rc;
 use std::slice::from_ref;
 use std::sync::Arc as StdArc;
 use std::{cmp, iter};
@@ -165,6 +166,16 @@ pub struct Node {
     #[ignore_malloc_size_of = "trait object"]
     #[no_trace]
     layout_data: DomRefCell<Option<Box<GenericLayoutData>>>,
+}
+impl Eq for Node {
+    fn assert_receiver_is_total_eq(&self) {
+        ()
+    }
+}
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("node")
+    }
 }
 
 /// Flags for node items
@@ -785,8 +796,8 @@ impl Node {
             .map_or(false, |parent| &*parent == self)
     }
 
-    pub fn to_trusted_node_address(&self) -> TrustedNodeAddress {
-        TrustedNodeAddress(self as *const Node as *const libc::c_void)
+    pub fn to_trusted_node_address(node: Rc<Self>) -> TrustedNodeAddress {
+        TrustedNodeAddress(node)
     }
 
     /// Returns the rendered bounding content box if the element is rendered,

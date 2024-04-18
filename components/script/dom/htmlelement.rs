@@ -462,7 +462,7 @@ impl HTMLElementMethods for HTMLElement {
 
         window.layout_reflow(QueryMsg::ElementInnerTextQuery);
         let text = window
-            .with_layout(|layout| layout.query_element_inner_text(node.to_trusted_node_address()))
+            .with_layout(|layout| layout.query_element_inner_text(Node::to_trusted_node_address(node)))
             .unwrap_or_default();
         DOMString::from(text)
     }

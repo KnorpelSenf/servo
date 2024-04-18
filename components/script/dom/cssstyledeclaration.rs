@@ -255,7 +255,7 @@ impl CSSStyleDeclaration {
                 if !node.is_connected() {
                     return DOMString::new();
                 }
-                let addr = node.to_trusted_node_address();
+                let addr = Node::to_trusted_node_address(node);
                 window_from_node(node).resolved_style_query(addr, self.pseudo, property)
             },
         }
