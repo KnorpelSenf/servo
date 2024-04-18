@@ -12,11 +12,29 @@ In this directory, run
 cargo run
 ```
 
-to construct and discard a layout thread.
+to try fire a reflow event which segfaults the layouting.
+
+Note that the code will not compile right now, as we are running into the following problem.
+
 
 ## Next Up
 
-We need to send message to the constructed layout thread.
+We want to remove all pointers to C++ memory.
+This means that we effectively have to get rid of all the smart pointers in components/script/dom/bindings/root.rs.
+
+When we replace a pointer to a DOM node by an `Rc<Node>`, we run into the problem of having to cast `T&` to `Rc<T>` hundreds of times.
+
+When we replace a pointer to a DOM node by borrowing the node via `&Node`, we run into the problem of having to introduce lifetimes in hundreds of places.
+
+This boils down to the problem that there is no memory management of the DOM nodes on the Rust side yet.
+Basically, we must replace the GC in SpiderMonkey by something that Rust does.
+It currently is not clear how this can be done, but most likely, using reference counting seems like the more plausible solution than lifetimes (is there a third option?) because the only real lifetime that makes sense would be the lifetime of the document.
+This is obviously a too broad scope, meaning that all DOM nodes live as long as the page itself.
+
+What can we do?
+
+## IPC Channels
+
 Our current understanding of the IPC channels is that they do the following.
 
 - layout_pair:
