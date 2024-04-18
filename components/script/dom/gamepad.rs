@@ -52,6 +52,7 @@ pub struct Gamepad {
 }
 
 impl Gamepad {
+    #[allow(clippy::too_many_arguments)]
     fn new_inherited(
         gamepad_id: u32,
         id: String,
@@ -198,6 +199,10 @@ impl Gamepad {
         }
     }
 
+    pub fn index(&self) -> i32 {
+        self.index.get()
+    }
+
     pub fn update_index(&self, index: i32) {
         self.index.set(index);
     }
@@ -286,11 +291,7 @@ impl Gamepad {
 /// <https://www.w3.org/TR/gamepad/#dfn-gamepad-user-gesture>
 pub fn contains_user_gesture(update_type: GamepadUpdateType) -> bool {
     match update_type {
-        GamepadUpdateType::Axis(_, value) => {
-            return value.abs() > AXIS_TILT_THRESHOLD;
-        },
-        GamepadUpdateType::Button(_, value) => {
-            return value > BUTTON_PRESS_THRESHOLD;
-        },
-    };
+        GamepadUpdateType::Axis(_, value) => value.abs() > AXIS_TILT_THRESHOLD,
+        GamepadUpdateType::Button(_, value) => value > BUTTON_PRESS_THRESHOLD,
+    }
 }

@@ -159,6 +159,7 @@ pub struct MediaFrameRenderer {
     old_frame: Option<ImageKey>,
     very_old_frame: Option<ImageKey>,
     current_frame_holder: Option<FrameHolder>,
+    show_poster: bool,
 }
 
 impl MediaFrameRenderer {
@@ -170,18 +171,25 @@ impl MediaFrameRenderer {
             old_frame: None,
             very_old_frame: None,
             current_frame_holder: None,
+            show_poster: false,
         }
     }
 
     fn render_poster_frame(&mut self, image: Arc<Image>) {
         if let Some(image_id) = image.id {
             self.current_frame = Some((image_id, image.width as i32, image.height as i32));
+            self.show_poster = true;
         }
     }
 }
 
 impl VideoFrameRenderer for MediaFrameRenderer {
     fn render(&mut self, frame: VideoFrame) {
+        // Don't render new frames if the poster should be shown
+        if self.show_poster {
+            return;
+        }
+
         let mut updates = vec![];
 
         if let Some(old_image_key) = mem::replace(&mut self.very_old_frame, self.old_frame.take()) {
@@ -404,6 +412,7 @@ pub enum NetworkState {
 /// <https://html.spec.whatwg.org/multipage/#dom-media-readystate>
 #[derive(Clone, Copy, Debug, JSTraceable, MallocSizeOf, PartialEq, PartialOrd)]
 #[repr(u8)]
+#[allow(clippy::enum_variant_names)] // Clippy warning silenced here because these names are from the specification.
 pub enum ReadyState {
     HaveNothing = HTMLMediaElementConstants::HAVE_NOTHING as u8,
     HaveMetadata = HTMLMediaElementConstants::HAVE_METADATA as u8,
@@ -445,7 +454,7 @@ impl HTMLMediaElement {
             seeking: Cell::new(false),
             resource_url: DomRefCell::new(None),
             blob_url: DomRefCell::new(None),
-            played: DomRefCell::new(TimeRangesContainer::new()),
+            played: DomRefCell::new(TimeRangesContainer::default()),
             audio_tracks_list: Default::default(),
             video_tracks_list: Default::default(),
             text_tracks_list: Default::default(),
@@ -666,7 +675,7 @@ impl HTMLMediaElement {
                 self.paused.set(false);
                 // Step 2
                 if self.show_poster.get() {
-                    self.show_poster.set(false);
+                    self.set_show_poster(false);
                     self.time_marches_on();
                 }
                 // Step 3
@@ -689,7 +698,7 @@ impl HTMLMediaElement {
         self.network_state.set(NetworkState::NoSource);
 
         // Step 2.
-        self.show_poster.set(true);
+        self.set_show_poster(true);
 
         // Step 3.
         self.delay_load_event(true);
@@ -975,7 +984,7 @@ impl HTMLMediaElement {
                         SrcObject::MediaStream(ref stream) => {
                             let tracks = &*stream.get_tracks();
                             for (pos, track) in tracks.iter().enumerate() {
-                                if let Err(_) = self
+                                if self
                                     .player
                                     .borrow()
                                     .as_ref()
@@ -983,6 +992,7 @@ impl HTMLMediaElement {
                                     .lock()
                                     .unwrap()
                                     .set_stream(&track.id(), pos == tracks.len() - 1)
+                                    .is_err()
                                 {
                                     self.queue_dedicated_media_source_failure_steps();
                                 }
@@ -1025,7 +1035,7 @@ impl HTMLMediaElement {
                     this.network_state.set(NetworkState::NoSource);
 
                     // Step 4.
-                    this.show_poster.set(true);
+                    this.set_show_poster(true);
 
                     // Step 5.
                     this.upcast::<EventTarget>().fire_event(atom!("error"));
@@ -1191,8 +1201,7 @@ impl HTMLMediaElement {
     /// `fulfill_in_flight_play_promises`, to actually fulfill the promises
     /// which were taken and moved to the in-flight queue.
     fn take_pending_play_promises(&self, result: ErrorResult) {
-        let pending_play_promises =
-            mem::replace(&mut *self.pending_play_promises.borrow_mut(), vec![]);
+        let pending_play_promises = std::mem::take(&mut *self.pending_play_promises.borrow_mut());
         self.in_flight_play_promises_queue
             .borrow_mut()
             .push_back((pending_play_promises.into(), result));
@@ -1241,7 +1250,7 @@ impl HTMLMediaElement {
     // https://html.spec.whatwg.org/multipage/#dom-media-seek
     fn seek(&self, time: f64, _approximate_for_speed: bool) {
         // Step 1.
-        self.show_poster.set(false);
+        self.set_show_poster(false);
 
         // Step 2.
         if self.ready_state.get() == ReadyState::HaveNothing {
@@ -1942,10 +1951,12 @@ impl HTMLMediaElement {
     }
 
     pub fn get_current_frame(&self) -> Option<VideoFrame> {
-        match self.video_renderer.lock().unwrap().current_frame_holder {
-            Some(ref holder) => Some(holder.get_frame()),
-            None => None,
-        }
+        self.video_renderer
+            .lock()
+            .unwrap()
+            .current_frame_holder
+            .as_ref()
+            .map(|holder| holder.get_frame())
     }
 
     /// By default the audio is rendered through the audio sink automatically
@@ -1973,6 +1984,15 @@ impl HTMLMediaElement {
 
     pub fn set_duration(&self, duration: f64) {
         self.duration.set(duration);
+    }
+
+    /// Sets a new value for the show_poster propperty. If the poster is being hidden
+    /// because new frames should render, updates video_renderer to allow it.
+    fn set_show_poster(&self, show_poster: bool) {
+        self.show_poster.set(show_poster);
+        if !show_poster {
+            self.video_renderer.lock().unwrap().show_poster = false;
+        }
     }
 
     pub fn reset(&self) {
@@ -2089,15 +2109,14 @@ impl HTMLMediaElementMethods for HTMLMediaElement {
 
     // https://html.spec.whatwg.org/multipage/#dom-media-srcobject
     fn GetSrcObject(&self) -> Option<MediaStreamOrBlob> {
-        match *self.src_object.borrow() {
-            Some(ref src_object) => Some(match src_object {
+        (*self.src_object.borrow())
+            .as_ref()
+            .map(|src_object| match src_object {
                 SrcObject::Blob(blob) => MediaStreamOrBlob::Blob(DomRoot::from_ref(blob)),
                 SrcObject::MediaStream(stream) => {
                     MediaStreamOrBlob::MediaStream(DomRoot::from_ref(stream))
                 },
-            }),
-            None => None,
-        }
+            })
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-media-srcobject
@@ -2179,7 +2198,7 @@ impl HTMLMediaElementMethods for HTMLMediaElement {
 
             // Step 6.2.
             if self.show_poster.get() {
-                self.show_poster.set(false);
+                self.set_show_poster(false);
                 self.time_marches_on();
             }
 
@@ -2346,7 +2365,7 @@ impl HTMLMediaElementMethods for HTMLMediaElement {
 
     // https://html.spec.whatwg.org/multipage/#dom-media-buffered
     fn Buffered(&self) -> DomRoot<TimeRanges> {
-        let mut buffered = TimeRangesContainer::new();
+        let mut buffered = TimeRangesContainer::default();
         if let Some(ref player) = *self.player.borrow() {
             if let Ok(ranges) = player.lock().unwrap().buffered() {
                 for range in ranges {
@@ -2482,11 +2501,14 @@ pub trait LayoutHTMLMediaElementHelpers {
 }
 
 impl LayoutHTMLMediaElementHelpers for LayoutDom<'_, HTMLMediaElement> {
-    #[allow(unsafe_code)]
     fn data(self) -> HTMLMediaData {
-        let media = unsafe { self.unsafe_get() };
         HTMLMediaData {
-            current_frame: media.video_renderer.lock().unwrap().current_frame,
+            current_frame: self
+                .unsafe_get()
+                .video_renderer
+                .lock()
+                .unwrap()
+                .current_frame,
         }
     }
 }
@@ -2660,10 +2682,10 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
                 let content_length =
                     if let Some(content_range) = headers.typed_get::<ContentRange>() {
                         content_range.bytes_len()
-                    } else if let Some(content_length) = headers.typed_get::<ContentLength>() {
-                        Some(content_length.0)
                     } else {
-                        None
+                        headers
+                            .typed_get::<ContentLength>()
+                            .map(|content_length| content_length.0)
                     };
 
                 // We only set the expected input size if it changes.
@@ -2746,15 +2768,12 @@ impl FetchResponseListener for HTMLMediaElementFetchListener {
             // restart the download later from where we left, we cancel
             // the current request. Otherwise, we continue the request
             // assuming that we may drop some frames.
-            match e {
-                PlayerError::EnoughData => {
-                    if let Some(ref mut current_fetch_context) =
-                        *elem.current_fetch_context.borrow_mut()
-                    {
-                        current_fetch_context.cancel(CancelReason::Backoff);
-                    }
-                },
-                _ => (),
+            if e == PlayerError::EnoughData {
+                if let Some(ref mut current_fetch_context) =
+                    *elem.current_fetch_context.borrow_mut()
+                {
+                    current_fetch_context.cancel(CancelReason::Backoff);
+                }
             }
             warn!("Could not push input data to player {:?}", e);
             return;

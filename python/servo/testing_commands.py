@@ -162,6 +162,7 @@ class MachCommands(CommandBase):
             "crown",
             "constellation",
             "style_config",
+            "compositing",
         ]
         if not packages:
             packages = set(os.listdir(path.join(self.context.topdir, "tests", "unit"))) - set(['.DS_Store'])
@@ -741,6 +742,10 @@ tests/wpt/mozilla/tests for Servo-only tests""" % reference_path)
             filedata = file.read()
         # files are mounted differently
         filedata = filedata.replace('src=/webgpu/common/runtime/wpt.js', 'src=../webgpu/common/runtime/wpt.js')
+        # Mark all webgpu tests as long to increase their timeouts. This is needed due to wgpu's slowness.
+        # TODO: replace this with more fine grained solution: https://github.com/servo/servo/issues/30999
+        filedata = filedata.replace('<meta charset=utf-8>',
+                                    '<meta charset=utf-8>\n<meta name="timeout" content="long">')
         # Write the file out again
         with open(cts_html, 'w') as file:
             file.write(filedata)

@@ -21,7 +21,6 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::{hash_map, HashMap, HashSet};
 use std::default::Default;
-use std::ops::Deref;
 use std::option::Option;
 use std::rc::Rc;
 use std::result::Result;
@@ -226,6 +225,7 @@ struct InProgressLoad {
 
 impl InProgressLoad {
     /// Create a new InProgressLoad object.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: PipelineId,
         browsing_context_id: BrowsingContextId,
@@ -478,7 +478,7 @@ impl Documents {
             .and_then(|doc| doc.find_iframe(browsing_context_id))
     }
 
-    pub fn iter<'a>(&'a self) -> DocumentsIter<'a> {
+    pub fn iter(&self) -> DocumentsIter<'_> {
         DocumentsIter {
             iter: self.map.iter(),
         }
@@ -856,7 +856,7 @@ impl ScriptThreadFactory for ScriptThread {
 }
 
 impl ScriptThread {
-    pub fn with_layout<'a, T>(
+    pub fn with_layout<T>(
         pipeline_id: PipelineId,
         call: impl FnOnce(&mut dyn Layout) -> T,
     ) -> Result<T, ()> {
@@ -1427,7 +1427,7 @@ impl ScriptThread {
 
             node_ids: Default::default(),
             is_user_interacting: Cell::new(false),
-            gpu_id_hub: Arc::new(Mutex::new(Identities::new())),
+            gpu_id_hub: Arc::new(Mutex::new(Identities::default())),
             webgpu_port: RefCell::new(None),
             inherited_secure_context: state.inherited_secure_context,
             layouts: Default::default(),
@@ -2549,7 +2549,7 @@ impl ScriptThread {
         let path_seg = format!("url({})", urls);
 
         let mut reports = vec![];
-        reports.extend(get_reports(*self.get_cx(), path_seg));
+        reports.extend(unsafe { get_reports(*self.get_cx(), path_seg) });
         reports_chan.send(reports);
     }
 
@@ -3110,7 +3110,7 @@ impl ScriptThread {
             )
         });
 
-        let opener_browsing_context = opener.and_then(|id| ScriptThread::find_window_proxy(id));
+        let opener_browsing_context = opener.and_then(ScriptThread::find_window_proxy);
 
         let creator = CreatorBrowsingContextInfo::from(
             parent_browsing_context.as_deref(),
@@ -3166,7 +3166,7 @@ impl ScriptThread {
             _ => None,
         };
 
-        let opener_browsing_context = opener.and_then(|id| ScriptThread::find_window_proxy(id));
+        let opener_browsing_context = opener.and_then(ScriptThread::find_window_proxy);
 
         let creator = CreatorBrowsingContextInfo::from(
             parent_browsing_context.as_deref(),
@@ -3353,15 +3353,14 @@ impl ScriptThread {
             _ => IsHTMLDocument::HTMLDocument,
         };
 
-        let referrer = match metadata.referrer {
-            Some(ref referrer) => Some(referrer.clone().into_string()),
-            None => None,
-        };
+        let referrer = metadata
+            .referrer
+            .as_ref()
+            .map(|referrer| referrer.clone().into_string());
 
         let referrer_policy = metadata
             .headers
-            .as_ref()
-            .map(Serde::deref)
+            .as_deref()
             .and_then(|h| h.typed_get::<ReferrerPolicyHeader>())
             .map(ReferrerPolicy::from);
 
@@ -3569,11 +3568,12 @@ impl ScriptThread {
                 // We might have to reset the anchor state
                 if !state_already_changed {
                     if let Some(target) = prev_mouse_over_target {
-                        if let Some(_) = target
+                        if target
                             .upcast::<Node>()
                             .inclusive_ancestors(ShadowIncluding::No)
                             .filter_map(DomRoot::downcast::<HTMLAnchorElement>)
                             .next()
+                            .is_some()
                         {
                             let event = EmbedderMsg::Status(None);
                             window.send_to_embedder(event);
@@ -3648,6 +3648,7 @@ impl ScriptThread {
         ScriptThread::set_user_interacting(false);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_mouse_event(
         &self,
         pipeline_id: PipelineId,

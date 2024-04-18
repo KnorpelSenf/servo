@@ -13,8 +13,8 @@ use app_units::Au;
 use gfx::font::{
     fallback_font_families, FontDescriptor, FontFamilyDescriptor, FontFamilyName, FontSearchScope,
 };
-use gfx::font_cache_thread::{FontIdentifier, FontTemplateInfo, FontTemplates};
-use gfx::font_context::{FontContext, FontContextHandle, FontSource};
+use gfx::font_cache_thread::{FontIdentifier, FontTemplateAndWebRenderFontKey, FontTemplates};
+use gfx::font_context::{FontContext, FontSource};
 use gfx::font_template::FontTemplateDescriptor;
 use servo_arc::Arc;
 use servo_atoms::Atom;
@@ -26,10 +26,10 @@ use style::values::computed::font::{
     FontWeight, SingleFontFamily,
 };
 use style::values::computed::{FontLanguageOverride, XLang};
+use style::values::generics::font::LineHeight;
 use webrender_api::{FontInstanceKey, FontKey, IdNamespace};
 
 struct TestFontSource {
-    handle: FontContextHandle,
     families: HashMap<String, FontTemplates>,
     find_font_count: Rc<Cell<isize>>,
 }
@@ -51,7 +51,6 @@ impl TestFontSource {
         families.insert(fallback_font_families(None)[0].to_owned(), fallback);
 
         TestFontSource {
-            handle: FontContextHandle::default(),
             families,
             find_font_count: Rc::new(Cell::new(0)),
         }
@@ -88,14 +87,12 @@ impl FontSource for TestFontSource {
         &mut self,
         template_descriptor: FontTemplateDescriptor,
         family_descriptor: FontFamilyDescriptor,
-    ) -> Option<FontTemplateInfo> {
-        let handle = &self.handle;
-
+    ) -> Option<FontTemplateAndWebRenderFontKey> {
         self.find_font_count.set(self.find_font_count.get() + 1);
         self.families
             .get_mut(family_descriptor.name())
-            .and_then(|family| family.find_font_for_style(&template_descriptor, handle))
-            .map(|template| FontTemplateInfo {
+            .and_then(|family| family.find_font_for_style(&template_descriptor))
+            .map(|template| FontTemplateAndWebRenderFontKey {
                 font_template: template,
                 font_key: FontKey(IdNamespace(0), 0),
             })
@@ -112,6 +109,7 @@ fn style() -> FontStyleStruct {
         font_stretch: FontStretch::hundred(),
         hash: 0,
         font_language_override: FontLanguageOverride::normal(),
+        line_height: LineHeight::Normal,
         _x_lang: XLang::get_initial_value(),
     };
     style.compute_font_hash();
@@ -177,7 +175,7 @@ fn test_font_group_find_by_codepoint() {
         .find_by_codepoint(&mut context, 'a')
         .unwrap();
     assert_eq!(
-        *font.borrow().identifier(),
+        font.borrow().template.borrow().identifier,
         TestFontSource::identifier_for_font_name("csstest-ascii")
     );
     assert_eq!(
@@ -191,7 +189,7 @@ fn test_font_group_find_by_codepoint() {
         .find_by_codepoint(&mut context, 'a')
         .unwrap();
     assert_eq!(
-        *font.borrow().identifier(),
+        font.borrow().template.borrow().identifier,
         TestFontSource::identifier_for_font_name("csstest-ascii")
     );
     assert_eq!(
@@ -205,7 +203,7 @@ fn test_font_group_find_by_codepoint() {
         .find_by_codepoint(&mut context, 'á')
         .unwrap();
     assert_eq!(
-        *font.borrow().identifier(),
+        font.borrow().template.borrow().identifier,
         TestFontSource::identifier_for_font_name("csstest-basic-regular")
     );
     assert_eq!(count.get(), 2, "both fonts should now have been loaded");
@@ -226,7 +224,7 @@ fn test_font_fallback() {
         .find_by_codepoint(&mut context, 'a')
         .unwrap();
     assert_eq!(
-        *font.borrow().identifier(),
+        font.borrow().template.borrow().identifier,
         TestFontSource::identifier_for_font_name("csstest-ascii"),
         "a family in the group should be used if there is a matching glyph"
     );
@@ -236,7 +234,7 @@ fn test_font_fallback() {
         .find_by_codepoint(&mut context, 'á')
         .unwrap();
     assert_eq!(
-        *font.borrow().identifier(),
+        font.borrow().template.borrow().identifier,
         TestFontSource::identifier_for_font_name("csstest-basic-regular"),
         "a fallback font should be used if there is no matching glyph in the group"
     );

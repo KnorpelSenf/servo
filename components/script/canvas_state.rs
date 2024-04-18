@@ -12,7 +12,8 @@ use canvas_traits::canvas::{
     FillRule, LineCapStyle, LineJoinStyle, LinearGradientStyle, RadialGradientStyle,
     RepetitionStyle, TextAlign, TextBaseline,
 };
-use cssparser::{Parser, ParserInput, RgbaLegacy};
+use cssparser::color::clamp_unit_f32;
+use cssparser::{Parser, ParserInput};
 use euclid::default::{Point2D, Rect, Size2D, Transform2D};
 use euclid::vec2;
 use ipc_channel::ipc::{self, IpcSender, IpcSharedMemory};
@@ -22,7 +23,7 @@ use pixels::PixelFormat;
 use profile_traits::ipc as profiled_ipc;
 use script_traits::ScriptMsg;
 use servo_url::{ImmutableOrigin, ServoUrl};
-use style::color::{AbsoluteColor, ColorSpace};
+use style::color::{AbsoluteColor, ColorFlags, ColorSpace};
 use style::context::QuirksMode;
 use style::parser::ParserContext;
 use style::properties::longhands::font_variant_caps::computed_value::T as FontVariantCaps;
@@ -31,7 +32,7 @@ use style::stylesheets::{CssRuleType, Origin};
 use style::values::computed::font::FontStyle;
 use style::values::specified::color::Color;
 use style_traits::values::ToCss;
-use style_traits::ParsingMode;
+use style_traits::{CssWriter, ParsingMode};
 use url::Url;
 
 use crate::dom::bindings::cell::DomRefCell;
@@ -62,7 +63,7 @@ use crate::unpremultiplytable::UNPREMULTIPLY_TABLE;
 #[derive(Clone, JSTraceable, MallocSizeOf)]
 #[allow(dead_code)]
 pub(crate) enum CanvasFillOrStrokeStyle {
-    Color(#[no_trace] RgbaLegacy),
+    Color(#[no_trace] AbsoluteColor),
     Gradient(Dom<CanvasGradient>),
     Pattern(Dom<CanvasPattern>),
 }
@@ -98,7 +99,7 @@ pub(crate) struct CanvasContextState {
     shadow_offset_y: f64,
     shadow_blur: f64,
     #[no_trace]
-    shadow_color: RgbaLegacy,
+    shadow_color: AbsoluteColor,
     #[no_trace]
     font_style: Option<Font>,
     #[no_trace]
@@ -113,13 +114,12 @@ impl CanvasContextState {
     const DEFAULT_FONT_STYLE: &'static str = "10px sans-serif";
 
     pub(crate) fn new() -> CanvasContextState {
-        let black = RgbaLegacy::new(0, 0, 0, 1.0);
         CanvasContextState {
             global_alpha: 1.0,
             global_composition: CompositionOrBlending::default(),
             image_smoothing_enabled: true,
-            fill_style: CanvasFillOrStrokeStyle::Color(black),
-            stroke_style: CanvasFillOrStrokeStyle::Color(black),
+            fill_style: CanvasFillOrStrokeStyle::Color(AbsoluteColor::BLACK),
+            stroke_style: CanvasFillOrStrokeStyle::Color(AbsoluteColor::BLACK),
             line_width: 1.0,
             line_cap: LineCapStyle::Butt,
             line_join: LineJoinStyle::Miter,
@@ -128,7 +128,7 @@ impl CanvasContextState {
             shadow_offset_x: 0.0,
             shadow_offset_y: 0.0,
             shadow_blur: 0.0,
-            shadow_color: RgbaLegacy::new(0, 0, 0, 0.0),
+            shadow_color: AbsoluteColor::TRANSPARENT_BLACK,
             font_style: None,
             text_align: Default::default(),
             text_baseline: Default::default(),
@@ -329,27 +329,29 @@ impl CanvasState {
         pixels
     }
 
-    //
-    // drawImage coordinates explained
-    //
-    //  Source Image      Destination Canvas
-    // +-------------+     +-------------+
-    // |             |     |             |
-    // |(sx,sy)      |     |(dx,dy)      |
-    // |   +----+    |     |   +----+    |
-    // |   |    |    |     |   |    |    |
-    // |   |    |sh  |---->|   |    |dh  |
-    // |   |    |    |     |   |    |    |
-    // |   +----+    |     |   +----+    |
-    // |     sw      |     |     dw      |
-    // |             |     |             |
-    // +-------------+     +-------------+
-    //
-    //
-    // The rectangle (sx, sy, sw, sh) from the source image
-    // is copied on the rectangle (dx, dy, dh, dw) of the destination canvas
-    //
-    // https://html.spec.whatwg.org/multipage/#dom-context-2d-drawimage
+    ///
+    /// drawImage coordinates explained
+    ///
+    /// ```
+    ///  Source Image      Destination Canvas
+    /// +-------------+     +-------------+
+    /// |             |     |             |
+    /// |(sx,sy)      |     |(dx,dy)      |
+    /// |   +----+    |     |   +----+    |
+    /// |   |    |    |     |   |    |    |
+    /// |   |    |sh  |---->|   |    |dh  |
+    /// |   |    |    |     |   |    |    |
+    /// |   +----+    |     |   +----+    |
+    /// |     sw      |     |     dw      |
+    /// |             |     |             |
+    /// +-------------+     +-------------+
+    /// ```
+    ///
+    /// The rectangle (sx, sy, sw, sh) from the source image
+    /// is copied on the rectangle (dx, dy, dh, dw) of the destination canvas
+    ///
+    /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-drawimage>
+    #[allow(clippy::too_many_arguments)]
     fn draw_image_internal(
         &self,
         htmlcanvas: Option<&HTMLCanvasElement>,
@@ -424,6 +426,7 @@ impl CanvasState {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_offscreen_canvas(
         &self,
         canvas: &OffscreenCanvas,
@@ -478,6 +481,7 @@ impl CanvasState {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_html_canvas_element(
         &self,
         canvas: &HTMLCanvasElement,             // source canvas
@@ -538,6 +542,7 @@ impl CanvasState {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fetch_and_draw_image_data(
         &self,
         canvas: Option<&HTMLCanvasElement>,
@@ -584,15 +589,16 @@ impl CanvasState {
     }
 
     pub fn mark_as_dirty(&self, canvas: Option<&HTMLCanvasElement>) {
-        if let Some(ref canvas) = canvas {
+        if let Some(canvas) = canvas {
             canvas.upcast::<Node>().dirty(NodeDamage::OtherNodeDamage);
         }
     }
 
-    // It is used by DrawImage to calculate the size of the source and destination rectangles based
-    // on the drawImage call arguments
-    // source rectangle = area of the original image to be copied
-    // destination rectangle = area of the destination canvas where the source image is going to be drawn
+    /// It is used by DrawImage to calculate the size of the source and destination rectangles based
+    /// on the drawImage call arguments
+    /// source rectangle = area of the original image to be copied
+    /// destination rectangle = area of the destination canvas where the source image is going to be drawn
+    #[allow(clippy::too_many_arguments)]
     fn adjust_source_dest_rects(
         &self,
         image_size: Size2D<f64>,
@@ -838,7 +844,8 @@ impl CanvasState {
         )
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-context-2d-createradialgradient
+    /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-createradialgradient>
+    #[allow(clippy::too_many_arguments)]
     pub fn create_radial_gradient(
         &self,
         global: &GlobalScope,
@@ -952,7 +959,7 @@ impl CanvasState {
 
     // https://html.spec.whatwg.org/multipage/#dom-context-2d-globalalpha
     pub fn set_global_alpha(&self, alpha: f64) {
-        if !alpha.is_finite() || alpha > 1.0 || alpha < 0.0 {
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
             return;
         }
 
@@ -1206,7 +1213,7 @@ impl CanvasState {
         if sw == 0 || sh == 0 {
             return Err(Error::IndexSize);
         }
-        ImageData::new(global, sw.abs() as u32, sh.abs() as u32, None)
+        ImageData::new(global, sw.unsigned_abs(), sh.unsigned_abs(), None)
     }
 
     // https://html.spec.whatwg.org/multipage/#dom-context-2d-createimagedata
@@ -1276,8 +1283,8 @@ impl CanvasState {
         )
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-context-2d-putimagedata
-    #[allow(unsafe_code)]
+    /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-putimagedata>
+    #[allow(unsafe_code, clippy::too_many_arguments)]
     pub fn put_image_data_(
         &self,
         canvas_size: Size2D<u64>,
@@ -1373,7 +1380,8 @@ impl CanvasState {
         )
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-context-2d-drawimage
+    /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-drawimage>
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_image__(
         &self,
         canvas: Option<&HTMLCanvasElement>,
@@ -1644,7 +1652,8 @@ impl CanvasState {
         Ok(())
     }
 
-    // https://html.spec.whatwg.org/multipage/#dom-context-2d-ellipse
+    /// <https://html.spec.whatwg.org/multipage/#dom-context-2d-ellipse>
+    #[allow(clippy::too_many_arguments)]
     pub fn ellipse(
         &self,
         x: f64,
@@ -1679,7 +1688,7 @@ impl CanvasState {
     }
 }
 
-pub fn parse_color(canvas: Option<&HTMLCanvasElement>, string: &str) -> Result<RgbaLegacy, ()> {
+pub fn parse_color(canvas: Option<&HTMLCanvasElement>, string: &str) -> Result<AbsoluteColor, ()> {
     let mut input = ParserInput::new(string);
     let mut parser = Parser::new(&mut input);
     let url = Url::parse("about:blank").unwrap().into();
@@ -1705,7 +1714,7 @@ pub fn parse_color(canvas: Option<&HTMLCanvasElement>, string: &str) -> Result<R
                 // Whenever "currentColor" is used as a color in the PaintRenderingContext2D API,
                 // it is treated as opaque black.
                 None => AbsoluteColor::BLACK,
-                Some(ref canvas) => {
+                Some(canvas) => {
                     let canvas_element = canvas.upcast::<Element>();
                     match canvas_element.style() {
                         Some(ref s) if canvas_element.has_css_layout_box() => {
@@ -1716,15 +1725,7 @@ pub fn parse_color(canvas: Option<&HTMLCanvasElement>, string: &str) -> Result<R
                 },
             };
 
-            let rgba = color
-                .resolve_to_absolute(&current_color)
-                .to_color_space(ColorSpace::Srgb);
-            Ok(RgbaLegacy::from_floats(
-                rgba.components.0,
-                rgba.components.1,
-                rgba.components.2,
-                rgba.alpha,
-            ))
+            Ok(color.resolve_to_absolute(&current_color))
         },
         None => Err(()),
     }
@@ -1737,17 +1738,21 @@ pub fn is_rect_valid(rect: Rect<f64>) -> bool {
 }
 
 // https://html.spec.whatwg.org/multipage/#serialisation-of-a-color
-pub fn serialize<W>(color: &RgbaLegacy, dest: &mut W) -> fmt::Result
+pub fn serialize<W>(color: &AbsoluteColor, dest: &mut W) -> fmt::Result
 where
     W: fmt::Write,
 {
-    let RgbaLegacy {
-        red,
-        green,
-        blue,
-        alpha,
-    } = color;
-    if *alpha == 1.0 {
+    let srgb = match color.color_space {
+        ColorSpace::Srgb if color.flags.contains(ColorFlags::IS_LEGACY_SRGB) => *color,
+        ColorSpace::Hsl | ColorSpace::Hwb => color.into_srgb_legacy(),
+        _ => return color.to_css(&mut CssWriter::new(dest)),
+    };
+    debug_assert!(srgb.flags.contains(ColorFlags::IS_LEGACY_SRGB));
+    let red = clamp_unit_f32(srgb.components.0);
+    let green = clamp_unit_f32(srgb.components.1);
+    let blue = clamp_unit_f32(srgb.components.2);
+    let alpha = srgb.alpha;
+    if alpha == 1.0 {
         write!(
             dest,
             "#{:x}{:x}{:x}{:x}{:x}{:x}",

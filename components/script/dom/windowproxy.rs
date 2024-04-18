@@ -291,7 +291,7 @@ impl WindowProxy {
             .currently_active
             .get()
             .and_then(ScriptThread::find_document)
-            .and_then(|doc| Some(DomRoot::from_ref(doc.window())))
+            .map(|doc| DomRoot::from_ref(doc.window()))
             .unwrap();
         let msg = EmbedderMsg::AllowOpeningWebView(chan);
         window.send_to_embedder(msg);
@@ -766,7 +766,7 @@ fn tokenize_open_features(features: DOMString) -> IndexMap<String, String> {
     let mut cur = iter.next();
 
     // Step 3
-    while cur != None {
+    while cur.is_some() {
         // Step 3.1 & 3.2
         let mut name = String::new();
         let mut value = String::new();
@@ -831,7 +831,7 @@ fn tokenize_open_features(features: DOMString) -> IndexMap<String, String> {
 fn parse_open_feature_boolean(tokenized_features: &IndexMap<String, String>, name: &str) -> bool {
     if let Some(value) = tokenized_features.get(name) {
         // Step 1 & 2
-        if value == "" || value == "yes" {
+        if value.is_empty() || value == "yes" {
             return true;
         }
         // Step 3 & 4

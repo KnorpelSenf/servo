@@ -177,7 +177,7 @@ pub fn set_default_accept_language(headers: &mut HeaderMap) {
     // TODO(eijebong): Change this once typed headers are done
     headers.insert(
         header::ACCEPT_LANGUAGE,
-        HeaderValue::from_static("en-US, en; q=0.5"),
+        HeaderValue::from_static("en-US,en;q=0.5"),
     );
 }
 

@@ -983,14 +983,14 @@ impl XMLHttpRequestMethods for XMLHttpRequest {
     fn GetResponseText(&self) -> Fallible<USVString> {
         match self.response_type.get() {
             XMLHttpRequestResponseType::_empty | XMLHttpRequestResponseType::Text => {
-                Ok(USVString(String::from(match self.ready_state.get() {
+                Ok(USVString(match self.ready_state.get() {
                     // Step 3
                     XMLHttpRequestState::Loading | XMLHttpRequestState::Done => {
                         self.text_response()
                     },
                     // Step 2
                     _ => "".to_owned(),
-                })))
+                }))
             },
             // Step 1
             _ => Err(Error::InvalidState),
@@ -1334,7 +1334,7 @@ impl XMLHttpRequest {
         let mime = self
             .final_mime_type()
             .as_ref()
-            .map(|m| normalize_type_string(&m.to_string()))
+            .map(|m| normalize_type_string(m.as_ref()))
             .unwrap_or("".to_owned());
 
         // Step 3, 4
@@ -1616,13 +1616,12 @@ impl XMLHttpRequest {
     /// <https://xhr.spec.whatwg.org/#response-mime-type>
     fn response_mime_type(&self) -> Option<Mime> {
         return extract_mime_type(&self.response_headers.borrow())
-            .map(|mime_as_bytes| {
+            .and_then(|mime_as_bytes| {
                 String::from_utf8(mime_as_bytes)
                     .unwrap_or_default()
                     .parse()
                     .ok()
             })
-            .flatten()
             .or(Some(mime::TEXT_XML));
     }
 

@@ -152,17 +152,14 @@ impl HTMLOutputElementMethods for HTMLOutputElement {
 }
 
 impl VirtualMethods for HTMLOutputElement {
-    fn super_type<'b>(&'b self) -> Option<&'b dyn VirtualMethods> {
+    fn super_type(&self) -> Option<&dyn VirtualMethods> {
         Some(self.upcast::<HTMLElement>() as &dyn VirtualMethods)
     }
 
     fn attribute_mutated(&self, attr: &Attr, mutation: AttributeMutation) {
         self.super_type().unwrap().attribute_mutated(attr, mutation);
-        match attr.local_name() {
-            &local_name!("form") => {
-                self.form_attribute_mutated(mutation);
-            },
-            _ => {},
+        if attr.local_name() == &local_name!("form") {
+            self.form_attribute_mutated(mutation);
         }
     }
 }
@@ -176,7 +173,7 @@ impl FormControl for HTMLOutputElement {
         self.form_owner.set(form);
     }
 
-    fn to_element<'a>(&'a self) -> &'a Element {
+    fn to_element(&self) -> &Element {
         self.upcast::<Element>()
     }
 }

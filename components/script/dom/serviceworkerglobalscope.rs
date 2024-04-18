@@ -123,9 +123,9 @@ pub enum ServiceWorkerControlMsg {
 }
 
 pub enum MixedMessage {
-    FromServiceWorker(ServiceWorkerScriptMsg),
-    FromDevtools(DevtoolScriptControlMsg),
-    FromControl(ServiceWorkerControlMsg),
+    ServiceWorker(ServiceWorkerScriptMsg),
+    Devtools(DevtoolScriptControlMsg),
+    Control(ServiceWorkerControlMsg),
 }
 
 #[derive(Clone, JSTraceable)]
@@ -202,15 +202,15 @@ impl WorkerEventLoopMethods for ServiceWorkerGlobalScope {
     }
 
     fn from_control_msg(&self, msg: ServiceWorkerControlMsg) -> MixedMessage {
-        MixedMessage::FromControl(msg)
+        MixedMessage::Control(msg)
     }
 
     fn from_worker_msg(&self, msg: ServiceWorkerScriptMsg) -> MixedMessage {
-        MixedMessage::FromServiceWorker(msg)
+        MixedMessage::ServiceWorker(msg)
     }
 
     fn from_devtools_msg(&self, msg: DevtoolScriptControlMsg) -> MixedMessage {
-        MixedMessage::FromDevtools(msg)
+        MixedMessage::Devtools(msg)
     }
 
     fn control_receiver(&self) -> &Receiver<ServiceWorkerControlMsg> {
@@ -219,6 +219,7 @@ impl WorkerEventLoopMethods for ServiceWorkerGlobalScope {
 }
 
 impl ServiceWorkerGlobalScope {
+    #[allow(clippy::too_many_arguments)]
     fn new_inherited(
         init: WorkerGlobalScopeInit,
         worker_url: ServoUrl,
@@ -241,7 +242,7 @@ impl ServiceWorkerGlobalScope {
                 runtime,
                 from_devtools_receiver,
                 closing,
-                Arc::new(Mutex::new(Identities::new())),
+                Arc::new(Mutex::new(Identities::default())),
             ),
             task_queue: TaskQueue::new(receiver, own_sender.clone()),
             own_sender,
@@ -252,7 +253,7 @@ impl ServiceWorkerGlobalScope {
         }
     }
 
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, clippy::too_many_arguments)]
     pub fn new(
         init: WorkerGlobalScopeInit,
         worker_url: ServoUrl,
@@ -283,8 +284,8 @@ impl ServiceWorkerGlobalScope {
         unsafe { ServiceWorkerGlobalScopeBinding::Wrap(SafeJSContext::from_ptr(cx), scope) }
     }
 
-    #[allow(unsafe_code)]
-    // https://w3c.github.io/ServiceWorker/#run-service-worker-algorithm
+    /// <https://w3c.github.io/ServiceWorker/#run-service-worker-algorithm>
+    #[allow(unsafe_code, clippy::too_many_arguments)]
     pub fn run_serviceworker_scope(
         scope_things: ScopeThings,
         own_sender: Sender<ServiceWorkerScriptMsg>,
@@ -349,7 +350,7 @@ impl ServiceWorkerGlobalScope {
                 let scope = global.upcast::<WorkerGlobalScope>();
 
                 let referrer = referrer_url
-                    .map(|url| Referrer::ReferrerUrl(url))
+                    .map(Referrer::ReferrerUrl)
                     .unwrap_or_else(|| global.upcast::<GlobalScope>().get_referrer());
 
                 let request = RequestBuilder::new(script_url, referrer)
@@ -413,7 +414,7 @@ impl ServiceWorkerGlobalScope {
 
     fn handle_mixed_message(&self, msg: MixedMessage) -> bool {
         match msg {
-            MixedMessage::FromDevtools(msg) => match msg {
+            MixedMessage::Devtools(msg) => match msg {
                 DevtoolScriptControlMsg::EvaluateJS(_pipe_id, string, sender) => {
                     devtools::handle_evaluate_js(self.upcast(), string, sender)
                 },
@@ -422,10 +423,10 @@ impl ServiceWorkerGlobalScope {
                 },
                 _ => debug!("got an unusable devtools control message inside the worker!"),
             },
-            MixedMessage::FromServiceWorker(msg) => {
+            MixedMessage::ServiceWorker(msg) => {
                 self.handle_script_event(msg);
             },
-            MixedMessage::FromControl(ServiceWorkerControlMsg::Exit) => {
+            MixedMessage::Control(ServiceWorkerControlMsg::Exit) => {
                 return false;
             },
         }
@@ -480,7 +481,7 @@ impl ServiceWorkerGlobalScope {
 
     fn dispatch_activate(&self) {
         let event = ExtendableEvent::new(self, atom!("activate"), false, false);
-        let event = (&*event).upcast::<Event>();
+        let event = (*event).upcast::<Event>();
         self.upcast::<EventTarget>().dispatch_event(event);
     }
 }

@@ -63,10 +63,10 @@ use super::bindings::trace::HashMapTracedValues;
 use crate::dom::bindings::cell::{DomRefCell, RefMut};
 use crate::dom::bindings::codegen::Bindings::BroadcastChannelBinding::BroadcastChannelMethods;
 use crate::dom::bindings::codegen::Bindings::EventSourceBinding::EventSource_Binding::EventSourceMethods;
-use crate::dom::bindings::codegen::Bindings::GamepadListBinding::GamepadList_Binding::GamepadListMethods;
 use crate::dom::bindings::codegen::Bindings::ImageBitmapBinding::{
     ImageBitmapOptions, ImageBitmapSource,
 };
+use crate::dom::bindings::codegen::Bindings::NavigatorBinding::NavigatorMethods;
 use crate::dom::bindings::codegen::Bindings::PerformanceBinding::Performance_Binding::PerformanceMethods;
 use crate::dom::bindings::codegen::Bindings::PermissionStatusBinding::PermissionState;
 use crate::dom::bindings::codegen::Bindings::VoidFunctionBinding::VoidFunction;
@@ -294,6 +294,9 @@ pub struct GlobalScope {
     ///
     /// <https://html.spec.whatwg.org/multipage/#about-to-be-notified-rejected-promises-list>
     #[ignore_malloc_size_of = "mozjs"]
+    // `Heap` values must stay boxed, as they need semantics like `Pin`
+    // (that is, they cannot be moved).
+    #[allow(clippy::vec_box)]
     uncaught_rejections: DomRefCell<Vec<Box<Heap<*mut JSObject>>>>,
 
     /// Promises in this list have previously been reported as rejected
@@ -302,6 +305,9 @@ pub struct GlobalScope {
     ///
     /// <https://html.spec.whatwg.org/multipage/#outstanding-rejected-promises-weak-set>
     #[ignore_malloc_size_of = "mozjs"]
+    // `Heap` values must stay boxed, as they need semantics like `Pin`
+    // (that is, they cannot be moved).
+    #[allow(clippy::vec_box)]
     consumed_rejections: DomRefCell<Vec<Box<Heap<*mut JSObject>>>>,
 
     /// True if headless mode.
@@ -742,6 +748,7 @@ impl FileListener {
 }
 
 impl GlobalScope {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_inherited(
         pipeline_id: PipelineId,
         devtools_chan: Option<IpcSender<ScriptToDevtoolsControlMsg>>,
@@ -962,7 +969,7 @@ impl GlobalScope {
         self.list_auto_close_worker
             .borrow_mut()
             .drain(0..)
-            .for_each(|worker| drop(worker));
+            .for_each(drop);
     }
 
     /// Update our state to un-managed,
@@ -1143,7 +1150,7 @@ impl GlobalScope {
                 );
             }
         } else {
-            return warn!("post_messageport_msg called on a global not managing any ports.");
+            warn!("post_messageport_msg called on a global not managing any ports.");
         }
     }
 
@@ -1209,7 +1216,7 @@ impl GlobalScope {
             if let Some(channels) = channels.get(&channel_name) {
                 channels
                     .iter()
-                    .filter(|ref channel| {
+                    .filter(|channel| {
                         // Step 8.
                         // Filter out the sender.
                         if let Some(id) = channel_id {
@@ -1355,7 +1362,7 @@ impl GlobalScope {
         {
             let to_be_removed: Vec<MessagePortId> = message_ports
                 .iter()
-                .filter_map(|(id, ref managed_port)| {
+                .filter_map(|(id, managed_port)| {
                     if managed_port.closed {
                         // Let the constellation know to drop this port and the one it is entangled with,
                         // and to forward this message to the script-process where the entangled is found.
@@ -1388,7 +1395,7 @@ impl GlobalScope {
             &mut *self.broadcast_channel_state.borrow_mut()
         {
             channels.retain(|name, ref mut channels| {
-                channels.retain(|ref chan| !chan.closed());
+                channels.retain(|chan| !chan.closed());
                 if channels.is_empty() {
                     let _ = self.script_to_constellation_chan().send(
                         ScriptMsg::RemoveBroadcastChannelNameInRouter(
@@ -2193,6 +2200,9 @@ impl GlobalScope {
         }
     }
 
+    // `Heap` values must stay boxed, as they need semantics like `Pin`
+    // (that is, they cannot be moved).
+    #[allow(clippy::vec_box)]
     pub fn get_uncaught_rejections(&self) -> &DomRefCell<Vec<Box<Heap<*mut JSObject>>>> {
         &self.uncaught_rejections
     }
@@ -2214,6 +2224,9 @@ impl GlobalScope {
         }
     }
 
+    // `Heap` values must stay boxed, as they need semantics like `Pin`
+    // (that is, they cannot be moved).
+    #[allow(clippy::vec_box)]
     pub fn get_consumed_rejections(&self) -> &DomRefCell<Vec<Box<Heap<*mut JSObject>>>> {
         &self.consumed_rejections
     }
@@ -2771,7 +2784,7 @@ impl GlobalScope {
             return p;
         }
 
-        let promise = match image {
+        match image {
             ImageBitmapSource::HTMLCanvasElement(ref canvas) => {
                 // https://html.spec.whatwg.org/multipage/#check-the-usability-of-the-image-argument
                 if !canvas.is_valid() {
@@ -2813,10 +2826,9 @@ impl GlobalScope {
             },
             _ => {
                 p.reject_error(Error::NotSupported);
-                return p;
+                p
             },
-        };
-        promise
+        }
     }
 
     pub fn fire_timer(&self, handle: TimerEventId) {
@@ -3121,7 +3133,10 @@ impl GlobalScope {
     /// <https://www.w3.org/TR/gamepad/#dfn-gamepadconnected>
     pub fn handle_gamepad_connect(
         &self,
-        index: usize,
+        // As the spec actually defines how to set the gamepad index, the GilRs index
+        // is currently unused, though in practice it will almost always be the same.
+        // More infra is currently needed to track gamepads across windows.
+        _index: usize,
         name: String,
         axis_bounds: (f64, f64),
         button_bounds: (f64, f64),
@@ -3132,19 +3147,12 @@ impl GlobalScope {
         self.gamepad_task_source().queue_with_canceller(
             task!(gamepad_connected: move || {
                 let global = this.root();
-                let gamepad = Gamepad::new(&global, index as u32, name, axis_bounds, button_bounds);
 
                 if let Some(window) = global.downcast::<Window>() {
-                    let has_gesture = window.Navigator().has_gamepad_gesture();
-                    if has_gesture {
-                        gamepad.set_exposed(true);
-                        if window.Document().is_fully_active() {
-                            gamepad.update_connected(true, has_gesture);
-                        }
-                    }
-                    let gamepad_list = window.Navigator().gamepads();
-                    let gamepad_arr: [DomRoot<Gamepad>; 1] = [gamepad.clone()];
-                    gamepad_list.add_if_not_exists(&gamepad_arr);
+                    let navigator = window.Navigator();
+                    let selected_index = navigator.select_gamepad_index();
+                    let gamepad = Gamepad::new(&global, selected_index, name, axis_bounds, button_bounds);
+                    navigator.set_gamepad(selected_index as usize, &*gamepad);
                 }
             }),
             &self.task_canceller(TaskSourceName::Gamepad)
@@ -3160,18 +3168,11 @@ impl GlobalScope {
                 task!(gamepad_disconnected: move || {
                     let global = this.root();
                     if let Some(window) = global.downcast::<Window>() {
-                        let gamepad_list = window.Navigator().gamepads();
-                        if let Some(gamepad) = gamepad_list.Item(index as u32) {
+                        let navigator = window.Navigator();
+                        if let Some(gamepad) = navigator.get_gamepad(index) {
                             if window.Document().is_fully_active() {
                                 gamepad.update_connected(false, gamepad.exposed());
-                                gamepad_list.remove_gamepad(index);
-                            }
-                        }
-                        for i in (0..gamepad_list.Length()).rev() {
-                            if gamepad_list.Item(i).is_none() {
-                                gamepad_list.remove_gamepad(i as usize);
-                            } else {
-                                break;
+                                navigator.remove_gamepad(index);
                             }
                         }
                     }
@@ -3191,11 +3192,10 @@ impl GlobalScope {
                 task!(update_gamepad_state: move || {
                     let global = this.root();
                     if let Some(window) = global.downcast::<Window>() {
-                        let gamepad_list = window.Navigator().gamepads();
-                        if let Some(gamepad) = gamepad_list.Item(index as u32) {
+                        let navigator = window.Navigator();
+                        if let Some(gamepad) = navigator.get_gamepad(index) {
                             let current_time = global.performance().Now();
                             gamepad.update_timestamp(*current_time);
-
                             match update_type {
                                 GamepadUpdateType::Axis(index, value) => {
                                     gamepad.map_and_normalize_axes(index, value);
@@ -3204,26 +3204,27 @@ impl GlobalScope {
                                     gamepad.map_and_normalize_buttons(index, value);
                                 }
                             };
-
-                            if !window.Navigator().has_gamepad_gesture() && contains_user_gesture(update_type) {
-                                window.Navigator().set_has_gamepad_gesture(true);
-                                for i in 0..gamepad_list.Length() {
-                                    if let Some(gamepad) = gamepad_list.Item(i) {
+                            if !navigator.has_gamepad_gesture() && contains_user_gesture(update_type) {
+                                navigator.set_has_gamepad_gesture(true);
+                                navigator.GetGamepads()
+                                    .iter()
+                                    .filter_map(|g| g.as_ref())
+                                    .for_each(|gamepad| {
                                         gamepad.set_exposed(true);
                                         gamepad.update_timestamp(*current_time);
-                                        let new_gamepad = Trusted::new(&*gamepad);
+                                        let new_gamepad = Trusted::new(&**gamepad);
                                         if window.Document().is_fully_active() {
                                             window.task_manager().gamepad_task_source().queue_with_canceller(
                                                 task!(update_gamepad_connect: move || {
                                                     let gamepad = new_gamepad.root();
                                                     gamepad.notify_event(GamepadEventType::Connected);
                                                 }),
-                                                &window.upcast::<GlobalScope>().task_canceller(TaskSourceName::Gamepad),
+                                                &window.upcast::<GlobalScope>()
+                                                    .task_canceller(TaskSourceName::Gamepad),
                                             )
                                             .expect("Failed to queue update gamepad connect task.");
                                         }
-                                    }
-                                }
+                                });
                             }
                         }
                     }

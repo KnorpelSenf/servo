@@ -155,7 +155,7 @@ pub unsafe extern "C" fn get_prototype_if_ordinary(
 /// Get the expando object, or null if there is none.
 pub unsafe fn get_expando_object(obj: RawHandleObject, mut expando: MutableHandleObject) {
     assert!(is_dom_proxy(obj.get()));
-    let ref mut val = UndefinedValue();
+    let val = &mut UndefinedValue();
     GetProxyPrivate(obj.get(), val);
     expando.set(if val.is_undefined() {
         ptr::null_mut()
@@ -563,13 +563,13 @@ pub unsafe fn cross_origin_set(
 
 unsafe fn get_getter_object(d: &PropertyDescriptor, out: RawMutableHandleObject) {
     if d.hasGetter_() {
-        out.set(std::mem::transmute(d.getter_));
+        out.set(d.getter_);
     }
 }
 
 unsafe fn get_setter_object(d: &PropertyDescriptor, out: RawMutableHandleObject) {
     if d.hasSetter_() {
-        out.set(std::mem::transmute(d.setter_));
+        out.set(d.setter_);
     }
 }
 

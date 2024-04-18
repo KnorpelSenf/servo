@@ -3,8 +3,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::borrow::ToOwned;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{f32, fmt, mem, thread};
 
@@ -25,28 +27,28 @@ use webrender_api::{FontInstanceKey, FontKey};
 
 use crate::font::{FontFamilyDescriptor, FontFamilyName, FontSearchScope};
 use crate::font_context::FontSource;
-use crate::font_template::{FontTemplate, FontTemplateDescriptor};
-use crate::platform::font_context::FontContextHandle;
+use crate::font_template::{
+    FontTemplate, FontTemplateDescriptor, FontTemplateRef, FontTemplateRefMethods,
+};
 use crate::platform::font_list::{
     for_each_available_family, for_each_variation, system_default_family, LocalFontIdentifier,
     SANS_SERIF_FONT_FAMILY,
 };
-use crate::platform::font_template::FontTemplateData;
 
 /// A list of font templates that make up a given font family.
 #[derive(Default)]
 pub struct FontTemplates {
-    templates: Vec<FontTemplate>,
+    templates: Vec<FontTemplateRef>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct FontTemplateInfo {
-    pub font_template: Arc<FontTemplateData>,
+#[derive(Clone, Debug)]
+pub struct FontTemplateAndWebRenderFontKey {
+    pub font_template: FontTemplateRef,
     pub font_key: FontKey,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct SerializedFontTemplateInfo {
+pub struct SerializedFontTemplateAndWebRenderFontKey {
     pub serialized_font_template: SerializedFontTemplate,
     pub font_key: FontKey,
 }
@@ -60,13 +62,19 @@ pub enum FontIdentifier {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SerializedFontTemplate {
     identifier: FontIdentifier,
+    descriptor: Option<FontTemplateDescriptor>,
     bytes_receiver: ipc_channel::ipc::IpcBytesReceiver,
 }
 
 impl SerializedFontTemplate {
-    pub fn to_font_template_data(&self) -> FontTemplateData {
+    pub fn to_font_template(&self) -> FontTemplate {
         let font_data = self.bytes_receiver.recv().ok();
-        FontTemplateData::new(self.identifier.clone(), font_data).unwrap()
+        FontTemplate {
+            identifier: self.identifier.clone(),
+            descriptor: self.descriptor.clone(),
+            data: font_data.map(Arc::new),
+            is_valid: true,
+        }
     }
 }
 
@@ -75,42 +83,37 @@ impl FontTemplates {
     pub fn find_font_for_style(
         &mut self,
         desc: &FontTemplateDescriptor,
-        fctx: &FontContextHandle,
-    ) -> Option<Arc<FontTemplateData>> {
+    ) -> Option<FontTemplateRef> {
         // TODO(Issue #189): optimize lookup for
         // regular/bold/italic/bolditalic with fixed offsets and a
         // static decision table for fallback between these values.
         for template in &mut self.templates {
-            let maybe_template = template.data_for_descriptor(fctx, desc);
-            if maybe_template.is_some() {
-                return maybe_template;
+            if template.descriptor_matches(desc) {
+                return Some(template.clone());
             }
         }
 
         // We didn't find an exact match. Do more expensive fuzzy matching.
         // TODO(#190): Do a better job.
-        let (mut best_template_data, mut best_distance) = (None, f32::MAX);
-        for template in &mut self.templates {
-            if let Some((template_data, distance)) =
-                template.data_for_approximate_descriptor(fctx, desc)
-            {
+        let (mut best_template, mut best_distance) = (None, f32::MAX);
+        for template in self.templates.iter() {
+            if let Some(distance) = template.descriptor_distance(desc) {
                 if distance < best_distance {
-                    best_template_data = Some(template_data);
+                    best_template = Some(template);
                     best_distance = distance
                 }
             }
         }
-        if best_template_data.is_some() {
-            return best_template_data;
+        if best_template.is_some() {
+            return best_template.cloned();
         }
 
         // If a request is made for a font family that exists,
         // pick the first valid font in the family if we failed
         // to find an exact match for the descriptor.
-        for template in &mut self.templates {
-            let maybe_template = template.get();
-            if maybe_template.is_some() {
-                return maybe_template;
+        for template in &mut self.templates.iter() {
+            if template.is_valid() {
+                return Some(template.clone());
             }
         }
 
@@ -119,13 +122,13 @@ impl FontTemplates {
 
     pub fn add_template(&mut self, identifier: FontIdentifier, maybe_data: Option<Vec<u8>>) {
         for template in &self.templates {
-            if *template.identifier() == identifier {
+            if *template.borrow().identifier() == identifier {
                 return;
             }
         }
 
         if let Ok(template) = FontTemplate::new(identifier, maybe_data) {
-            self.templates.push(template);
+            self.templates.push(Rc::new(RefCell::new(template)));
         }
     }
 }
@@ -148,7 +151,7 @@ pub enum Command {
 /// Reply messages sent from the font cache thread to the FontContext caller.
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Reply {
-    GetFontTemplateReply(Option<SerializedFontTemplateInfo>),
+    GetFontTemplateReply(Option<SerializedFontTemplateAndWebRenderFontKey>),
 }
 
 /// The font cache thread itself. It maintains a list of reference counted
@@ -159,7 +162,6 @@ struct FontCache {
     generic_fonts: HashMap<FontFamilyName, LowercaseString>,
     local_families: HashMap<LowercaseString, FontTemplates>,
     web_families: HashMap<LowercaseString, FontTemplates>,
-    font_context: FontContextHandle,
     core_resource_thread: CoreResourceThread,
     webrender_api: Box<dyn WebrenderApi>,
     webrender_fonts: HashMap<FontIdentifier, FontKey>,
@@ -200,29 +202,30 @@ impl FontCache {
 
             match msg {
                 Command::GetFontTemplate(template_descriptor, family_descriptor, result) => {
-                    let maybe_font_template =
-                        self.find_font_template(&template_descriptor, &family_descriptor);
-                    match maybe_font_template {
-                        None => {
-                            let _ = result.send(Reply::GetFontTemplateReply(None));
-                        },
-                        Some(font_template_info) => {
-                            let (bytes_sender, bytes_receiver) =
-                                ipc::bytes_channel().expect("failed to create IPC channel");
-                            let serialized_font_template = SerializedFontTemplate {
-                                identifier: font_template_info.font_template.identifier.clone(),
-                                bytes_receiver,
-                            };
-
-                            let _ = result.send(Reply::GetFontTemplateReply(Some(
-                                SerializedFontTemplateInfo {
-                                    serialized_font_template,
-                                    font_key: font_template_info.font_key,
-                                },
-                            )));
-                            let _ = bytes_sender.send(&font_template_info.font_template.bytes());
-                        },
+                    let Some(font_template_info) =
+                        self.find_font_template(&template_descriptor, &family_descriptor)
+                    else {
+                        let _ = result.send(Reply::GetFontTemplateReply(None));
+                        continue;
                     };
+
+                    let (bytes_sender, bytes_receiver) =
+                        ipc::bytes_channel().expect("failed to create IPC channel");
+                    let serialized_font_template = SerializedFontTemplate {
+                        identifier: font_template_info.font_template.borrow().identifier.clone(),
+                        descriptor: font_template_info.font_template.borrow().descriptor.clone(),
+                        bytes_receiver,
+                    };
+
+                    let _ = result.send(Reply::GetFontTemplateReply(Some(
+                        SerializedFontTemplateAndWebRenderFontKey {
+                            serialized_font_template,
+                            font_key: font_template_info.font_key,
+                        },
+                    )));
+
+                    // NB: This will load the font into memory if it hasn't been loaded already.
+                    let _ = bytes_sender.send(&font_template_info.font_template.data());
                 },
                 Command::GetFontInstance(font_key, size, result) => {
                     let webrender_api = &self.webrender_api;
@@ -386,7 +389,7 @@ impl FontCache {
         &mut self,
         template_descriptor: &FontTemplateDescriptor,
         family_name: &FontFamilyName,
-    ) -> Option<Arc<FontTemplateData>> {
+    ) -> Option<FontTemplateRef> {
         let family_name = self.transform_family(family_name);
 
         // TODO(Issue #188): look up localized font family names if canonical name not found
@@ -404,7 +407,7 @@ impl FontCache {
             // TODO(Issue #192: handle generic font families, like 'serif' and 'sans-serif'.
             // if such family exists, try to match style to a font
 
-            s.find_font_for_style(template_descriptor, &self.font_context)
+            s.find_font_for_style(template_descriptor)
         } else {
             debug!(
                 "FontList: Couldn't find font family with name={}",
@@ -418,43 +421,38 @@ impl FontCache {
         &mut self,
         template_descriptor: &FontTemplateDescriptor,
         family_name: &FontFamilyName,
-    ) -> Option<Arc<FontTemplateData>> {
+    ) -> Option<FontTemplateRef> {
         let family_name = LowercaseString::from(family_name);
 
         if self.web_families.contains_key(&family_name) {
             let templates = self.web_families.get_mut(&family_name).unwrap();
-            templates.find_font_for_style(template_descriptor, &self.font_context)
+            templates.find_font_for_style(template_descriptor)
         } else {
             None
         }
     }
 
-    fn get_font_template_info(&mut self, template: Arc<FontTemplateData>) -> FontTemplateInfo {
+    fn get_font_key_for_template(&mut self, template: &FontTemplateRef) -> FontKey {
         let webrender_api = &self.webrender_api;
         let webrender_fonts = &mut self.webrender_fonts;
-
-        let font_key = *webrender_fonts
-            .entry(template.identifier.clone())
+        *webrender_fonts
+            .entry(template.borrow().identifier.clone())
             .or_insert_with(|| {
-                let font = match (template.bytes_if_in_memory(), template.native_font()) {
+                let template = template.borrow();
+                let font = match (template.data_if_in_memory(), template.native_font_handle()) {
                     (Some(bytes), _) => FontData::Raw((*bytes).clone()),
                     (None, Some(native_font)) => FontData::Native(native_font),
-                    (None, None) => FontData::Raw((*template.bytes()).clone()),
+                    (None, None) => unreachable!("Font should either be local or a web font."),
                 };
                 webrender_api.add_font(font)
-            });
-
-        FontTemplateInfo {
-            font_template: template,
-            font_key,
-        }
+            })
     }
 
     fn find_font_template(
         &mut self,
         template_descriptor: &FontTemplateDescriptor,
         family_descriptor: &FontFamilyDescriptor,
-    ) -> Option<FontTemplateInfo> {
+    ) -> Option<FontTemplateAndWebRenderFontKey> {
         match family_descriptor.scope {
             FontSearchScope::Any => self
                 .find_font_in_web_family(template_descriptor, &family_descriptor.name)
@@ -466,7 +464,10 @@ impl FontCache {
                 self.find_font_in_local_family(template_descriptor, &family_descriptor.name)
             },
         }
-        .map(|t| self.get_font_template_info(t))
+        .map(|font_template| FontTemplateAndWebRenderFontKey {
+            font_key: self.get_font_key_for_template(&font_template),
+            font_template,
+        })
     }
 }
 
@@ -498,7 +499,6 @@ impl FontCacheThread {
                     generic_fonts,
                     local_families: HashMap::new(),
                     web_families: HashMap::new(),
-                    font_context: FontContextHandle::default(),
                     core_resource_thread,
                     webrender_api,
                     webrender_fonts: HashMap::new(),
@@ -600,7 +600,7 @@ impl FontSource for FontCacheThread {
         &mut self,
         template_descriptor: FontTemplateDescriptor,
         family_descriptor: FontFamilyDescriptor,
-    ) -> Option<FontTemplateInfo> {
+    ) -> Option<FontTemplateAndWebRenderFontKey> {
         let (response_chan, response_port) = ipc::channel().expect("failed to create IPC channel");
         self.chan
             .send(Command::GetFontTemplate(
@@ -623,17 +623,17 @@ impl FontSource for FontCacheThread {
 
         match reply.unwrap() {
             Reply::GetFontTemplateReply(maybe_serialized_font_template_info) => {
-                match maybe_serialized_font_template_info {
-                    None => None,
-                    Some(serialized_font_template_info) => Some(FontTemplateInfo {
-                        font_template: Arc::new(
-                            serialized_font_template_info
-                                .serialized_font_template
-                                .to_font_template_data(),
-                        ),
+                maybe_serialized_font_template_info.map(|serialized_font_template_info| {
+                    let font_template = Rc::new(RefCell::new(
+                        serialized_font_template_info
+                            .serialized_font_template
+                            .to_font_template(),
+                    ));
+                    FontTemplateAndWebRenderFontKey {
+                        font_template,
                         font_key: serialized_font_template_info.font_key,
-                    }),
-                }
+                    }
+                })
             },
         }
     }

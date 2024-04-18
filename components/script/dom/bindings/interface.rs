@@ -165,7 +165,7 @@ pub unsafe fn create_global_object(
     let private_val = PrivateValue(private);
     JS_SetReservedSlot(rval.get(), DOM_OBJECT_SLOT, &private_val);
     let proto_array: Box<ProtoOrIfaceArray> =
-        Box::new([0 as *mut JSObject; PrototypeList::PROTO_OR_IFACE_LENGTH]);
+        Box::new([ptr::null_mut::<JSObject>(); PrototypeList::PROTO_OR_IFACE_LENGTH]);
     let val = PrivateValue(Box::into_raw(proto_array) as *const libc::c_void);
     JS_SetReservedSlot(rval.get(), DOM_PROTOTYPE_SLOT, &val);
 
@@ -229,6 +229,7 @@ pub fn create_callback_interface_object(
 }
 
 /// Create the interface prototype object of a non-callback interface.
+#[allow(clippy::too_many_arguments)]
 pub fn create_interface_prototype_object(
     cx: SafeJSContext,
     global: HandleObject,
@@ -273,6 +274,7 @@ pub fn create_interface_prototype_object(
 }
 
 /// Create and define the interface object of a non-callback interface.
+#[allow(clippy::too_many_arguments)]
 pub fn create_noncallback_interface_object(
     cx: SafeJSContext,
     global: HandleObject,
@@ -353,6 +355,7 @@ pub fn create_named_constructors(
 }
 
 /// Create a new object with a unique type.
+#[allow(clippy::too_many_arguments)]
 pub fn create_object(
     cx: SafeJSContext,
     global: HandleObject,
@@ -543,9 +546,9 @@ pub enum ProtoOrIfaceIndex {
     Constructor(PrototypeList::Constructor),
 }
 
-impl Into<usize> for ProtoOrIfaceIndex {
-    fn into(self) -> usize {
-        match self {
+impl From<ProtoOrIfaceIndex> for usize {
+    fn from(index: ProtoOrIfaceIndex) -> usize {
+        match index {
             ProtoOrIfaceIndex::ID(id) => id as usize,
             ProtoOrIfaceIndex::Constructor(constructor) => constructor as usize,
         }
@@ -602,7 +605,7 @@ fn get_proto_id_for_new_target(new_target: HandleObject) -> Option<PrototypeList
             let dom_class = &(*domjsclass).dom_class;
             return Some(dom_class.interface_chain[dom_class.depth as usize]);
         }
-        return None;
+        None
     }
 }
 
@@ -698,6 +701,6 @@ pub fn get_desired_proto(
         }
 
         maybe_wrap_object(*cx, desired_proto);
-        return Ok(());
+        Ok(())
     }
 }

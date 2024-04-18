@@ -19,11 +19,10 @@ use style::values::computed::font::FontStyle as StyleFontStyle;
 use style::values::specified::font::FontStretchKeyword;
 
 use crate::font::{
-    FontHandleMethods, FontMetrics, FontTableMethods, FontTableTag, FractionalPixel,
+    FontMetrics, FontTableMethods, FontTableTag, FractionalPixel, PlatformFontMethods,
 };
 use crate::font_cache_thread::FontIdentifier;
-use crate::platform::font_template::FontTemplateData;
-use crate::platform::windows::font_context::FontContextHandle;
+use crate::font_template::{FontTemplateRef, FontTemplateRefMethods};
 use crate::text::glyph::GlyphId;
 
 // 1em = 12pt = 16px, assuming 72 points per inch and 96 px per inch
@@ -200,9 +199,11 @@ impl FontInfo {
 }
 
 #[derive(Debug)]
-pub struct FontHandle {
-    font_data: Arc<FontTemplateData>,
+pub struct PlatformFont {
     face: Nondebug<FontFace>,
+    /// A reference to this data used to create this [`PlatformFont`], ensuring the
+    /// data stays alive of the lifetime of this struct.
+    data: Option<Arc<Vec<u8>>>,
     info: FontInfo,
     em_size: f32,
     du_to_px: f32,
@@ -224,25 +225,31 @@ impl<T> Deref for Nondebug<T> {
     }
 }
 
-impl FontHandle {}
-
-impl FontHandleMethods for FontHandle {
+impl PlatformFontMethods for PlatformFont {
     fn new_from_template(
-        _: &FontContextHandle,
-        template: Arc<FontTemplateData>,
+        font_template: FontTemplateRef,
         pt_size: Option<Au>,
     ) -> Result<Self, &'static str> {
-        let (face, info) = match template.get_font() {
-            Some(font) => (font.create_font_face(), FontInfo::new_from_font(&font)?),
+        let direct_write_font = match font_template.borrow().identifier {
+            FontIdentifier::Local(ref local_identifier) => local_identifier.direct_write_font(),
+            FontIdentifier::Web(_) => None,
+        };
+
+        let (face, info, data) = match direct_write_font {
+            Some(font) => (
+                font.create_font_face(),
+                FontInfo::new_from_font(&font)?,
+                None,
+            ),
             None => {
-                let bytes = template.bytes();
+                let bytes = font_template.data();
                 let font_file =
                     FontFile::new_from_data(bytes).ok_or("Could not create FontFile")?;
                 let face = font_file
                     .create_face(0, dwrote::DWRITE_FONT_SIMULATIONS_NONE)
                     .map_err(|_| "Could not create FontFace")?;
                 let info = FontInfo::new_from_face(&face)?;
-                (face, info)
+                (face, info, font_template.borrow().data_if_in_memory())
             },
         };
 
@@ -255,18 +262,14 @@ impl FontHandleMethods for FontHandle {
         let design_units_to_pixels = 1. / design_units_per_pixel;
         let scaled_design_units_to_pixels = em_size / design_units_per_pixel;
 
-        Ok(FontHandle {
-            font_data: template.clone(),
+        Ok(PlatformFont {
             face: Nondebug(face),
+            data,
             info,
             em_size,
             du_to_px: design_units_to_pixels,
             scaled_du_to_px: scaled_design_units_to_pixels,
         })
-    }
-
-    fn template(&self) -> Arc<FontTemplateData> {
-        self.font_data.clone()
     }
 
     fn family_name(&self) -> Option<String> {
@@ -353,9 +356,5 @@ impl FontHandleMethods for FontHandle {
         self.face
             .get_font_table(tag)
             .map(|bytes| FontTable { data: bytes })
-    }
-
-    fn identifier(&self) -> &FontIdentifier {
-        &self.font_data.identifier
     }
 }

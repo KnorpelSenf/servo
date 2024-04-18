@@ -41,9 +41,9 @@ use crate::task_source::{TaskSource, TaskSourceName};
 
 #[derive(Clone, Copy, JSTraceable, MallocSizeOf, PartialEq)]
 pub enum FileReaderFunction {
-    ReadAsText,
-    ReadAsDataUrl,
-    ReadAsArrayBuffer,
+    Text,
+    DataUrl,
+    ArrayBuffer,
 }
 
 pub type TrustedFileReader = Trusted<FileReader>;
@@ -90,7 +90,7 @@ pub struct FileReaderSharedFunctionality;
 
 impl FileReaderSharedFunctionality {
     pub fn dataurl_format(blob_contents: &[u8], blob_type: String) -> DOMString {
-        let base64 = base64::engine::general_purpose::STANDARD.encode(&blob_contents);
+        let base64 = base64::engine::general_purpose::STANDARD.encode(blob_contents);
 
         let dataurl = if blob_type.is_empty() {
             format!("data:base64,{}", base64)
@@ -253,13 +253,13 @@ impl FileReader {
         // Step 8.2
 
         match data.function {
-            FileReaderFunction::ReadAsDataUrl => {
+            FileReaderFunction::DataUrl => {
                 FileReader::perform_readasdataurl(&fr.result, data, &blob_contents)
             },
-            FileReaderFunction::ReadAsText => {
+            FileReaderFunction::Text => {
                 FileReader::perform_readastext(&fr.result, data, &blob_contents)
             },
-            FileReaderFunction::ReadAsArrayBuffer => {
+            FileReaderFunction::ArrayBuffer => {
                 let _ac = enter_realm(&*fr);
                 FileReader::perform_readasarraybuffer(
                     &fr.result,
@@ -349,17 +349,17 @@ impl FileReaderMethods for FileReader {
 
     // https://w3c.github.io/FileAPI/#dfn-readAsArrayBuffer
     fn ReadAsArrayBuffer(&self, blob: &Blob) -> ErrorResult {
-        self.read(FileReaderFunction::ReadAsArrayBuffer, blob, None)
+        self.read(FileReaderFunction::ArrayBuffer, blob, None)
     }
 
     // https://w3c.github.io/FileAPI/#dfn-readAsDataURL
     fn ReadAsDataURL(&self, blob: &Blob) -> ErrorResult {
-        self.read(FileReaderFunction::ReadAsDataUrl, blob, None)
+        self.read(FileReaderFunction::DataUrl, blob, None)
     }
 
     // https://w3c.github.io/FileAPI/#dfn-readAsText
     fn ReadAsText(&self, blob: &Blob, label: Option<DOMString>) -> ErrorResult {
-        self.read(FileReaderFunction::ReadAsText, blob, label)
+        self.read(FileReaderFunction::Text, blob, label)
     }
 
     // https://w3c.github.io/FileAPI/#dfn-abort

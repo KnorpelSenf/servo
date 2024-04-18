@@ -141,16 +141,13 @@ impl BoxTree {
                 return None;
             }
 
-            // Don't update unstyled nodes.
-            let data = node.get_style_and_layout_data()?;
-
-            // Don't update nodes that have pseudo-elements.
-            let element_data = data.style_data.element_data.borrow();
+            // Don't update unstyled nodes or nodes that have pseudo-elements.
+            let element_data = node.style_data()?.element_data.borrow();
             if !element_data.styles.pseudos.is_empty() {
                 return None;
             }
 
-            let layout_data = data.layout_data.borrow();
+            let layout_data = node.layout_data()?;
             if layout_data.pseudo_before_box.borrow().is_some() {
                 return None;
             }
@@ -207,7 +204,7 @@ impl BoxTree {
 
         loop {
             if let Some((primary_style, display_inside, update_point)) = update_point(dirty_node) {
-                let contents = ReplacedContent::for_element(dirty_node)
+                let contents = ReplacedContent::for_element(dirty_node, context)
                     .map_or(Contents::OfElement, Contents::Replaced);
                 let info = NodeAndStyleInfo::new(dirty_node, Arc::clone(&primary_style));
                 let out_of_flow_absolutely_positioned_box = ArcRefCell::new(
@@ -265,8 +262,8 @@ fn construct_for_root_element<'dom>(
         Display::GeneratingBox(display_generating_box) => display_generating_box.display_inside(),
     };
 
-    let contents =
-        ReplacedContent::for_element(root_element).map_or(Contents::OfElement, Contents::Replaced);
+    let contents = ReplacedContent::for_element(root_element, context)
+        .map_or(Contents::OfElement, Contents::Replaced);
     let root_box = if box_style.position.is_absolutely_positioned() {
         BlockLevelBox::OutOfFlowAbsolutelyPositionedBox(ArcRefCell::new(
             AbsolutelyPositionedBox::construct(context, &info, display_inside, contents),

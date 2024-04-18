@@ -58,7 +58,7 @@ use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
 use style::attr::AttrValue;
 use style::context::QuirksMode;
 use style::invalidation::element::restyle_hints::RestyleHint;
-use style::media_queries::{Device, MediaType};
+use style::media_queries::Device;
 use style::selector_parser::Snapshot;
 use style::shared_lock::SharedRwLock as StyleSharedRwLock;
 use style::str::{split_html_space_chars, str_join};
@@ -933,7 +933,7 @@ impl Document {
     pub fn register_form_id_listener<T: ?Sized + FormControl>(&self, id: DOMString, listener: &T) {
         let mut map = self.form_id_listener_map.borrow_mut();
         let listener = listener.to_element();
-        let set = map.entry(Atom::from(id)).or_insert(HashSet::new());
+        let set = map.entry(Atom::from(id)).or_default();
         set.insert(Dom::from_ref(listener));
     }
 
@@ -1075,7 +1075,7 @@ impl Document {
 
     /// <https://html.spec.whatwg.org/multipage/#focus-fixup-rule>
     pub(crate) fn perform_focus_fixup_rule(&self, not_focusable: &Element) {
-        if Some(not_focusable) != self.focused.get().as_ref().map(|e| &**e) {
+        if Some(not_focusable) != self.focused.get().as_deref() {
             return;
         }
         self.request_focus(
@@ -1114,7 +1114,7 @@ impl Document {
             },
         };
         *self.focus_transaction.borrow_mut() = FocusTransaction::NotInTransaction;
-        if self.focused == possibly_focused.as_ref().map(|e| &**e) {
+        if self.focused == possibly_focused.as_deref() {
             return;
         }
         if let Some(ref elem) = self.focused.get() {
@@ -1129,7 +1129,7 @@ impl Document {
             }
         }
 
-        self.focused.set(possibly_focused.as_ref().map(|e| &**e));
+        self.focused.set(possibly_focused.as_deref());
 
         if let Some(ref elem) = self.focused.get() {
             elem.set_focus_state(true);
@@ -1152,7 +1152,7 @@ impl Document {
                 let (text, multiline) = if let Some(input) = elem.downcast::<HTMLInputElement>() {
                     (
                         Some((
-                            (&input.Value()).to_string(),
+                            input.Value().to_string(),
                             input.GetSelectionEnd().unwrap_or(0) as i32,
                         )),
                         false,
@@ -1160,7 +1160,7 @@ impl Document {
                 } else if let Some(textarea) = elem.downcast::<HTMLTextAreaElement>() {
                     (
                         Some((
-                            (&textarea.Value()).to_string(),
+                            textarea.Value().to_string(),
                             textarea.GetSelectionEnd().unwrap_or(0) as i32,
                         )),
                         true,
@@ -1188,7 +1188,7 @@ impl Document {
                 title.clone(),
             ));
             let global = self.window.upcast::<GlobalScope>();
-            if let Some(ref chan) = global.devtools_chan() {
+            if let Some(chan) = global.devtools_chan() {
                 let _ = chan.send(ScriptToDevtoolsControlMsg::TitleChanged(
                     global.pipeline_id(),
                     title,
@@ -1256,7 +1256,8 @@ impl Document {
         debug!("{} on {:?}", mouse_event_type_string, node.debug_str());
         // Prevent click event if form control element is disabled.
         if let MouseEventType::Click = mouse_event_type {
-            if el.click_event_filter_by_disabled_state() {
+            // The click event is filtered by the disabled state.
+            if el.is_actually_disabled() {
                 return;
             }
 
@@ -2934,40 +2935,40 @@ pub enum DocumentSource {
 #[allow(unsafe_code)]
 pub trait LayoutDocumentHelpers<'dom> {
     fn is_html_document_for_layout(self) -> bool;
-    unsafe fn needs_paint_from_layout(self);
-    unsafe fn will_paint(self);
+    fn needs_paint_from_layout(self);
+    fn will_paint(self);
     fn quirks_mode(self) -> QuirksMode;
     fn style_shared_lock(self) -> &'dom StyleSharedRwLock;
     fn shadow_roots(self) -> Vec<LayoutDom<'dom, ShadowRoot>>;
     fn shadow_roots_styles_changed(self) -> bool;
-    unsafe fn flush_shadow_roots_stylesheets(self);
+    fn flush_shadow_roots_stylesheets(self);
 }
 
 #[allow(unsafe_code)]
 impl<'dom> LayoutDocumentHelpers<'dom> for LayoutDom<'dom, Document> {
     #[inline]
     fn is_html_document_for_layout(self) -> bool {
-        unsafe { self.unsafe_get().is_html_document }
+        self.unsafe_get().is_html_document
     }
 
     #[inline]
-    unsafe fn needs_paint_from_layout(self) {
+    fn needs_paint_from_layout(self) {
         (self.unsafe_get()).needs_paint.set(true)
     }
 
     #[inline]
-    unsafe fn will_paint(self) {
+    fn will_paint(self) {
         (self.unsafe_get()).needs_paint.set(false)
     }
 
     #[inline]
     fn quirks_mode(self) -> QuirksMode {
-        unsafe { self.unsafe_get().quirks_mode.get() }
+        self.unsafe_get().quirks_mode.get()
     }
 
     #[inline]
     fn style_shared_lock(self) -> &'dom StyleSharedRwLock {
-        unsafe { self.unsafe_get().style_shared_lock() }
+        self.unsafe_get().style_shared_lock()
     }
 
     #[inline]
@@ -2988,11 +2989,11 @@ impl<'dom> LayoutDocumentHelpers<'dom> for LayoutDom<'dom, Document> {
 
     #[inline]
     fn shadow_roots_styles_changed(self) -> bool {
-        unsafe { self.unsafe_get().shadow_roots_styles_changed.get() }
+        self.unsafe_get().shadow_roots_styles_changed.get()
     }
 
     #[inline]
-    unsafe fn flush_shadow_roots_stylesheets(self) {
+    fn flush_shadow_roots_stylesheets(self) {
         (*self.unsafe_get()).flush_shadow_roots_stylesheets()
     }
 }
@@ -3031,7 +3032,7 @@ fn get_registrable_domain_suffix_of_or_is_equal_to(
         let index = original_host.len().checked_sub(host.len())?;
         let (prefix, suffix) = original_host.split_at(index);
 
-        if !prefix.ends_with(".") {
+        if !prefix.ends_with('.') {
             return None;
         }
         if suffix != host {
@@ -3060,6 +3061,7 @@ pub enum HasBrowsingContext {
 }
 
 impl Document {
+    #[allow(clippy::too_many_arguments)]
     pub fn new_inherited(
         window: &Window,
         has_browsing_context: HasBrowsingContext,
@@ -3315,6 +3317,7 @@ impl Document {
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         window: &Window,
         has_browsing_context: HasBrowsingContext,
@@ -3348,6 +3351,7 @@ impl Document {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_proto(
         window: &Window,
         proto: Option<HandleObject>,
@@ -3473,20 +3477,14 @@ impl Document {
         have_changed
     }
 
-    /// Returns a `Device` suitable for media query evaluation.
+    /// Runs the given closure using the Stylo `Device` suitable for media query evaluation.
     ///
-    /// FIXME(emilio): This really needs to be somehow more in sync with layout.
-    /// Feels like a hack.
-    pub fn device(&self) -> Device {
-        let window_size = self.window().window_size();
-        let viewport_size = window_size.initial_viewport;
-        let device_pixel_ratio = window_size.device_pixel_ratio;
-        Device::new(
-            MediaType::screen(),
-            self.quirks_mode(),
-            viewport_size,
-            device_pixel_ratio,
-        )
+    /// TODO: This can just become a getter when each Layout is more strongly associated with
+    /// its given Document and Window.
+    pub fn with_device<T>(&self, call: impl FnOnce(&Device) -> T) -> T {
+        self.window
+            .with_layout(move |layout| call(layout.device()))
+            .unwrap()
     }
 
     pub fn salvageable(&self) -> bool {
@@ -3529,7 +3527,7 @@ impl Document {
         self.id_map
             .borrow()
             .get(id)
-            .map(|ref elements| DomRoot::from_ref(&*(*elements)[0]))
+            .map(|elements| DomRoot::from_ref(&*elements[0]))
     }
 
     pub fn ensure_pending_restyle(&self, el: &Element) -> RefMut<PendingRestyle> {
@@ -3975,27 +3973,6 @@ impl Document {
     }
     pub(crate) fn set_declarative_refresh(&self, refresh: DeclarativeRefresh) {
         *self.declarative_refresh.borrow_mut() = Some(refresh);
-    }
-}
-
-impl Element {
-    fn click_event_filter_by_disabled_state(&self) -> bool {
-        let node = self.upcast::<Node>();
-        matches!(node.type_id(), NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLButtonElement,
-            )) |
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLInputElement,
-            )) |
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLOptionElement,
-            )) |
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLSelectElement,
-            )) |
-            NodeTypeId::Element(ElementTypeId::HTMLElement(
-                HTMLElementTypeId::HTMLTextAreaElement,
-            )) if self.disabled_state())
     }
 }
 

@@ -296,11 +296,11 @@ impl Range {
     }
 
     fn start(&self) -> &BoundaryPoint {
-        &self.abstract_range().start()
+        self.abstract_range().start()
     }
 
     fn end(&self) -> &BoundaryPoint {
-        &self.abstract_range().end()
+        self.abstract_range().end()
     }
 
     pub fn start_container(&self) -> DomRoot<Node> {
@@ -1021,11 +1021,11 @@ impl RangeMethods for Range {
 
         // Step 4.
         let ancestor = self.CommonAncestorContainer();
-        let mut iter = start_node
+        let iter = start_node
             .following_nodes(&ancestor)
             .filter_map(DomRoot::downcast::<Text>);
 
-        while let Some(child) = iter.next() {
+        for child in iter {
             if self.contains(child.upcast()) {
                 s.push_str(&child.upcast::<CharacterData>().Data());
             }
@@ -1082,13 +1082,19 @@ pub struct WeakRangeVec {
     cell: UnsafeCell<WeakRefVec<Range>>,
 }
 
+impl Default for WeakRangeVec {
+    fn default() -> Self {
+        WeakRangeVec {
+            cell: UnsafeCell::new(WeakRefVec::new()),
+        }
+    }
+}
+
 #[allow(unsafe_code)]
 impl WeakRangeVec {
     /// Create a new vector of weak references.
     pub fn new() -> Self {
-        WeakRangeVec {
-            cell: UnsafeCell::new(WeakRefVec::new()),
-        }
+        Self::default()
     }
 
     /// Whether that vector of ranges is empty.
@@ -1183,9 +1189,8 @@ impl WeakRangeVec {
                 let move_start = node_is_start && range.start_offset() == offset;
                 let move_end = node_is_end && range.end_offset() == offset;
 
-                let remove_from_node = move_start && move_end ||
-                    move_start && !node_is_end ||
-                    move_end && !node_is_start;
+                let remove_from_node =
+                    move_start && (move_end || !node_is_end) || move_end && !node_is_start;
 
                 let already_in_child = range.start().node() == child || range.end().node() == child;
                 let push_to_child = !already_in_child && (move_start || move_end);
@@ -1246,9 +1251,8 @@ impl WeakRangeVec {
                 let move_start = node_is_start && start_offset > offset;
                 let move_end = node_is_end && end_offset > offset;
 
-                let remove_from_node = move_start && move_end ||
-                    move_start && !node_is_end ||
-                    move_end && !node_is_start;
+                let remove_from_node =
+                    move_start && (move_end || !node_is_end) || move_end && !node_is_start;
 
                 let already_in_sibling =
                     range.start().node() == sibling || range.end().node() == sibling;

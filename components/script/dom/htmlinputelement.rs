@@ -26,7 +26,6 @@ use net_traits::blob_url_store::get_blob_origin;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
 use net_traits::{CoreResourceMsg, IpcSend};
 use profile_traits::ipc;
-use script_layout_interface::rpc::TextIndexResponse;
 use script_traits::ScriptToConstellationChan;
 use servo_atoms::Atom;
 use style::attr::AttrValue;
@@ -709,11 +708,10 @@ impl HTMLInputElement {
                 },
             };
         } else {
-            value = value +
-                match dir {
-                    StepDirection::Down => -f64::from(n) * allowed_value_step,
-                    StepDirection::Up => f64::from(n) * allowed_value_step,
-                };
+            value += match dir {
+                StepDirection::Down => -f64::from(n) * allowed_value_step,
+                StepDirection::Up => f64::from(n) * allowed_value_step,
+            };
         }
 
         // Step 8
@@ -768,7 +766,7 @@ impl HTMLInputElement {
         first_with_id
             .as_ref()
             .and_then(|el| el.downcast::<HTMLDataListElement>())
-            .map(|el| DomRoot::from_ref(el))
+            .map(DomRoot::from_ref)
     }
 
     // https://html.spec.whatwg.org/multipage/#suffering-from-being-missing
@@ -1001,7 +999,7 @@ impl<'dom> LayoutDom<'dom, HTMLInputElement> {
     }
 
     fn input_type(self) -> InputType {
-        unsafe { self.unsafe_get().input_type.get() }
+        self.unsafe_get().input_type.get()
     }
 
     fn textinput_sorted_selection_offsets_range(self) -> Range<UTF8Bytes> {
@@ -1055,9 +1053,8 @@ impl<'dom> LayoutHTMLInputElementHelpers<'dom> for LayoutDom<'dom, HTMLInputElem
         }
     }
 
-    #[allow(unsafe_code)]
     fn size_for_layout(self) -> u32 {
-        unsafe { self.unsafe_get().size.get() }
+        self.unsafe_get().size.get()
     }
 
     fn selection_for_layout(self) -> Option<Range<usize>> {
@@ -1184,9 +1181,13 @@ impl HTMLInputElementMethods for HTMLInputElement {
 
     // https://html.spec.whatwg.org/multipage/#dom-input-files
     fn GetFiles(&self) -> Option<DomRoot<FileList>> {
-        match self.filelist.get() {
-            Some(ref fl) => Some(fl.clone()),
-            None => None,
+        self.filelist.get().as_ref().cloned()
+    }
+
+    /// <https://html.spec.whatwg.org/multipage/#dom-input-files>
+    fn SetFiles(&self, files: Option<&FileList>) {
+        if self.input_type() == InputType::File && files.is_some() {
+            self.filelist.set(files);
         }
     }
 
@@ -1642,7 +1643,7 @@ fn radio_group_iter<'a>(
 
     // If group is None, in_same_group always fails, but we need to always return elem.
     root.traverse_preorder(ShadowIncluding::No)
-        .filter_map(|r| DomRoot::downcast::<HTMLInputElement>(r))
+        .filter_map(DomRoot::downcast::<HTMLInputElement>)
         .filter(move |r| &**r == elem || in_same_group(r, owner.as_deref(), group, None))
 }
 
@@ -1884,7 +1885,7 @@ impl HTMLInputElement {
         } else {
             let opt_test_path = match opt_test_paths {
                 Some(paths) => {
-                    if paths.len() == 0 {
+                    if paths.is_empty() {
                         return;
                     } else {
                         Some(paths[0].to_string()) // neglect other paths
@@ -2083,8 +2084,7 @@ impl HTMLInputElement {
         if self.upcast::<Element>().click_in_progress() {
             return;
         }
-        let submit_button;
-        submit_button = node
+        let submit_button = node
             .query_selector_iter(DOMString::from("input[type=submit]"))
             .unwrap()
             .filter_map(DomRoot::downcast::<HTMLInputElement>)
@@ -2100,7 +2100,7 @@ impl HTMLInputElement {
                 }
             },
             None => {
-                let inputs = node
+                let mut inputs = node
                     .query_selector_iter(DOMString::from("input"))
                     .unwrap()
                     .filter_map(DomRoot::downcast::<HTMLInputElement>)
@@ -2123,7 +2123,7 @@ impl HTMLInputElement {
                             )
                     });
 
-                if inputs.skip(1).next().is_some() {
+                if inputs.nth(1).is_some() {
                     // lazily test for > 1 submission-blocking inputs
                     return;
                 }
@@ -2486,7 +2486,7 @@ impl VirtualMethods for HTMLInputElement {
     }
 
     fn bind_to_tree(&self, context: &BindContext) {
-        if let Some(ref s) = self.super_type() {
+        if let Some(s) = self.super_type() {
             s.bind_to_tree(context);
         }
         self.upcast::<Element>()
@@ -2540,8 +2540,7 @@ impl VirtualMethods for HTMLInputElement {
                     // now.
                     if let Some(point_in_target) = mouse_event.point_in_target() {
                         let window = window_from_node(self);
-                        let TextIndexResponse(index) =
-                            window.text_index_query(self.upcast::<Node>(), point_in_target);
+                        let index = window.text_index_query(self.upcast::<Node>(), point_in_target);
                         if let Some(i) = index {
                             self.textinput.borrow_mut().set_edit_point_index(i);
                             // trigger redraw
@@ -2623,7 +2622,7 @@ impl VirtualMethods for HTMLInputElement {
         maybe_doc: Option<&Document>,
         clone_children: CloneChildrenFlag,
     ) {
-        if let Some(ref s) = self.super_type() {
+        if let Some(s) = self.super_type() {
             s.cloning_steps(copy, maybe_doc, clone_children);
         }
         let elem = copy.downcast::<HTMLInputElement>().unwrap();
@@ -2648,7 +2647,7 @@ impl FormControl for HTMLInputElement {
         self.form_owner.set(form);
     }
 
-    fn to_element<'a>(&'a self) -> &'a Element {
+    fn to_element(&self) -> &Element {
         self.upcast::<Element>()
     }
 }
@@ -2868,7 +2867,7 @@ impl Activatable for HTMLInputElement {
 fn filter_from_accept(s: &DOMString) -> Vec<FilterPattern> {
     let mut filter = vec![];
     for p in split_commas(s) {
-        if let Some('.') = p.chars().nth(0) {
+        if let Some('.') = p.chars().next() {
             filter.push(FilterPattern(p[1..].to_string()));
         } else if let Some(exts) = mime_guess::get_mime_extensions_str(p) {
             for ext in exts {

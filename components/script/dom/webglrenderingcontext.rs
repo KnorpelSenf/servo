@@ -747,6 +747,7 @@ impl WebGLRenderingContext {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn tex_image_2d(
         &self,
         texture: &WebGLTexture,
@@ -834,6 +835,7 @@ impl WebGLRenderingContext {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn tex_sub_image_2d(
         &self,
         texture: DomRoot<WebGLTexture>,
@@ -1575,7 +1577,8 @@ impl WebGLRenderingContext {
         constants::COLOR_ATTACHMENT0 <= attachment && attachment <= last_slot
     }
 
-    pub fn compressed_tex_image_2d<'a>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn compressed_tex_image_2d(
         &self,
         target: u32,
         level: i32,
@@ -1583,7 +1586,7 @@ impl WebGLRenderingContext {
         width: i32,
         height: i32,
         border: i32,
-        data: &'a [u8],
+        data: &[u8],
     ) {
         let validator = CompressedTexImage2DValidator::new(
             self,
@@ -1642,7 +1645,8 @@ impl WebGLRenderingContext {
         }
     }
 
-    pub fn compressed_tex_sub_image_2d<'a>(
+    #[allow(clippy::too_many_arguments)]
+    pub fn compressed_tex_sub_image_2d(
         &self,
         target: u32,
         level: i32,
@@ -1651,7 +1655,7 @@ impl WebGLRenderingContext {
         width: i32,
         height: i32,
         format: u32,
-        data: &'a [u8],
+        data: &[u8],
     ) {
         let validator = CompressedTexSubImage2DValidator::new(
             self,
@@ -4136,7 +4140,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
             Float32ArrayOrUnrestrictedFloatSequence::Float32Array(v) => v.to_vec(),
             Float32ArrayOrUnrestrictedFloatSequence::UnrestrictedFloatSequence(v) => v,
         };
-        if values.len() < 1 {
+        if values.is_empty() {
             // https://github.com/KhronosGroup/WebGL/issues/2700
             return self.webgl_error(InvalidValue);
         }
@@ -4676,8 +4680,7 @@ impl WebGLRenderingContextMethods for WebGLRenderingContext {
 }
 
 impl LayoutCanvasRenderingContextHelpers for LayoutDom<'_, WebGLRenderingContext> {
-    #[allow(unsafe_code)]
-    unsafe fn canvas_data_source(self) -> HTMLCanvasDataSource {
+    fn canvas_data_source(self) -> HTMLCanvasDataSource {
         (*self.unsafe_get()).layout_handle()
     }
 }

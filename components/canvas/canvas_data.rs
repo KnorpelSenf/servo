@@ -7,7 +7,6 @@ use std::mem;
 use std::sync::{Arc, Mutex};
 
 use canvas_traits::canvas::*;
-use cssparser::RgbaLegacy;
 use euclid::default::{Point2D, Rect, Size2D, Transform2D, Vector2D};
 use euclid::{point2, vec2};
 use font_kit::family_name::FamilyName;
@@ -15,13 +14,14 @@ use font_kit::font::Font;
 use font_kit::metrics::Metrics;
 use font_kit::properties::{Properties, Stretch, Style, Weight};
 use font_kit::source::SystemSource;
-use gfx::font::FontHandleMethods;
 use gfx::font_cache_thread::FontCacheThread;
 use gfx::font_context::FontContext;
+use gfx::font_template::FontTemplateRefMethods;
 use ipc_channel::ipc::{IpcSender, IpcSharedMemory};
 use log::{debug, error, warn};
 use num_traits::ToPrimitive;
 use servo_arc::Arc as ServoArc;
+use style::color::AbsoluteColor;
 use style::properties::style_structs::Font as FontStyleStruct;
 use style::values::computed::font;
 use style_traits::values::ToCss;
@@ -74,7 +74,7 @@ impl PathState {
 pub trait Backend {
     fn get_composition_op(&self, opts: &DrawOptions) -> CompositionOp;
     fn need_to_draw_shadow(&self, color: &Color) -> bool;
-    fn set_shadow_color(&mut self, color: RgbaLegacy, state: &mut CanvasPaintState<'_>);
+    fn set_shadow_color(&mut self, color: AbsoluteColor, state: &mut CanvasPaintState<'_>);
     fn set_fill_style(
         &mut self,
         style: FillOrStrokeStyle,
@@ -501,7 +501,7 @@ impl<'a> CanvasData<'a> {
                         .first(font_context)
                         .expect("couldn't find font");
                     let font = font.borrow_mut();
-                    Font::from_bytes(font.handle.template().bytes(), 0)
+                    Font::from_bytes(font.template.data(), 0)
                         .ok()
                         .or_else(|| load_system_font_from_style(Some(style)))
                 })
@@ -1155,7 +1155,7 @@ impl<'a> CanvasData<'a> {
         self.state.shadow_blur = value;
     }
 
-    pub fn set_shadow_color(&mut self, value: RgbaLegacy) {
+    pub fn set_shadow_color(&mut self, value: AbsoluteColor) {
         self.backend.set_shadow_color(value, &mut self.state);
     }
 

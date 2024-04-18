@@ -26,6 +26,7 @@ use servo::script_traits::{
 };
 use servo::servo_config::opts;
 use servo::servo_url::ServoUrl;
+use servo::webrender_api::units::DeviceRect;
 use servo::webrender_api::ScrollLocation;
 use tinyfiledialogs::{self, MessageBoxIcon, OkCancel, YesNo};
 
@@ -60,7 +61,9 @@ pub struct WebViewManager<Window: WindowPortsMethods + ?Sized> {
 }
 
 #[derive(Debug)]
-pub struct WebView {}
+pub struct WebView {
+    pub rect: DeviceRect,
+}
 
 pub struct ServoEventResponse {
     pub need_present: bool,
@@ -111,6 +114,14 @@ where
         self.focused_webview_id
     }
 
+    pub fn get_mut(&mut self, webview_id: WebViewId) -> Option<&mut WebView> {
+        self.webviews.get_mut(&webview_id)
+    }
+
+    pub fn focused_webview_id(&self) -> Option<WebViewId> {
+        self.focused_webview_id.clone()
+    }
+
     pub fn current_url_string(&self) -> Option<&str> {
         self.current_url_string.as_deref()
     }
@@ -144,14 +155,14 @@ where
                 let gamepad = gilrs.gamepad(event.id);
                 let name = gamepad.name();
                 let index = GamepadIndex(event.id.into());
+                let mut gamepad_event: Option<GamepadEvent> = None;
                 match event.event {
                     EventType::ButtonPressed(button, _) => {
                         let mapped_index = Self::map_gamepad_button(button);
                         // We only want to send this for a valid digital button, aka on/off only
                         if !matches!(mapped_index, 6 | 7 | 17) {
                             let update_type = GamepadUpdateType::Button(mapped_index, 1.0);
-                            let event = GamepadEvent::Updated(index, update_type);
-                            self.event_queue.push(EmbedderEvent::Gamepad(event));
+                            gamepad_event = Some(GamepadEvent::Updated(index, update_type));
                         }
                     },
                     EventType::ButtonReleased(button, _) => {
@@ -159,8 +170,7 @@ where
                         // We only want to send this for a valid digital button, aka on/off only
                         if !matches!(mapped_index, 6 | 7 | 17) {
                             let update_type = GamepadUpdateType::Button(mapped_index, 0.0);
-                            let event = GamepadEvent::Updated(index, update_type);
-                            self.event_queue.push(EmbedderEvent::Gamepad(event));
+                            gamepad_event = Some(GamepadEvent::Updated(index, update_type));
                         }
                     },
                     EventType::ButtonChanged(button, value, _) => {
@@ -168,8 +178,7 @@ where
                         // We only want to send this for a valid non-digital button, aka the triggers
                         if matches!(mapped_index, 6 | 7) {
                             let update_type = GamepadUpdateType::Button(mapped_index, value as f64);
-                            let event = GamepadEvent::Updated(index, update_type);
-                            self.event_queue.push(EmbedderEvent::Gamepad(event));
+                            gamepad_event = Some(GamepadEvent::Updated(index, update_type));
                         }
                     },
                     EventType::AxisChanged(axis, value, _) => {
@@ -192,8 +201,7 @@ where
                             };
                             let update_type =
                                 GamepadUpdateType::Axis(mapped_axis, axis_value as f64);
-                            let event = GamepadEvent::Updated(index, update_type);
-                            self.event_queue.push(EmbedderEvent::Gamepad(event));
+                            gamepad_event = Some(GamepadEvent::Updated(index, update_type));
                         }
                     },
                     EventType::Connected => {
@@ -202,14 +210,16 @@ where
                             axis_bounds: (-1.0, 1.0),
                             button_bounds: (0.0, 1.0),
                         };
-                        let event = GamepadEvent::Connected(index, name, bounds);
-                        self.event_queue.push(EmbedderEvent::Gamepad(event));
+                        gamepad_event = Some(GamepadEvent::Connected(index, name, bounds));
                     },
                     EventType::Disconnected => {
-                        let event = GamepadEvent::Disconnected(index);
-                        self.event_queue.push(EmbedderEvent::Gamepad(event));
+                        gamepad_event = Some(GamepadEvent::Disconnected(index));
                     },
                     _ => {},
+                }
+
+                if let Some(event) = gamepad_event {
+                    self.event_queue.push(EmbedderEvent::Gamepad(event));
                 }
             }
         }
@@ -453,6 +463,20 @@ where
                     self.window.set_position(point);
                 },
                 EmbedderMsg::ResizeTo(size) => {
+                    if let Some(webview_id) = webview_id {
+                        let new_rect = self.get_mut(webview_id).and_then(|webview| {
+                            if webview.rect.size() != size.to_f32() {
+                                webview.rect.set_size(size.to_f32());
+                                Some(webview.rect)
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(new_rect) = new_rect {
+                            self.event_queue
+                                .push(EmbedderEvent::MoveResizeWebView(webview_id, new_rect));
+                        }
+                    }
                     self.window.set_inner_size(size);
                 },
                 EmbedderMsg::Prompt(definition, origin) => {
@@ -555,10 +579,22 @@ where
                     };
                 },
                 EmbedderMsg::WebViewOpened(new_webview_id) => {
-                    self.webviews.insert(new_webview_id, WebView {});
+                    let scale = self.window.hidpi_factor().get();
+                    let toolbar = self.window.toolbar_height().get();
+
+                    // Adjust for our toolbar height.
+                    // TODO: Adjust for egui window decorations if we end up using those
+                    let mut rect = self.window.get_coordinates().get_viewport().to_f32();
+                    rect.min.y += toolbar * scale;
+
+                    self.webviews.insert(new_webview_id, WebView { rect });
                     self.creation_order.push(new_webview_id);
                     self.event_queue
                         .push(EmbedderEvent::FocusWebView(new_webview_id));
+                    self.event_queue
+                        .push(EmbedderEvent::MoveResizeWebView(new_webview_id, rect));
+                    self.event_queue
+                        .push(EmbedderEvent::RaiseWebViewToTop(new_webview_id, true));
                 },
                 EmbedderMsg::WebViewClosed(webview_id) => {
                     self.webviews.retain(|&id, _| id != webview_id);
@@ -573,6 +609,10 @@ where
                 },
                 EmbedderMsg::WebViewFocused(webview_id) => {
                     self.focused_webview_id = Some(webview_id);
+                    // Show the most recently created webview and hide all others.
+                    // TODO: Stop doing this once we have full multiple webviews support
+                    self.event_queue
+                        .push(EmbedderEvent::ShowWebView(webview_id, true));
                 },
                 EmbedderMsg::WebViewBlurred => {
                     self.focused_webview_id = None;
@@ -681,15 +721,19 @@ where
                 EmbedderMsg::ShowContextMenu(sender, ..) => {
                     let _ = sender.send(ContextMenuResult::Ignored);
                 },
-                EmbedderMsg::ReadyToPresent => {
+                EmbedderMsg::ReadyToPresent(_webview_ids) => {
                     need_present = true;
                 },
-                EmbedderMsg::EventDelivered(event) => match (webview_id, event) {
-                    (Some(webview_id), CompositorEventVariant::MouseButtonEvent) => {
-                        // TODO Focus webview and/or raise to top if needed.
+                EmbedderMsg::EventDelivered(event) => {
+                    if let (Some(webview_id), CompositorEventVariant::MouseButtonEvent) =
+                        (webview_id, event)
+                    {
                         trace!("{}: Got a mouse button event", webview_id);
-                    },
-                    (_, _) => {},
+                        self.event_queue
+                            .push(EmbedderEvent::RaiseWebViewToTop(webview_id, true));
+                        self.event_queue
+                            .push(EmbedderEvent::FocusWebView(webview_id));
+                    }
                 },
             }
         }
@@ -761,7 +805,7 @@ fn platform_get_selected_devices(devices: Vec<String>) -> Option<String> {
 #[cfg(not(target_os = "linux"))]
 fn platform_get_selected_devices(devices: Vec<String>) -> Option<String> {
     for device in devices {
-        if let Some(address) = device.split("|").next().map(|s| s.to_string()) {
+        if let Some(address) = device.split('|').next().map(|s| s.to_string()) {
             return Some(address);
         }
     }

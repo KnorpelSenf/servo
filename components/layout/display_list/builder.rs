@@ -8,8 +8,6 @@
 //! list building, as the actual painting does not happen here—only deciding *what* we're going to
 //! paint.
 
-#![allow(clippy::too_many_arguments)]
-
 use std::default::Default;
 use std::sync::Arc;
 use std::{f32, mem};
@@ -796,10 +794,6 @@ impl Fragment {
                 Image::CrossFade(..) | Image::ImageSet(..) => {
                     unreachable!("Shouldn't be parsed by Servo for now")
                 },
-                Image::Rect(ref rect) => {
-                    // This is a (boxed) empty enum on non-Gecko
-                    match **rect {}
-                },
             }
         }
     }
@@ -1083,6 +1077,7 @@ impl Fragment {
 
     /// Adds the display items necessary to paint the borders of this fragment to a display list if
     /// necessary.
+    #[allow(clippy::too_many_arguments)]
     fn build_display_list_for_borders_if_applicable(
         &self,
         state: &mut DisplayListBuildState,
@@ -2275,7 +2270,7 @@ impl Fragment {
     fn unique_id(&self) -> u64 {
         let fragment_type = self.fragment_type();
         let id = self.node.id();
-        combine_id_with_fragment_type(id, fragment_type) as u64
+        combine_id_with_fragment_type(id, fragment_type)
     }
 
     fn fragment_type(&self) -> FragmentType {
@@ -2742,8 +2737,7 @@ impl BlockFlow {
         let content_size = self.base.overflow.scroll.origin + self.base.overflow.scroll.size;
         let content_size = Size2D::new(content_size.x, content_size.y);
 
-        let external_id =
-            ExternalScrollId(self.fragment.unique_id(), state.pipeline_id.to_webrender());
+        let external_id = ExternalScrollId(self.fragment.unique_id(), state.pipeline_id.into());
         let new_clip_scroll_index = state.add_clip_scroll_node(ClipScrollNode {
             parent_index: self.clipping_and_scrolling().scrolling,
             clip,

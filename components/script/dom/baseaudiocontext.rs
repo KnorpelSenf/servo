@@ -122,7 +122,7 @@ impl BaseAudioContext {
 
         let client_context_id =
             ClientContextId::build(pipeline_id.namespace_id.0, pipeline_id.index.0.get());
-        let context = BaseAudioContext {
+        BaseAudioContext {
             eventtarget: EventTarget::new_inherited(),
             audio_context_impl: ServoMedia::get()
                 .unwrap()
@@ -135,9 +135,7 @@ impl BaseAudioContext {
             sample_rate,
             state: Cell::new(AudioContextState::Suspended),
             channel_count: channel_count.into(),
-        };
-
-        context
+        }
     }
 
     /// Tells whether this is an OfflineAudioContext or not.
@@ -404,9 +402,9 @@ impl BaseAudioContextMethods for BaseAudioContext {
         length: u32,
         sample_rate: Finite<f32>,
     ) -> Fallible<DomRoot<AudioBuffer>> {
-        if number_of_channels <= 0 ||
+        if number_of_channels == 0 ||
             number_of_channels > MAX_CHANNEL_COUNT ||
-            length <= 0 ||
+            length == 0 ||
             *sample_rate <= 0.
         {
             return Err(Error::NotSupported);
