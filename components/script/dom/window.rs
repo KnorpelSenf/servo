@@ -2041,7 +2041,7 @@ impl Window {
         )
     }
 
-    pub fn resolved_font_style_query(&self, node: &Node, value: String) -> Option<ServoArc<Font>> {
+    pub fn resolved_font_style_query(&self, node: Rc<Node>, value: String) -> Option<ServoArc<Font>> {
         if !self.layout_reflow(QueryMsg::ResolvedFontStyleQuery) {
             return None;
         }
