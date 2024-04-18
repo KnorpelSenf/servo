@@ -3191,6 +3191,7 @@ dependencies = [
  "profile_traits",
  "range",
  "rayon",
+ "script",
  "script_traits",
  "serde",
  "serde_json",

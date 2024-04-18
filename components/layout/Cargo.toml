@@ -33,6 +33,7 @@ parking_lot = { workspace = true }
 profile_traits = { workspace = true }
 range = { path = "../range" }
 rayon = { workspace = true }
+script = { workspace = true }
 script_traits = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
