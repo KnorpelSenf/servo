@@ -24,7 +24,7 @@ use style::properties::ComputedValues;
 use style::selector_parser::{PseudoElement, PseudoElementCascadeType, SelectorImpl};
 use style::stylist::RuleInclusion;
 
-use crate::{
+use crate::script_layout::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutNodeType, SVGSVGData, StyleData,
 };
 

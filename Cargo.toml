@@ -86,7 +86,7 @@ rayon = "1"
 regex = "1.10"
 rustls = { version = "0.21.10", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0.4"
-script_layout_interface = { path = "components/shared/script_layout" }
+script = { path = "components/script" }
 script_traits = { path = "components/shared/script" }
 selectors = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
 serde = "1.0.198"

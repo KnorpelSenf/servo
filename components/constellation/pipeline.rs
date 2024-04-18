@@ -30,7 +30,7 @@ use net::image_cache::ImageCacheImpl;
 use net_traits::image_cache::ImageCache;
 use net_traits::ResourceThreads;
 use profile_traits::{mem as profile_mem, time};
-use script_layout_interface::{LayoutFactory, ScriptThreadFactory};
+use script::script_layout::{LayoutFactory, ScriptThreadFactory};
 use script_traits::{
     AnimationState, ConstellationControlMsg, DiscardBrowsingContext, DocumentActivity,
     InitialScriptState, LayoutMsg, LoadData, NewLayoutInfo, SWManagerMsg,

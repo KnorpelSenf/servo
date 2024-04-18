@@ -5,7 +5,7 @@
 //! Traversals over the DOM and flow trees, running the layout computations.
 
 use log::debug;
-use script_layout_interface::wrapper_traits::{LayoutNode, ThreadSafeLayoutNode};
+use script::script_layout::wrapper_traits::{LayoutNode, ThreadSafeLayoutNode};
 use servo_config::opts;
 use style::context::{SharedStyleContext, StyleContext};
 use style::data::ElementData;

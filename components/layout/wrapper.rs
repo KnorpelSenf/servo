@@ -31,7 +31,7 @@
 #![allow(unsafe_code)]
 
 use atomic_refcell::{AtomicRef, AtomicRefMut};
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     LayoutNode, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
 use style::dom::{NodeInfo, TElement, TNode};

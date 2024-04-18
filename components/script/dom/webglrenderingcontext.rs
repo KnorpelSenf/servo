@@ -33,7 +33,7 @@ use js::typedarray::{
 };
 use net_traits::image_cache::ImageResponse;
 use pixels::{self, PixelFormat};
-use script_layout_interface::HTMLCanvasDataSource;
+use crate::script_layout::HTMLCanvasDataSource;
 use serde::{Deserialize, Serialize};
 use servo_config::pref;
 use webrender_api::ImageKey;

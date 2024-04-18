@@ -9,10 +9,10 @@ use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use html5ever::{local_name, namespace_url, ns};
 use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image::base::Image as NetImage;
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     LayoutDataTrait, LayoutNode, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{
+use script::script_layout::{
     HTMLCanvasDataSource, LayoutElementType, LayoutNodeType as ScriptLayoutNodeType,
 };
 use servo_arc::Arc as ServoArc;

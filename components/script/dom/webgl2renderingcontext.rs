@@ -21,7 +21,7 @@ use js::jsval::{
 };
 use js::rust::{CustomAutoRooterGuard, HandleObject};
 use js::typedarray::{ArrayBufferView, CreateWith, Float32, Int32Array, Uint32, Uint32Array};
-use script_layout_interface::HTMLCanvasDataSource;
+use crate::script_layout::HTMLCanvasDataSource;
 use servo_config::pref;
 use url::Host;
 

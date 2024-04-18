@@ -24,8 +24,8 @@ use libc::{self, c_void, uintptr_t};
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image::base::{Image, ImageMetadata};
-use script_layout_interface::message::QueryMsg;
-use script_layout_interface::{
+use crate::script_layout::message::QueryMsg;
+use crate::script_layout::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutElementType, LayoutNodeType,
     SVGSVGData, StyleData, TrustedNodeAddress,
 };

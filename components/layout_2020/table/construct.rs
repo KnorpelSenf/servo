@@ -7,7 +7,7 @@ use std::convert::{TryFrom, TryInto};
 use std::iter::repeat;
 
 use log::warn;
-use script_layout_interface::wrapper_traits::ThreadSafeLayoutNode;
+use script::script_layout::wrapper_traits::ThreadSafeLayoutNode;
 use servo_arc::Arc;
 use style::properties::ComputedValues;
 use style::selector_parser::PseudoElement;

@@ -26,8 +26,8 @@ net = { path = "../components/net" }
 net_traits = { path = "../components/shared/net" }
 parking_lot = { workspace = true }
 profile = { path = "../components/profile" }
+script = { path = "../components/script" }
 script_traits = { path = "../components/shared/script" }
-script_layout_interface = { path = "../components/shared/script_layout" }
 serde = { version = "1", features = ["derive"] }
 servo_arc = { workspace = true }
 servo_config = { path = "../components/config" }

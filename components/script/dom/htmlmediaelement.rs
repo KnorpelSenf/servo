@@ -26,7 +26,6 @@ use net_traits::{
     CoreResourceMsg, FetchChannels, FetchMetadata, FetchResponseListener, Metadata, NetworkError,
     ResourceFetchTiming, ResourceTimingType,
 };
-use script_layout_interface::HTMLMediaData;
 use script_traits::{ImageUpdate, WebrenderIpcSender};
 use servo_config::pref;
 use servo_media::player::audio::AudioRenderer;
@@ -39,6 +38,7 @@ use webrender_api::{
     ImageDescriptor, ImageDescriptorFlags, ImageFormat, ImageKey,
 };
 
+use crate::script_layout::HTMLMediaData;
 use crate::document_loader::{LoadBlocker, LoadType};
 use crate::dom::attr::Attr;
 use crate::dom::audiotrack::AudioTrack;

@@ -5,7 +5,7 @@
 use dom_struct::dom_struct;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::rust::HandleObject;
-use script_layout_interface::SVGSVGData;
+use crate::script_layout::SVGSVGData;
 use style::attr::AttrValue;
 
 use crate::dom::attr::Attr;

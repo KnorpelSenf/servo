@@ -71,8 +71,7 @@ use parking_lot::Mutex;
 use percent_encoding::percent_decode;
 use profile_traits::mem::{self as profile_mem, OpaqueSender, ReportsChan};
 use profile_traits::time::{self as profile_time, profile, ProfilerCategory};
-use script_layout_interface::message::{Msg, ReflowGoal};
-use script_layout_interface::{Layout, LayoutConfig, LayoutFactory, ScriptThreadFactory};
+use crate::script_layout::message::{Msg, ReflowGoal};
 use script_traits::webdriver_msg::WebDriverScriptCommand;
 use script_traits::CompositorEvent::{
     CompositionEvent, GamepadEvent, IMEDismissedEvent, KeyboardEvent, MouseButtonEvent,
@@ -143,6 +142,7 @@ use crate::dom::workletglobalscope::WorkletGlobalScopeInit;
 use crate::fetch::FetchCanceller;
 use crate::microtask::{Microtask, MicrotaskQueue};
 use crate::realms::enter_realm;
+use crate::script_layout::{Layout, LayoutConfig, LayoutFactory, ScriptThreadFactory};
 use crate::script_module::ScriptFetchOptions;
 use crate::script_runtime::{
     get_reports, new_rt_and_cx, CommonScriptMsg, ContextForRequestInterrupt, JSContext, Runtime,
@@ -1540,8 +1540,8 @@ impl ScriptThread {
                             // creator's origin. This must match the logic in the constellation
                             // when creating a new pipeline
                             let not_an_about_blank_and_about_srcdoc_load =
-                                new_layout_info.load_data.url.as_str() != "about:blank" &&
-                                    new_layout_info.load_data.url.as_str() != "about:srcdoc";
+                                new_layout_info.load_data.url.as_str() != "about:blank"
+                                    && new_layout_info.load_data.url.as_str() != "about:srcdoc";
                             let origin = if not_an_about_blank_and_about_srcdoc_load {
                                 MutableOrigin::new(new_layout_info.load_data.url.origin())
                             } else if let Some(parent) =
@@ -2081,12 +2081,12 @@ impl ScriptThread {
                     *self.webgpu_port.borrow_mut() = Some(p);
                 }
             },
-            msg @ ConstellationControlMsg::AttachLayout(..) |
-            msg @ ConstellationControlMsg::Viewport(..) |
-            msg @ ConstellationControlMsg::SetScrollState(..) |
-            msg @ ConstellationControlMsg::Resize(..) |
-            msg @ ConstellationControlMsg::ExitFullScreen(..) |
-            msg @ ConstellationControlMsg::ExitScriptThread => {
+            msg @ ConstellationControlMsg::AttachLayout(..)
+            | msg @ ConstellationControlMsg::Viewport(..)
+            | msg @ ConstellationControlMsg::SetScrollState(..)
+            | msg @ ConstellationControlMsg::Resize(..)
+            | msg @ ConstellationControlMsg::ExitFullScreen(..)
+            | msg @ ConstellationControlMsg::ExitScriptThread => {
                 panic!("should have handled {:?} already", msg)
             },
             ConstellationControlMsg::ForLayoutFromConstellation(msg, pipeline_id) => {
@@ -3345,8 +3345,8 @@ impl ScriptThread {
             },
 
             Some(ref mime)
-                if (mime.type_() == mime::TEXT && mime.subtype() == mime::XML) ||
-                    (mime.type_() == mime::APPLICATION && mime.subtype() == mime::XML) =>
+                if (mime.type_() == mime::TEXT && mime.subtype() == mime::XML)
+                    || (mime.type_() == mime::APPLICATION && mime.subtype() == mime::XML) =>
             {
                 IsHTMLDocument::NonHTMLDocument
             },

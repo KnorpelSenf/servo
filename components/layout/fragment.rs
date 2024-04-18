@@ -24,10 +24,10 @@ use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image::base::{Image, ImageMetadata};
 use net_traits::image_cache::{ImageOrMetadataAvailable, UsePlaceholder};
 use range::*;
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     PseudoElementType, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{HTMLCanvasData, HTMLCanvasDataSource, HTMLMediaData, SVGSVGData};
+use script::script_layout::{HTMLCanvasData, HTMLCanvasDataSource, HTMLMediaData, SVGSVGData};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use servo_url::ServoUrl;
 use size_of_test::size_of_test;

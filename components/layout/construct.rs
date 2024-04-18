@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use html5ever::{local_name, namespace_url, ns};
 use log::debug;
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     PseudoElementType, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{LayoutElementType, LayoutNodeType};
+use script::script_layout::{LayoutElementType, LayoutNodeType};
 use servo_config::opts;
 use servo_url::ServoUrl;
 use style::computed_values::caption_side::T as CaptionSide;

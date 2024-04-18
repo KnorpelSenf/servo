@@ -14,7 +14,7 @@ use gfx::font::FontMetrics;
 use gfx_traits::print_tree::PrintTree;
 use log::debug;
 use range::{int_range_index, Range, RangeIndex};
-use script_layout_interface::wrapper_traits::PseudoElementType;
+use script::script_layout::wrapper_traits::PseudoElementType;
 use serde::Serialize;
 use servo_geometry::MaxRect;
 use style::computed_values::display::T as Display;

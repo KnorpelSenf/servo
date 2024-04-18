@@ -13,10 +13,10 @@ use html5ever::{local_name, namespace_url, ns};
 use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image::base::{Image, ImageMetadata};
 use range::Range;
-use script_layout_interface::wrapper_traits::{
+use crate::script_layout::wrapper_traits::{
     LayoutDataTrait, LayoutNode, PseudoElementType, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{
+use crate::script_layout::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutNodeType, SVGSVGData, StyleData,
     TrustedNodeAddress,
 };

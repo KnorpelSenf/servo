@@ -49,8 +49,8 @@ use parking_lot::Mutex as ParkMutex;
 use profile_traits::ipc as ProfiledIpc;
 use profile_traits::mem::ProfilerChan as MemProfilerChan;
 use profile_traits::time::ProfilerChan as TimeProfilerChan;
-use script_layout_interface::message::{Msg, QueryMsg, Reflow, ReflowGoal, ScriptReflow};
-use script_layout_interface::{Layout, PendingImageState, TrustedNodeAddress};
+use crate::script_layout::message::{Msg, QueryMsg, Reflow, ReflowGoal, ScriptReflow};
+use crate::script_layout::{Layout, PendingImageState, TrustedNodeAddress};
 use script_traits::webdriver_msg::{WebDriverJSError, WebDriverJSResult};
 use script_traits::{
     ConstellationControlMsg, DocumentState, HistoryEntryReplacement, LoadData, ScriptMsg,

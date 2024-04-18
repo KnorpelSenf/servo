@@ -3,10 +3,10 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use atomic_refcell::AtomicRef;
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     LayoutNode, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{LayoutElementType, LayoutNodeType};
+use script::script_layout::{LayoutElementType, LayoutNodeType};
 use script_traits::compositor::ScrollSensitivity;
 use serde::Serialize;
 use servo_arc::Arc;
@@ -415,9 +415,9 @@ impl CanvasBackground {
         {
             // “that element’s first HTML `BODY` or XHTML `body` child element”
             if let Some(body) = iter_child_nodes(root_element).find(|child| {
-                child.is_element() &&
-                    child.type_id() ==
-                        LayoutNodeType::Element(LayoutElementType::HTMLBodyElement)
+                child.is_element()
+                    && child.type_id()
+                        == LayoutNodeType::Element(LayoutElementType::HTMLBodyElement)
             }) {
                 style = body.style(context);
                 from_element = body;

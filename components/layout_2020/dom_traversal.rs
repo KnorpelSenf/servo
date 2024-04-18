@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use html5ever::{local_name, LocalName};
 use log::warn;
-use script_layout_interface::wrapper_traits::{ThreadSafeLayoutElement, ThreadSafeLayoutNode};
+use script::script_layout::wrapper_traits::{ThreadSafeLayoutElement, ThreadSafeLayoutNode};
 use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
 use style::selector_parser::PseudoElement;

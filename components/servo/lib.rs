@@ -76,7 +76,7 @@ use profile::{mem as profile_mem, time as profile_time};
 use profile_traits::{mem, time};
 use script::serviceworker_manager::ServiceWorkerManager;
 use script::JSEngineSetup;
-use script_layout_interface::LayoutFactory;
+use script::script_layout::LayoutFactory;
 use script_traits::{ScriptToConstellationChan, WindowSizeData};
 use servo_config::{opts, pref, prefs};
 use servo_media::player::context::GlContext;

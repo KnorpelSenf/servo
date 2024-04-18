@@ -62,11 +62,11 @@ use profile_traits::time::{
     self as profile_time, profile, TimerMetadata, TimerMetadataFrameType, TimerMetadataReflowType,
 };
 use script::layout_dom::{ServoLayoutDocument, ServoLayoutElement, ServoLayoutNode};
-use script_layout_interface::message::{
+use script::script_layout::message::{
     Msg, NodesFromPointQueryType, Reflow, ReflowComplete, ReflowGoal, ScriptReflow,
 };
-use script_layout_interface::wrapper_traits::LayoutNode;
-use script_layout_interface::{
+use script::script_layout::wrapper_traits::LayoutNode;
+use script::script_layout::{
     Layout, LayoutConfig, LayoutFactory, OffsetParentResponse, TrustedNodeAddress,
 };
 use script_traits::{

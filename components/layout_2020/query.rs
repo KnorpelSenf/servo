@@ -9,10 +9,10 @@ use app_units::Au;
 use euclid::default::{Point2D, Rect};
 use euclid::{SideOffsets2D, Size2D, Vector2D};
 use log::warn;
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     LayoutNode, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::OffsetParentResponse;
+use script::script_layout::OffsetParentResponse;
 use servo_arc::Arc as ServoArc;
 use servo_url::ServoUrl;
 use style::computed_values::position::T as Position;

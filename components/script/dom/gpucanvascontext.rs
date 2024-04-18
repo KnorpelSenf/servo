@@ -8,7 +8,7 @@ use arrayvec::ArrayVec;
 use dom_struct::dom_struct;
 use euclid::default::Size2D;
 use ipc_channel::ipc;
-use script_layout_interface::HTMLCanvasDataSource;
+use crate::script_layout::HTMLCanvasDataSource;
 use webgpu::wgpu::id;
 use webgpu::{wgt, WebGPU, WebGPURequest, WebGPUTexture, PRESENTATION_BUFFER_COUNT};
 use webrender_api::{

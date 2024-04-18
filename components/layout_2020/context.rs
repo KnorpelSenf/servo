@@ -13,7 +13,7 @@ use net_traits::image_cache::{
     ImageCache, ImageCacheResult, ImageOrMetadataAvailable, UsePlaceholder,
 };
 use parking_lot::{ReentrantMutex, RwLock};
-use script_layout_interface::{PendingImage, PendingImageState};
+use script::script_layout::{PendingImage, PendingImageState};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use style::context::SharedStyleContext;
 use style::dom::OpaqueNode;

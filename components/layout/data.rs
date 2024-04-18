@@ -4,7 +4,7 @@
 
 use atomic_refcell::AtomicRefCell;
 use bitflags::bitflags;
-use script_layout_interface::wrapper_traits::LayoutDataTrait;
+use script::script_layout::wrapper_traits::LayoutDataTrait;
 
 use crate::construct::ConstructionResult;
 

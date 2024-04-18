@@ -132,7 +132,7 @@ use net_traits::request::{Referrer, RequestBuilder};
 use net_traits::storage_thread::{StorageThreadMsg, StorageType};
 use net_traits::{self, FetchResponseMsg, IpcSend, ResourceThreads};
 use profile_traits::{mem, time};
-use script_layout_interface::{LayoutFactory, ScriptThreadFactory};
+use script::script_layout::{LayoutFactory, ScriptThreadFactory};
 use script_traits::CompositorEvent::{MouseButtonEvent, MouseMoveEvent};
 use script_traits::{
     webdriver_msg, AnimationState, AnimationTickType, AuxiliaryBrowsingContextLoadInfo,

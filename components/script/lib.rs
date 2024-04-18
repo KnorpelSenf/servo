@@ -53,6 +53,7 @@ mod init;
 mod layout_image;
 
 pub mod layout_dom;
+pub mod script_layout;
 #[warn(deprecated)]
 mod mem;
 #[warn(deprecated)]

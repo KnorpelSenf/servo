@@ -13,7 +13,7 @@ use ipc_channel::ipc::{self as ipcchan, IpcSharedMemory};
 use js::error::throw_type_error;
 use js::rust::{HandleObject, HandleValue};
 use profile_traits::ipc;
-use script_layout_interface::{HTMLCanvasData, HTMLCanvasDataSource};
+use crate::script_layout::{HTMLCanvasData, HTMLCanvasDataSource};
 use script_traits::ScriptMsg;
 use servo_media::streams::registry::MediaStreamId;
 use servo_media::streams::MediaStreamType;

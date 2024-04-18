@@ -15,7 +15,7 @@ use style::context::QuirksMode;
 use style::invalidation::element::restyle_hints::RestyleHint;
 use style::selector_parser::{RestyleDamage, Snapshot};
 
-use crate::{PendingImage, TrustedNodeAddress};
+use crate::script_layout::{PendingImage, TrustedNodeAddress};
 
 /// Asynchronous messages that script can send to layout.
 pub enum Msg {

@@ -9,10 +9,10 @@ use std::ops::Deref;
 
 use app_units::Au;
 use euclid::default::{Box2D, Point2D, Rect, Size2D, Vector2D};
-use script_layout_interface::wrapper_traits::{
+use script::script_layout::wrapper_traits::{
     LayoutNode, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{LayoutElementType, LayoutNodeType, OffsetParentResponse};
+use script::script_layout::{LayoutElementType, LayoutNodeType, OffsetParentResponse};
 use servo_arc::Arc as ServoArc;
 use servo_url::ServoUrl;
 use style::computed_values::display::T as Display;

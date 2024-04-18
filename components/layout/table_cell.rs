@@ -10,7 +10,7 @@ use app_units::Au;
 use euclid::default::{Point2D, Rect, SideOffsets2D, Size2D};
 use gfx_traits::print_tree::PrintTree;
 use log::{debug, trace};
-use script_layout_interface::wrapper_traits::ThreadSafeLayoutNode;
+use script::script_layout::wrapper_traits::ThreadSafeLayoutNode;
 use serde::Serialize;
 use style::logical_geometry::{LogicalMargin, LogicalRect, LogicalSize, WritingMode};
 use style::properties::ComputedValues;

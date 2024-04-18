@@ -48,10 +48,10 @@ use profile_traits::time::{
     self as profile_time, profile, TimerMetadata, TimerMetadataFrameType, TimerMetadataReflowType,
 };
 use script::layout_dom::{ServoLayoutDocument, ServoLayoutElement, ServoLayoutNode};
-use script_layout_interface::message::{
+use script::script_layout::message::{
     Msg, NodesFromPointQueryType, ReflowComplete, ReflowGoal, ScriptReflow,
 };
-use script_layout_interface::{
+use script::script_layout::{
     Layout, LayoutConfig, LayoutFactory, OffsetParentResponse, TrustedNodeAddress,
 };
 use script_traits::{
@@ -227,7 +227,7 @@ impl Drop for ScriptReflowResult {
 }
 
 impl Layout for LayoutThread {
-    fn process(&mut self, msg: script_layout_interface::message::Msg) {
+    fn process(&mut self, msg: script::script_layout::message::Msg) {
         self.handle_request(Request::FromScript(msg));
     }
 
@@ -297,7 +297,7 @@ impl Layout for LayoutThread {
 
     fn query_element_inner_text(
         &self,
-        node: script_layout_interface::TrustedNodeAddress,
+        node: script::script_layout::TrustedNodeAddress,
     ) -> String {
         let node = unsafe { ServoLayoutNode::new(&node) };
         process_element_inner_text_query(node)

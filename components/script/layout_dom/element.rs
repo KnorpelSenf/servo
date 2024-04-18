@@ -8,10 +8,10 @@ use std::sync::atomic::Ordering;
 
 use atomic_refcell::{AtomicRef, AtomicRefMut};
 use html5ever::{local_name, namespace_url, ns, LocalName, Namespace};
-use script_layout_interface::wrapper_traits::{
+use crate::script_layout::wrapper_traits::{
     LayoutNode, PseudoElementType, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
 };
-use script_layout_interface::{LayoutNodeType, StyleData};
+use crate::script_layout::{LayoutNodeType, StyleData};
 use selectors::attr::{AttrSelectorOperation, CaseSensitivity, NamespaceConstraint};
 use selectors::bloom::{BloomFilter, BLOOM_HASH_MASK};
 use selectors::matching::{ElementSelectorFlags, MatchingContext, VisitedHandlingMode};

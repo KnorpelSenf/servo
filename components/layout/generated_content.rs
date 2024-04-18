@@ -11,7 +11,7 @@
 use std::collections::{HashMap, LinkedList};
 
 use lazy_static::lazy_static;
-use script_layout_interface::wrapper_traits::PseudoElementType;
+use script::script_layout::wrapper_traits::PseudoElementType;
 use smallvec::SmallVec;
 use style::computed_values::list_style_type::T as ListStyleType;
 use style::properties::ComputedValues;
