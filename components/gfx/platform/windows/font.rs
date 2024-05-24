@@ -6,23 +6,27 @@
 // information for an approach that we'll likely need to take when the
 // renderer moves to a sandboxed process.
 
+use std::cmp::{max, min};
 use std::fmt;
+use std::io::Cursor;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use app_units::Au;
-use dwrote::{Font, FontFace, FontFile, FontStretch, FontStyle};
-use log::debug;
+use dwrote::{FontFace, FontFile};
+use log::{debug, warn};
 use style::computed_values::font_stretch::T as StyleFontStretch;
 use style::computed_values::font_weight::T as StyleFontWeight;
 use style::values::computed::font::FontStyle as StyleFontStyle;
-use style::values::specified::font::FontStretchKeyword;
+use truetype::tables::WindowsMetrics;
+use truetype::value::Read;
+use webrender_api::FontInstanceFlags;
 
 use crate::font::{
     FontMetrics, FontTableMethods, FontTableTag, FractionalPixel, PlatformFontMethods,
 };
 use crate::font_cache_thread::FontIdentifier;
-use crate::font_template::{FontTemplateRef, FontTemplateRefMethods};
+use crate::font_template::FontTemplateDescriptor;
 use crate::text::glyph::GlyphId;
 
 // 1em = 12pt = 16px, assuming 72 points per inch and 96 px per inch
@@ -57,68 +61,99 @@ impl FontTableMethods for FontTable {
     }
 }
 
-fn make_tag(tag_bytes: &[u8]) -> FontTableTag {
-    assert_eq!(tag_bytes.len(), 4);
-    unsafe { *(tag_bytes.as_ptr() as *const FontTableTag) }
+#[macro_export]
+/// Packs the components of a font tag name into 32 bytes, while respecting the
+/// necessary Rust 4-byte alignment for pointers. This is similar to
+/// [`crate::ot_tag`], but the bytes are reversed.
+macro_rules! font_tag {
+    ($t1:expr, $t2:expr, $t3:expr, $t4:expr) => {
+        (($t4 as u32) << 24) | (($t3 as u32) << 16) | (($t2 as u32) << 8) | ($t1 as u32)
+    };
 }
-
-// We need the font (DWriteFont) in order to be able to query things like
-// the family name, face name, weight, etc.  On Windows 10, the
-// DWriteFontFace3 interface provides this on the FontFace, but that's only
-// available on Win10+.
-//
-// Instead, we do the parsing work using the truetype crate for raw fonts.
-// We're just extracting basic info, so this is sufficient for now.
 
 #[derive(Debug)]
-struct FontInfo {
-    family_name: String,
-    face_name: String,
-    weight: StyleFontWeight,
-    stretch: StyleFontStretch,
-    style: StyleFontStyle,
+pub struct PlatformFont {
+    face: Nondebug<FontFace>,
+    /// A reference to this data used to create this [`PlatformFont`], ensuring the
+    /// data stays alive of the lifetime of this struct.
+    _data: Arc<Vec<u8>>,
+    em_size: f32,
+    du_to_px: f32,
+    scaled_du_to_px: f32,
 }
 
-impl FontInfo {
-    fn new_from_face(face: &FontFace) -> Result<FontInfo, &'static str> {
-        use std::cmp::{max, min};
-        use std::collections::HashMap;
-        use std::io::Cursor;
+// Based on information from the Skia codebase, it seems that DirectWrite APIs from
+// Windows 10 and beyond are thread safe.  If problems arise from this, we can protect the
+// platform font with a Mutex.
+// See https://source.chromium.org/chromium/chromium/src/+/main:third_party/skia/src/ports/SkScalerContext_win_dw.cpp;l=56;bpv=0;bpt=1.
+unsafe impl Sync for PlatformFont {}
+unsafe impl Send for PlatformFont {}
 
-        use truetype::tables::names::{NameID, Names};
-        use truetype::tables::WindowsMetrics;
-        use truetype::value::Read;
+struct Nondebug<T>(T);
 
-        let names_bytes = face.get_font_table(make_tag(b"name"));
-        let windows_metrics_bytes = face.get_font_table(make_tag(b"OS/2"));
-        if names_bytes.is_none() || windows_metrics_bytes.is_none() {
-            return Err("No 'name' or 'OS/2' tables");
+impl<T> fmt::Debug for Nondebug<T> {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
+        Ok(())
+    }
+}
+
+impl<T> Deref for Nondebug<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl PlatformFontMethods for PlatformFont {
+    fn new_from_data(
+        _font_identifier: FontIdentifier,
+        data: Arc<Vec<u8>>,
+        face_index: u32,
+        pt_size: Option<Au>,
+    ) -> Result<Self, &'static str> {
+        let font_file = FontFile::new_from_data(data.clone()).ok_or("Could not create FontFile")?;
+        let face = font_file
+            .create_face(face_index, dwrote::DWRITE_FONT_SIMULATIONS_NONE)
+            .map_err(|_| "Could not create FontFace")?;
+
+        let pt_size = pt_size.unwrap_or(au_from_pt(12.));
+        let du_per_em = face.metrics().metrics0().designUnitsPerEm as f32;
+
+        let em_size = pt_size.to_f32_px() / 16.;
+        let design_units_per_pixel = du_per_em / 16.;
+
+        let design_units_to_pixels = 1. / design_units_per_pixel;
+        let scaled_design_units_to_pixels = em_size / design_units_per_pixel;
+
+        Ok(PlatformFont {
+            face: Nondebug(face),
+            _data: data,
+            em_size,
+            du_to_px: design_units_to_pixels,
+            scaled_du_to_px: scaled_design_units_to_pixels,
+        })
+    }
+
+    fn descriptor(&self) -> FontTemplateDescriptor {
+        // We need the font (DWriteFont) in order to be able to query things like
+        // the family name, face name, weight, etc.  On Windows 10, the
+        // DWriteFontFace3 interface provides this on the FontFace, but that's only
+        // available on Win10+.
+        //
+        // Instead, we do the parsing work using the truetype crate for raw fonts.
+        // We're just extracting basic info, so this is sufficient for now.
+        let windows_metrics_bytes = self.face.get_font_table(font_tag!('O', 'S', '/', '2'));
+        if windows_metrics_bytes.is_none() {
+            warn!("Could not find OS/2 table in font.");
+            return FontTemplateDescriptor::default();
         }
 
-        let mut cursor = Cursor::new(names_bytes.as_ref().unwrap());
-        let table = Names::read(&mut cursor).map_err(|_| "Could not read 'name' table")?;
-        let language_tags = table.language_tags().collect::<Vec<_>>();
-        let mut names = table
-            .iter()
-            .filter(|((_, _, language_id, _), value)| {
-                value.is_some() &&
-                    language_id
-                        .tag(&language_tags)
-                        .map_or(false, |tag| tag.starts_with("en"))
-            })
-            .map(|((_, _, _, name_id), value)| (name_id, value.unwrap()))
-            .collect::<HashMap<_, _>>();
-        let family = match names.remove(&NameID::FontFamilyName) {
-            Some(family) => family,
-            _ => return Err("Could not find family"),
-        };
-        let face = match names.remove(&NameID::FontSubfamilyName) {
-            Some(face) => face,
-            _ => return Err("Could not find subfamily"),
+        let mut cursor = Cursor::new(windows_metrics_bytes.as_ref().unwrap());
+        let Ok(table) = WindowsMetrics::read(&mut cursor) else {
+            warn!("Could not read OS/2 table in font.");
+            return FontTemplateDescriptor::default();
         };
 
-        let mut cursor = Cursor::new(windows_metrics_bytes.as_ref().unwrap());
-        let table = WindowsMetrics::read(&mut cursor).map_err(|_| "Could not read OS/2 table")?;
         let (weight_val, width_val, italic_bool) = match table {
             WindowsMetrics::Version0(ref m) => {
                 (m.weight_class, m.width_class, m.selection_flags.0 & 1 == 1)
@@ -137,20 +172,21 @@ impl FontInfo {
         };
 
         let weight = StyleFontWeight::from_float(weight_val as f32);
-
         let stretch = match min(9, max(1, width_val)) {
-            1 => FontStretchKeyword::UltraCondensed,
-            2 => FontStretchKeyword::ExtraCondensed,
-            3 => FontStretchKeyword::Condensed,
-            4 => FontStretchKeyword::SemiCondensed,
-            5 => FontStretchKeyword::Normal,
-            6 => FontStretchKeyword::SemiExpanded,
-            7 => FontStretchKeyword::Expanded,
-            8 => FontStretchKeyword::ExtraExpanded,
-            9 => FontStretchKeyword::UltraExpanded,
-            _ => return Err("Unknown stretch size"),
-        }
-        .compute();
+            1 => StyleFontStretch::ULTRA_CONDENSED,
+            2 => StyleFontStretch::EXTRA_CONDENSED,
+            3 => StyleFontStretch::CONDENSED,
+            4 => StyleFontStretch::SEMI_CONDENSED,
+            5 => StyleFontStretch::NORMAL,
+            6 => StyleFontStretch::SEMI_EXPANDED,
+            7 => StyleFontStretch::EXPANDED,
+            8 => StyleFontStretch::EXTRA_EXPANDED,
+            9 => StyleFontStretch::ULTRA_CONDENSED,
+            _ => {
+                warn!("Unknown stretch size.");
+                StyleFontStretch::NORMAL
+            },
+        };
 
         let style = if italic_bool {
             StyleFontStyle::ITALIC
@@ -158,138 +194,7 @@ impl FontInfo {
             StyleFontStyle::NORMAL
         };
 
-        Ok(FontInfo {
-            family_name: family,
-            face_name: face,
-            weight,
-            stretch,
-            style,
-        })
-    }
-
-    fn new_from_font(font: &Font) -> Result<FontInfo, &'static str> {
-        let style = match font.style() {
-            FontStyle::Normal => StyleFontStyle::NORMAL,
-            FontStyle::Oblique => StyleFontStyle::OBLIQUE,
-            FontStyle::Italic => StyleFontStyle::ITALIC,
-        };
-        let weight = StyleFontWeight::from_float(font.weight().to_u32() as f32);
-        let stretch = match font.stretch() {
-            FontStretch::Undefined => FontStretchKeyword::Normal,
-            FontStretch::UltraCondensed => FontStretchKeyword::UltraCondensed,
-            FontStretch::ExtraCondensed => FontStretchKeyword::ExtraCondensed,
-            FontStretch::Condensed => FontStretchKeyword::Condensed,
-            FontStretch::SemiCondensed => FontStretchKeyword::SemiCondensed,
-            FontStretch::Normal => FontStretchKeyword::Normal,
-            FontStretch::SemiExpanded => FontStretchKeyword::SemiExpanded,
-            FontStretch::Expanded => FontStretchKeyword::Expanded,
-            FontStretch::ExtraExpanded => FontStretchKeyword::ExtraExpanded,
-            FontStretch::UltraExpanded => FontStretchKeyword::UltraExpanded,
-        }
-        .compute();
-
-        Ok(FontInfo {
-            family_name: font.family_name(),
-            face_name: font.face_name(),
-            style,
-            weight,
-            stretch,
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct PlatformFont {
-    face: Nondebug<FontFace>,
-    /// A reference to this data used to create this [`PlatformFont`], ensuring the
-    /// data stays alive of the lifetime of this struct.
-    data: Option<Arc<Vec<u8>>>,
-    info: FontInfo,
-    em_size: f32,
-    du_to_px: f32,
-    scaled_du_to_px: f32,
-}
-
-struct Nondebug<T>(T);
-
-impl<T> fmt::Debug for Nondebug<T> {
-    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
-        Ok(())
-    }
-}
-
-impl<T> Deref for Nondebug<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-impl PlatformFontMethods for PlatformFont {
-    fn new_from_template(
-        font_template: FontTemplateRef,
-        pt_size: Option<Au>,
-    ) -> Result<Self, &'static str> {
-        let direct_write_font = match font_template.borrow().identifier {
-            FontIdentifier::Local(ref local_identifier) => local_identifier.direct_write_font(),
-            FontIdentifier::Web(_) => None,
-        };
-
-        let (face, info, data) = match direct_write_font {
-            Some(font) => (
-                font.create_font_face(),
-                FontInfo::new_from_font(&font)?,
-                None,
-            ),
-            None => {
-                let bytes = font_template.data();
-                let font_file =
-                    FontFile::new_from_data(bytes).ok_or("Could not create FontFile")?;
-                let face = font_file
-                    .create_face(0, dwrote::DWRITE_FONT_SIMULATIONS_NONE)
-                    .map_err(|_| "Could not create FontFace")?;
-                let info = FontInfo::new_from_face(&face)?;
-                (face, info, font_template.borrow().data_if_in_memory())
-            },
-        };
-
-        let pt_size = pt_size.unwrap_or(au_from_pt(12.));
-        let du_per_em = face.metrics().metrics0().designUnitsPerEm as f32;
-
-        let em_size = pt_size.to_f32_px() / 16.;
-        let design_units_per_pixel = du_per_em / 16.;
-
-        let design_units_to_pixels = 1. / design_units_per_pixel;
-        let scaled_design_units_to_pixels = em_size / design_units_per_pixel;
-
-        Ok(PlatformFont {
-            face: Nondebug(face),
-            data,
-            info,
-            em_size,
-            du_to_px: design_units_to_pixels,
-            scaled_du_to_px: scaled_design_units_to_pixels,
-        })
-    }
-
-    fn family_name(&self) -> Option<String> {
-        Some(self.info.family_name.clone())
-    }
-
-    fn face_name(&self) -> Option<String> {
-        Some(self.info.face_name.clone())
-    }
-
-    fn style(&self) -> StyleFontStyle {
-        self.info.style
-    }
-
-    fn boldness(&self) -> StyleFontWeight {
-        self.info.weight
-    }
-
-    fn stretchiness(&self) -> StyleFontStretch {
-        self.info.stretch
+        FontTemplateDescriptor::new(weight, stretch, style)
     }
 
     fn glyph_index(&self, codepoint: char) -> Option<GlyphId> {
@@ -334,6 +239,15 @@ impl PlatformFontMethods for PlatformFont {
         // is pulled out here for clarity
         let leading = dm.ascent - dm.capHeight;
 
+        let zero_horizontal_advance = self
+            .glyph_index('0')
+            .and_then(|idx| self.glyph_h_advance(idx))
+            .map(Au::from_f64_px);
+        let ic_horizontal_advance = self
+            .glyph_index('\u{6C34}')
+            .and_then(|idx| self.glyph_h_advance(idx))
+            .map(Au::from_f64_px);
+
         let metrics = FontMetrics {
             underline_size: au_from_du(dm.underlineThickness as i32),
             underline_offset: au_from_du_s(dm.underlinePosition as i32),
@@ -347,6 +261,8 @@ impl PlatformFontMethods for PlatformFont {
             max_advance: au_from_pt(0.0),     // FIXME
             average_advance: au_from_pt(0.0), // FIXME
             line_gap: au_from_du_s((dm.ascent + dm.descent + dm.lineGap as u16) as i32),
+            zero_horizontal_advance,
+            ic_horizontal_advance,
         };
         debug!("Font metrics (@{} pt): {:?}", self.em_size * 12., metrics);
         metrics
@@ -356,5 +272,9 @@ impl PlatformFontMethods for PlatformFont {
         self.face
             .get_font_table(tag)
             .map(|bytes| FontTable { data: bytes })
+    }
+
+    fn webrender_font_instance_flags(&self) -> FontInstanceFlags {
+        FontInstanceFlags::empty()
     }
 }

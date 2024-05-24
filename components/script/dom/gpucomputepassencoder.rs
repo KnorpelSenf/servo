@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use dom_struct::dom_struct;
-use webgpu::wgpu::command::{compute_ffi as wgpu_comp, ComputePass};
+use webgpu::wgc::command::{compute_commands as wgpu_comp, ComputePass};
 use webgpu::{WebGPU, WebGPURequest};
 
 use super::bindings::error::Fallible;
@@ -100,13 +100,10 @@ impl GPUComputePassEncoderMethods for GPUComputePassEncoder {
         let compute_pass = self.compute_pass.borrow_mut().take();
         self.channel
             .0
-            .send((
-                None,
-                WebGPURequest::RunComputePass {
-                    command_encoder_id: self.command_encoder.id().0,
-                    compute_pass,
-                },
-            ))
+            .send(WebGPURequest::RunComputePass {
+                command_encoder_id: self.command_encoder.id().0,
+                compute_pass,
+            })
             .expect("Failed to send RunComputePass"); //TODO: handle error
 
         self.command_encoder.set_state(
@@ -120,15 +117,12 @@ impl GPUComputePassEncoderMethods for GPUComputePassEncoder {
     #[allow(unsafe_code)]
     fn SetBindGroup(&self, index: u32, bind_group: &GPUBindGroup, dynamic_offsets: Vec<u32>) {
         if let Some(compute_pass) = self.compute_pass.borrow_mut().as_mut() {
-            unsafe {
-                wgpu_comp::wgpu_compute_pass_set_bind_group(
-                    compute_pass,
-                    index,
-                    bind_group.id().0,
-                    dynamic_offsets.as_ptr(),
-                    dynamic_offsets.len(),
-                )
-            };
+            wgpu_comp::wgpu_compute_pass_set_bind_group(
+                compute_pass,
+                index,
+                bind_group.id().0,
+                &dynamic_offsets,
+            )
         }
     }
 

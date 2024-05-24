@@ -38,7 +38,7 @@ APT_PKGS = [
     'libharfbuzz-dev', 'liblzma-dev', 'libudev-dev', 'libunwind-dev',
     'libvulkan1', 'libx11-dev', 'libxcb-render0-dev', 'libxcb-shape0-dev',
     'libxcb-xfixes0-dev', 'libxmu-dev', 'libxmu6', 'libegl1-mesa-dev',
-    'llvm-dev', 'm4', 'xorg-dev',
+    'llvm-dev', 'm4', 'xorg-dev', 'libxkbcommon0', "libxkbcommon-x11-0"
 ]
 
 # https://packages.fedoraproject.org
@@ -56,7 +56,8 @@ DNF_PKGS = ['libtool', 'gcc-c++', 'libXi-devel', 'freetype-devel',
             'gstreamer1-devel', 'gstreamer1-plugins-base-devel',
             'gstreamer1-plugins-good', 'gstreamer1-plugins-bad-free-devel',
             'gstreamer1-plugins-ugly-free', 'libjpeg-turbo-devel',
-            'zlib', 'libjpeg', 'vulkan-loader']
+            'zlib', 'libjpeg', 'vulkan-loader', 'libxkbcommon',
+            'libxkbcommon-x11']
 
 # https://voidlinux.org/packages/
 # 1. open devtools
@@ -71,7 +72,8 @@ XBPS_PKGS = ['libtool', 'gcc', 'libXi-devel', 'freetype-devel',
              'ncurses-devel', 'harfbuzz-devel', 'ccache', 'glu-devel',
              'clang', 'gstreamer1-devel', 'gst-plugins-base1-devel',
              'gst-plugins-good1', 'gst-plugins-bad1-devel',
-             'gst-plugins-ugly1', 'vulkan-loader']
+             'gst-plugins-ugly1', 'vulkan-loader', 'libxkbcommon',
+             'libxkbcommon-x11']
 
 GSTREAMER_URL = \
     "https://github.com/servo/servo-build-deps/releases/download/linux/gstreamer-1.16-x86_64-linux-gnu.20190515.tar.gz"
@@ -146,9 +148,11 @@ class Linux(Base):
             'void',
             'fedora linux asahi remix'
         ]:
-            raise NotImplementedError(f"mach bootstrap does not support {self.distro}."
-                                      " You may be able to install dependencies manually."
-                                      " See https://github.com/servo/servo/wiki/Building.")
+            print(f"mach bootstrap does not support {self.distro}."
+                  " You may be able to install dependencies manually."
+                  " See https://github.com/servo/servo/wiki/Building.")
+            input("Press Enter to continue...")
+            return False
 
         installed_something = self.install_non_gstreamer_dependencies(force)
         return installed_something
@@ -159,6 +163,11 @@ class Linux(Base):
         if self.distro in ['Ubuntu', 'Debian GNU/Linux', 'Raspbian GNU/Linux']:
             command = ['apt-get', 'install', "-m"]
             pkgs = APT_PKGS
+
+            # Skip 'clang' if 'clang' binary already exists.
+            result = subprocess.run(['which', 'clang'], capture_output=True)
+            if result and result.returncode == 0:
+                pkgs.remove('clang')
 
             # Try to filter out unknown packages from the list. This is important for Debian
             # as it does not ship all of the packages we want.

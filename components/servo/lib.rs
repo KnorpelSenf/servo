@@ -25,6 +25,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::vec::Drain;
 
+pub use base::id::TopLevelBrowsingContextId;
+use base::id::{PipelineNamespace, PipelineNamespaceId};
 use bluetooth::BluetoothThreadFactory;
 use bluetooth_traits::BluetoothRequest;
 use canvas::canvas_paint_thread::{self, CanvasPaintThread};
@@ -34,15 +36,15 @@ use compositing::webview::UnknownWebView;
 use compositing::windowing::{EmbedderEvent, EmbedderMethods, WindowMethods};
 use compositing::{CompositeTarget, IOCompositor, InitialCompositorState, ShutdownState};
 use compositing_traits::{
-    CanvasToCompositorMsg, CompositorMsg, CompositorProxy, CompositorReceiver, ConstellationMsg,
-    FontToCompositorMsg, ForwardedToCompositorMsg,
+    CompositorMsg, CompositorProxy, CompositorReceiver, ConstellationMsg, ForwardedToCompositorMsg,
 };
 #[cfg(all(
     not(target_os = "windows"),
     not(target_os = "ios"),
     not(target_os = "android"),
     not(target_arch = "arm"),
-    not(target_arch = "aarch64")
+    not(target_arch = "aarch64"),
+    not(target_env = "ohos"),
 ))]
 use constellation::content_process_sandbox_profile;
 use constellation::{
@@ -58,7 +60,8 @@ use euclid::Scale;
     not(target_os = "ios"),
     not(target_os = "android"),
     not(target_arch = "arm"),
-    not(target_arch = "aarch64")
+    not(target_arch = "aarch64"),
+    not(target_env = "ohos"),
 ))]
 use gaol::sandbox::{ChildSandbox, ChildSandboxMethods};
 use gfx::font_cache_thread::FontCacheThread;
@@ -68,10 +71,7 @@ pub use gleam::gl;
 use ipc_channel::ipc::{self, IpcSender};
 use log::{error, trace, warn, Log, Metadata, Record};
 use media::{GLPlayerThreads, GlApi, NativeDisplay, WindowGLContext};
-pub use msg::constellation_msg::TopLevelBrowsingContextId;
-use msg::constellation_msg::{PipelineNamespace, PipelineNamespaceId};
 use net::resource_thread::new_resource_threads;
-use net_traits::IpcSend;
 use profile::{mem as profile_mem, time as profile_time};
 use profile_traits::{mem, time};
 use script::serviceworker_manager::ServiceWorkerManager;
@@ -81,22 +81,26 @@ use script_traits::{ScriptToConstellationChan, WindowSizeData};
 use servo_config::{opts, pref, prefs};
 use servo_media::player::context::GlContext;
 use servo_media::ServoMedia;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use surfman::platform::generic::multi::connection::NativeConnection as LinuxNativeConnection;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use surfman::platform::generic::multi::context::NativeContext as LinuxNativeContext;
 use surfman::{GLApi, GLVersion};
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 use surfman::{NativeConnection, NativeContext};
 use webrender::{RenderApiSender, ShaderPrecacheFlags};
-use webrender_api::{ColorF, DocumentId, FontInstanceKey, FontKey, FramePublishId, ImageKey};
+use webrender_api::{
+    ColorF, DocumentId, FontInstanceFlags, FontInstanceKey, FontKey, FramePublishId, ImageKey,
+    NativeFontHandle,
+};
 use webrender_traits::{
+    CanvasToCompositorMsg, FontToCompositorMsg, ImageUpdate, WebRenderFontApi,
     WebrenderExternalImageHandlers, WebrenderExternalImageRegistry, WebrenderImageHandlerType,
 };
 pub use {
-    background_hang_monitor, bluetooth, bluetooth_traits, canvas, canvas_traits, compositing,
+    background_hang_monitor, base, bluetooth, bluetooth_traits, canvas, canvas_traits, compositing,
     constellation, devtools, devtools_traits, embedder_traits, euclid, gfx, ipc_channel,
-    keyboard_types, layout_thread_2013, layout_thread_2020, media, msg, net, net_traits, profile,
+    keyboard_types, layout_thread_2013, layout_thread_2020, media, net, net_traits, profile,
     profile_traits, script, script_layout_interface, script_traits, servo_config as config,
     servo_config, servo_geometry, servo_url as url, servo_url, style, style_traits, webgpu,
     webrender_api, webrender_traits,
@@ -249,6 +253,9 @@ where
             },
             Some(ref ua) if ua == "desktop" => {
                 default_user_agent_string_for(UserAgent::Desktop).into()
+            },
+            Some(ref ua) if ua == "ohos" => {
+                default_user_agent_string_for(UserAgent::OpenHarmony).into()
             },
             Some(ua) => ua.into(),
             None => embedder
@@ -489,7 +496,7 @@ where
         }
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
     fn get_native_media_display_and_gl_context(
         rendering_context: &RenderingContext,
     ) -> Option<(NativeDisplay, GlContext)> {
@@ -526,7 +533,10 @@ where
         Some((native_display, gl_context))
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(
+        target_os = "windows",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )))]
     fn get_native_media_display_and_gl_context(
         _rendering_context: &RenderingContext,
     ) -> Option<(NativeDisplay, GlContext)> {
@@ -985,14 +995,14 @@ fn create_constellation(
         opts.ignore_certificate_errors,
     );
 
-    let font_cache_thread = FontCacheThread::new(
-        public_resource_threads.sender(),
-        Box::new(FontCacheWR(compositor_proxy.clone())),
-    );
+    let font_cache_thread = FontCacheThread::new(Box::new(WebRenderFontApiCompositorProxy(
+        compositor_proxy.clone(),
+    )));
 
     let (canvas_create_sender, canvas_ipc_sender) = CanvasPaintThread::start(
         Box::new(CanvasWebrenderApi(compositor_proxy.clone())),
         font_cache_thread.clone(),
+        public_resource_threads.clone(),
     );
 
     let initial_state = InitialConstellationState {
@@ -1038,26 +1048,71 @@ fn create_constellation(
     )
 }
 
-struct FontCacheWR(CompositorProxy);
+struct WebRenderFontApiCompositorProxy(CompositorProxy);
 
-impl gfx_traits::WebrenderApi for FontCacheWR {
-    fn add_font_instance(&self, font_key: FontKey, size: f32) -> FontInstanceKey {
+impl WebRenderFontApi for WebRenderFontApiCompositorProxy {
+    fn add_font_instance(
+        &self,
+        font_key: FontKey,
+        size: f32,
+        flags: FontInstanceFlags,
+    ) -> FontInstanceKey {
         let (sender, receiver) = unbounded();
-        let _ = self
-            .0
+        self.0
             .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
-                FontToCompositorMsg::AddFontInstance(font_key, size, sender),
+                FontToCompositorMsg::AddFontInstance(font_key, size, flags, sender),
             )));
         receiver.recv().unwrap()
     }
-    fn add_font(&self, data: gfx_traits::FontData) -> FontKey {
+
+    fn add_font(&self, data: Arc<Vec<u8>>, index: u32) -> FontKey {
         let (sender, receiver) = unbounded();
-        let _ = self
-            .0
+        let (bytes_sender, bytes_receiver) =
+            ipc::bytes_channel().expect("failed to create IPC channel");
+        self.0
             .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
-                FontToCompositorMsg::AddFont(data, sender),
+                FontToCompositorMsg::AddFont(sender, index, bytes_receiver),
+            )));
+        let _ = bytes_sender.send(&data);
+        receiver.recv().unwrap()
+    }
+
+    fn add_system_font(&self, handle: NativeFontHandle) -> FontKey {
+        let (sender, receiver) = unbounded();
+        self.0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddSystemFont(sender, handle),
             )));
         receiver.recv().unwrap()
+    }
+
+    fn forward_add_font_message(
+        &self,
+        bytes_receiver: ipc::IpcBytesReceiver,
+        font_index: u32,
+        result_sender: IpcSender<FontKey>,
+    ) {
+        let (sender, receiver) = unbounded();
+        self.0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddFont(sender, font_index, bytes_receiver),
+            )));
+        let _ = result_sender.send(receiver.recv().unwrap());
+    }
+
+    fn forward_add_font_instance_message(
+        &self,
+        font_key: FontKey,
+        size: f32,
+        flags: FontInstanceFlags,
+        result_sender: IpcSender<FontInstanceKey>,
+    ) {
+        let (sender, receiver) = unbounded();
+        self.0
+            .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
+                FontToCompositorMsg::AddFontInstance(font_key, size, flags, sender),
+            )));
+        let _ = result_sender.send(receiver.recv().unwrap());
     }
 }
 
@@ -1067,16 +1122,14 @@ struct CanvasWebrenderApi(CompositorProxy);
 impl canvas_paint_thread::WebrenderApi for CanvasWebrenderApi {
     fn generate_key(&self) -> Option<ImageKey> {
         let (sender, receiver) = unbounded();
-        let _ = self
-            .0
+        self.0
             .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Canvas(
                 CanvasToCompositorMsg::GenerateKey(sender),
             )));
         receiver.recv().ok()
     }
-    fn update_images(&self, updates: Vec<canvas_paint_thread::ImageUpdate>) {
-        let _ = self
-            .0
+    fn update_images(&self, updates: Vec<ImageUpdate>) {
+        self.0
             .send(CompositorMsg::Forwarded(ForwardedToCompositorMsg::Canvas(
                 CanvasToCompositorMsg::UpdateImages(updates),
             )));
@@ -1175,7 +1228,8 @@ pub fn run_content_process(token: String) {
     not(target_os = "ios"),
     not(target_os = "android"),
     not(target_arch = "arm"),
-    not(target_arch = "aarch64")
+    not(target_arch = "aarch64"),
+    not(target_env = "ohos"),
 ))]
 fn create_sandbox() {
     ChildSandbox::new(content_process_sandbox_profile())
@@ -1188,7 +1242,8 @@ fn create_sandbox() {
     target_os = "ios",
     target_os = "android",
     target_arch = "arm",
-    target_arch = "aarch64"
+    target_arch = "aarch64",
+    target_env = "ohos",
 ))]
 fn create_sandbox() {
     panic!("Sandboxing is not supported on Windows, iOS, ARM targets and android.");
@@ -1197,35 +1252,41 @@ fn create_sandbox() {
 enum UserAgent {
     Desktop,
     Android,
+    OpenHarmony,
     #[allow(non_camel_case_types)]
     iOS,
 }
 
 fn default_user_agent_string_for(agent: UserAgent) -> &'static str {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const DESKTOP_UA_STRING: &'static str =
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", not(target_env = "ohos")))]
+    const DESKTOP_UA_STRING: &str =
         "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Servo/1.0 Firefox/111.0";
-    #[cfg(all(target_os = "linux", not(target_arch = "x86_64")))]
-    const DESKTOP_UA_STRING: &'static str =
+    #[cfg(all(
+        target_os = "linux",
+        not(target_arch = "x86_64"),
+        not(target_env = "ohos")
+    ))]
+    const DESKTOP_UA_STRING: &str =
         "Mozilla/5.0 (X11; Linux i686; rv:109.0) Servo/1.0 Firefox/111.0";
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    const DESKTOP_UA_STRING: &'static str =
+    const DESKTOP_UA_STRING: &str =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Servo/1.0 Firefox/111.0";
     #[cfg(all(target_os = "windows", not(target_arch = "x86_64")))]
-    const DESKTOP_UA_STRING: &'static str =
+    const DESKTOP_UA_STRING: &str =
         "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Servo/1.0 Firefox/111.0";
 
     #[cfg(target_os = "macos")]
-    const DESKTOP_UA_STRING: &'static str =
+    const DESKTOP_UA_STRING: &str =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Servo/1.0 Firefox/111.0";
 
-    #[cfg(target_os = "android")]
-    const DESKTOP_UA_STRING: &'static str = "";
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
+    const DESKTOP_UA_STRING: &str = "";
 
     match agent {
         UserAgent::Desktop => DESKTOP_UA_STRING,
         UserAgent::Android => "Mozilla/5.0 (Android; Mobile; rv:109.0) Servo/1.0 Firefox/111.0",
+        UserAgent::OpenHarmony => "Mozilla/5.0 (OpenHarmony; Mobile; rv:109.0) Servo/1.0 Firefox/111.0",
         UserAgent::iOS => {
             "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X; rv:109.0) Servo/1.0 Firefox/111.0"
         },
@@ -1235,8 +1296,11 @@ fn default_user_agent_string_for(agent: UserAgent) -> &'static str {
 #[cfg(target_os = "android")]
 const DEFAULT_USER_AGENT: UserAgent = UserAgent::Android;
 
+#[cfg(target_env = "ohos")]
+const DEFAULT_USER_AGENT: UserAgent = UserAgent::OpenHarmony;
+
 #[cfg(target_os = "ios")]
 const DEFAULT_USER_AGENT: UserAgent = UserAgent::iOS;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))]
 const DEFAULT_USER_AGENT: UserAgent = UserAgent::Desktop;

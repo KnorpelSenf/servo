@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::borrow::{Cow, ToOwned};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell, RefMut};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::default::Default;
@@ -12,10 +12,11 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::{cmp, env};
+use std::{cmp, env, mem};
 
 use app_units::Au;
 use backtrace::Backtrace;
+use base::id::{BrowsingContextId, PipelineId};
 use base64::Engine;
 use bluetooth_traits::BluetoothRequest;
 use canvas_traits::webgl::WebGLChan;
@@ -26,7 +27,6 @@ use dom_struct::dom_struct;
 use embedder_traits::{EmbedderMsg, PromptDefinition, PromptOrigin, PromptResult};
 use euclid::default::{Point2D as UntypedPoint2D, Rect as UntypedRect};
 use euclid::{Point2D, Rect, Scale, Size2D, Vector2D};
-use gfx_traits::combine_id_with_fragment_type;
 use ipc_channel::ipc::{self, IpcSender};
 use ipc_channel::router::ROUTER;
 use js::conversions::ToJSValConvertible;
@@ -38,7 +38,6 @@ use js::rust::{
 };
 use malloc_size_of::MallocSizeOf;
 use media::WindowGLContext;
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image_cache::{
     ImageCache, ImageResponder, ImageResponse, PendingImageId, PendingImageResponse,
 };
@@ -49,13 +48,15 @@ use parking_lot::Mutex as ParkMutex;
 use profile_traits::ipc as ProfiledIpc;
 use profile_traits::mem::ProfilerChan as MemProfilerChan;
 use profile_traits::time::ProfilerChan as TimeProfilerChan;
-use crate::script_layout::message::{Msg, QueryMsg, Reflow, ReflowGoal, ScriptReflow};
-use crate::script_layout::{Layout, PendingImageState, TrustedNodeAddress};
+use script_layout_interface::{
+    combine_id_with_fragment_type, FragmentType, Layout, PendingImageState, QueryMsg, Reflow,
+    ReflowGoal, ScriptReflow, TrustedNodeAddress,
+};
 use script_traits::webdriver_msg::{WebDriverJSError, WebDriverJSResult};
 use script_traits::{
     ConstellationControlMsg, DocumentState, HistoryEntryReplacement, LoadData, ScriptMsg,
     ScriptToConstellationChan, ScrollState, StructuredSerializedData, TimerEventId,
-    TimerSchedulerMsg, WebrenderIpcSender, WindowSizeData, WindowSizeType,
+    TimerSchedulerMsg, WindowSizeData, WindowSizeType,
 };
 use selectors::attr::CaseSensitivity;
 use servo_arc::Arc as ServoArc;
@@ -75,6 +76,7 @@ use style_traits::{CSSPixel, DevicePixel, ParsingMode};
 use url::Position;
 use webrender_api::units::{DeviceIntPoint, DeviceIntSize, LayoutPixel};
 use webrender_api::{DocumentId, ExternalScrollId};
+use webrender_traits::WebRenderScriptApi;
 
 use super::bindings::trace::HashMapTracedValues;
 use crate::dom::bindings::cell::{DomRefCell, Ref};
@@ -191,6 +193,9 @@ pub struct Window {
     #[ignore_malloc_size_of = "trait objects are hard"]
     script_chan: MainThreadScriptChan,
     task_manager: TaskManager,
+    #[no_trace]
+    #[ignore_malloc_size_of = "TODO: Add MallocSizeOf support to layout"]
+    layout: RefCell<Box<dyn Layout>>,
     navigator: MutNullableDom<Navigator>,
     #[ignore_malloc_size_of = "Arc"]
     #[no_trace]
@@ -219,9 +224,9 @@ pub struct Window {
     #[no_trace]
     devtools_marker_sender: DomRefCell<Option<IpcSender<Option<TimelineMarker>>>>,
 
-    /// Pending resize event, if any.
+    /// Pending resize events, if any.
     #[no_trace]
-    resize_event: Cell<Option<(WindowSizeData, WindowSizeType)>>,
+    resize_events: DomRefCell<Vec<(WindowSizeData, WindowSizeType)>>,
 
     /// Parent id associated with this page, if any.
     #[no_trace]
@@ -317,7 +322,7 @@ pub struct Window {
     /// Webrender API Sender
     #[ignore_malloc_size_of = "Wraps an IpcSender"]
     #[no_trace]
-    webrender_api_sender: WebrenderIpcSender,
+    webrender_api_sender: WebRenderScriptApi,
 
     /// Indicate whether a SetDocumentStatus message has been sent after a reflow is complete.
     /// It is used to avoid sending idle message more than once, which is unneccessary.
@@ -361,6 +366,14 @@ pub struct Window {
 impl Window {
     pub fn task_manager(&self) -> &TaskManager {
         &self.task_manager
+    }
+
+    pub fn layout(&self) -> Ref<Box<dyn Layout>> {
+        self.layout.borrow()
+    }
+
+    pub fn layout_mut(&self) -> RefMut<Box<dyn Layout>> {
+        self.layout.borrow_mut()
     }
 
     pub fn get_exists_mut_observer(&self) -> bool {
@@ -520,7 +533,7 @@ impl Window {
         self.add_pending_reflow();
     }
 
-    pub fn get_webrender_api_sender(&self) -> WebrenderIpcSender {
+    pub fn get_webrender_api_sender(&self) -> WebRenderScriptApi {
         self.webrender_api_sender.clone()
     }
 
@@ -1875,7 +1888,7 @@ impl Window {
             animations: document.animations().sets.clone(),
         };
 
-        let _ = self.with_layout(move |layout| layout.process(Msg::Reflow(reflow)));
+        self.layout.borrow_mut().reflow(reflow);
 
         let complete = match join_port.try_recv() {
             Err(TryRecvError::Empty) => {
@@ -1910,7 +1923,7 @@ impl Window {
 
             let mut images = self.pending_layout_images.borrow_mut();
             let nodes = images.entry(id).or_default();
-            if !nodes.iter().any(|n| &**n as *const _ == &*node as *const _) {
+            if !nodes.iter().any(|n| std::ptr::eq(&**n, &*node)) {
                 let (responder, responder_listener) =
                     ProfiledIpc::channel(self.global().time_profiler_chan().clone()).unwrap();
                 let image_cache_chan = self.image_cache_chan.clone();
@@ -1986,10 +1999,7 @@ impl Window {
                 elem.has_class(&atom!("reftest-wait"), CaseSensitivity::CaseSensitive)
             });
 
-            let pending_web_fonts = self
-                .with_layout(move |layout| layout.waiting_for_web_fonts_to_load())
-                .unwrap();
-
+            let pending_web_fonts = self.layout.borrow().waiting_for_web_fonts_to_load();
             let has_sent_idle_message = self.has_sent_idle_message.get();
             let is_ready_state_complete = document.ReadyState() == DocumentReadyState::Complete;
             let pending_images = !self.pending_layout_images.borrow().is_empty();
@@ -2020,10 +2030,7 @@ impl Window {
             return;
         }
 
-        let epoch = self
-            .with_layout(move |layout| layout.current_epoch())
-            .unwrap();
-
+        let epoch = self.layout.borrow().current_epoch();
         debug!(
             "{:?}: Updating constellation epoch: {epoch:?}",
             self.pipeline_id()
@@ -2047,39 +2054,34 @@ impl Window {
         }
 
         let document = self.Document();
-        self.with_layout(|layout| {
-            layout.query_resolved_font_style(
-                Node::to_trusted_node_address(node),
-                &value,
-                document.animations().sets.clone(),
-                document.current_animation_timeline_value(),
-            )
-        })
-        .unwrap()
+        let animations = document.animations().sets.clone();
+        self.layout.borrow().query_resolved_font_style(
+            node.to_trusted_node_address(),
+            &value,
+            animations,
+            document.current_animation_timeline_value(),
+        )
     }
 
     pub fn content_box_query(&self, node: &Node) -> Option<UntypedRect<Au>> {
         if !self.layout_reflow(QueryMsg::ContentBox) {
             return None;
         }
-        self.with_layout(|layout| layout.query_content_box(node.to_opaque()))
-            .unwrap_or(None)
+        self.layout.borrow().query_content_box(node.to_opaque())
     }
 
     pub fn content_boxes_query(&self, node: &Node) -> Vec<UntypedRect<Au>> {
         if !self.layout_reflow(QueryMsg::ContentBoxes) {
             return vec![];
         }
-        self.with_layout(|layout| layout.query_content_boxes(node.to_opaque()))
-            .unwrap_or_default()
+        self.layout.borrow().query_content_boxes(node.to_opaque())
     }
 
     pub fn client_rect_query(&self, node: &Node) -> UntypedRect<i32> {
         if !self.layout_reflow(QueryMsg::ClientRectQuery) {
             return Rect::zero();
         }
-        self.with_layout(|layout| layout.query_client_rect(node.to_opaque()))
-            .unwrap_or_default()
+        self.layout.borrow().query_client_rect(node.to_opaque())
     }
 
     /// Find the scroll area of the given node, if it is not None. If the node
@@ -2089,8 +2091,7 @@ impl Window {
         if !self.layout_reflow(QueryMsg::ScrollingAreaQuery) {
             return Rect::zero();
         }
-        self.with_layout(|layout| layout.query_scrolling_area(opaque))
-            .unwrap_or_default()
+        self.layout.borrow().query_scrolling_area(opaque)
     }
 
     pub fn scroll_offset_query(&self, node: &Node) -> Vector2D<f32, LayoutPixel> {
@@ -2109,10 +2110,7 @@ impl Window {
             .borrow_mut()
             .insert(node.to_opaque(), Vector2D::new(x_ as f32, y_ as f32));
         let scroll_id = ExternalScrollId(
-            combine_id_with_fragment_type(
-                node.to_opaque().id(),
-                gfx_traits::FragmentType::FragmentBody,
-            ),
+            combine_id_with_fragment_type(node.to_opaque().id(), FragmentType::FragmentBody),
             self.pipeline_id().into(),
         );
 
@@ -2137,18 +2135,14 @@ impl Window {
         }
 
         let document = self.Document();
-        DOMString::from(
-            self.with_layout(|layout| {
-                layout.query_resolved_style(
-                    element,
-                    pseudo,
-                    property,
-                    document.animations().sets.clone(),
-                    document.current_animation_timeline_value(),
-                )
-            })
-            .unwrap(),
-        )
+        let animations = document.animations().sets.clone();
+        DOMString::from(self.layout.borrow().query_resolved_style(
+            element,
+            pseudo,
+            property,
+            animations,
+            document.current_animation_timeline_value(),
+        ))
     }
 
     pub fn inner_window_dimensions_query(
@@ -2158,8 +2152,9 @@ impl Window {
         if !self.layout_reflow(QueryMsg::InnerWindowDimensionsQuery) {
             return None;
         }
-        self.with_layout(|layout| layout.query_inner_window_dimension(browsing_context))
-            .unwrap()
+        self.layout
+            .borrow()
+            .query_inner_window_dimension(browsing_context)
     }
 
     #[allow(unsafe_code)]
@@ -2168,9 +2163,7 @@ impl Window {
             return (None, Rect::zero());
         }
 
-        let response = self
-            .with_layout(|layout| layout.query_offset_parent(node.to_opaque()))
-            .unwrap();
+        let response = self.layout.borrow().query_offset_parent(node.to_opaque());
         let element = response.node_address.and_then(|parent_node_address| {
             let node = unsafe { from_untrusted_node_address(parent_node_address) };
             DomRoot::downcast(node)
@@ -2186,8 +2179,9 @@ impl Window {
         if !self.layout_reflow(QueryMsg::TextIndexQuery) {
             return None;
         }
-        self.with_layout(|layout| layout.query_text_indext(node.to_opaque(), point_in_node))
-            .unwrap()
+        self.layout
+            .borrow()
+            .query_text_indext(node.to_opaque(), point_in_node)
     }
 
     #[allow(unsafe_code)]
@@ -2310,10 +2304,6 @@ impl Window {
         self.Document().url()
     }
 
-    pub fn with_layout<T>(&self, call: impl FnOnce(&mut dyn Layout) -> T) -> Result<T, ()> {
-        ScriptThread::with_layout(self.pipeline_id(), call)
-    }
-
     pub fn windowproxy_handler(&self) -> WindowProxyHandler {
         WindowProxyHandler(self.dom_static.windowproxy_handler.0)
     }
@@ -2327,14 +2317,12 @@ impl Window {
             .set(self.pending_reflow_count.get() + 1);
     }
 
-    pub fn set_resize_event(&self, event: WindowSizeData, event_type: WindowSizeType) {
-        self.resize_event.set(Some((event, event_type)));
+    pub fn add_resize_event(&self, event: WindowSizeData, event_type: WindowSizeType) {
+        self.resize_events.borrow_mut().push((event, event_type));
     }
 
-    pub fn steal_resize_event(&self) -> Option<(WindowSizeData, WindowSizeType)> {
-        let event = self.resize_event.get();
-        self.resize_event.set(None);
-        event
+    pub fn steal_resize_events(&self) -> Vec<(WindowSizeData, WindowSizeType)> {
+        mem::take(&mut self.resize_events.borrow_mut())
     }
 
     pub fn set_page_clip_rect_with_new_viewport(&self, viewport: UntypedRect<f32>) -> bool {
@@ -2458,7 +2446,6 @@ impl Window {
             );
             event.upcast::<Event>().fire(mql.upcast::<EventTarget>());
         }
-        self.Document().react_to_environment_changes();
     }
 
     /// Set whether to use less resources by running timers at a heavily limited rate.
@@ -2521,6 +2508,7 @@ impl Window {
         runtime: Rc<Runtime>,
         script_chan: MainThreadScriptChan,
         task_manager: TaskManager,
+        layout: Box<dyn Layout>,
         image_cache_chan: Sender<ImageCacheMsg>,
         image_cache: Arc<dyn ImageCache>,
         resource_threads: ResourceThreads,
@@ -2542,7 +2530,7 @@ impl Window {
         webxr_registry: webxr_api::Registry,
         microtask_queue: Rc<MicrotaskQueue>,
         webrender_document: DocumentId,
-        webrender_api_sender: WebrenderIpcSender,
+        webrender_api_sender: WebRenderScriptApi,
         relayout_event: bool,
         prepare_for_screenshot: bool,
         unminify_js: bool,
@@ -2559,6 +2547,12 @@ impl Window {
             pipelineid,
             script_chan: Arc::new(Mutex::new(control_chan)),
         };
+
+        let initial_viewport = f32_rect_to_au_rect(UntypedRect::new(
+            Point2D::zero(),
+            window_size.initial_viewport.to_untyped(),
+        ));
+
         let win = Box::new(Self {
             globalscope: GlobalScope::new_inherited(
                 pipelineid,
@@ -2578,6 +2572,7 @@ impl Window {
             ),
             script_chan,
             task_manager,
+            layout: RefCell::new(layout),
             image_cache_chan,
             image_cache,
             navigator: Default::default(),
@@ -2599,9 +2594,9 @@ impl Window {
             bluetooth_thread,
             bluetooth_extra_permission_data: BluetoothExtraPermissionData::new(),
             page_clip_rect: Cell::new(MaxRect::max_rect()),
-            resize_event: Default::default(),
+            resize_events: Default::default(),
             window_size: Cell::new(window_size),
-            current_viewport: Cell::new(Rect::zero()),
+            current_viewport: Cell::new(initial_viewport.to_untyped()),
             suppress_reflow: Cell::new(true),
             pending_reflow_count: Default::default(),
             current_state: Cell::new(WindowState::Alive),

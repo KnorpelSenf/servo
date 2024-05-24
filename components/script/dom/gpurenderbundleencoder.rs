@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use dom_struct::dom_struct;
-use webgpu::wgpu::command::{bundle_ffi as wgpu_bundle, RenderBundleEncoder};
+use webgpu::wgc::command::{bundle_ffi as wgpu_bundle, RenderBundleEncoder};
 use webgpu::{wgt, WebGPU, WebGPURenderBundle, WebGPURequest};
 
 use super::bindings::codegen::Bindings::WebGPUBinding::GPUIndexFormat;
@@ -209,15 +209,12 @@ impl GPURenderBundleEncoderMethods for GPURenderBundleEncoder {
 
         self.channel
             .0
-            .send((
-                self.device.use_current_scope(),
-                WebGPURequest::RenderBundleEncoderFinish {
-                    render_bundle_encoder: encoder,
-                    descriptor: desc,
-                    render_bundle_id,
-                    device_id: self.device.id().0,
-                },
-            ))
+            .send(WebGPURequest::RenderBundleEncoderFinish {
+                render_bundle_encoder: encoder,
+                descriptor: desc,
+                render_bundle_id,
+                device_id: self.device.id().0,
+            })
             .expect("Failed to send RenderBundleEncoderFinish");
 
         let render_bundle = WebGPURenderBundle(render_bundle_id);

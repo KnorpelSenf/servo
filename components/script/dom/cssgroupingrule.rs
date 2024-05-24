@@ -5,10 +5,9 @@
 use dom_struct::dom_struct;
 use servo_arc::Arc;
 use style::shared_lock::{Locked, SharedRwLock};
-use style::stylesheets::{CssRuleTypes, CssRules as StyleCssRules};
+use style::stylesheets::{CssRuleType, CssRuleTypes, CssRules as StyleCssRules};
 
 use crate::dom::bindings::codegen::Bindings::CSSGroupingRuleBinding::CSSGroupingRuleMethods;
-use crate::dom::bindings::codegen::Bindings::CSSRuleBinding::CSSRule_Binding::CSSRuleMethods;
 use crate::dom::bindings::error::{ErrorResult, Fallible};
 use crate::dom::bindings::inheritance::Castable;
 use crate::dom::bindings::reflector::DomObject;
@@ -69,9 +68,18 @@ impl CSSGroupingRuleMethods for CSSGroupingRule {
     // https://drafts.csswg.org/cssom/#dom-cssgroupingrule-insertrule
     fn InsertRule(&self, rule: DOMString, index: u32) -> Fallible<u32> {
         // TODO: this should accumulate the rule types of all ancestors.
-        let containing_rule_types = CssRuleTypes::from_bits(self.cssrule.Type().into());
-        self.rulelist()
-            .insert_rule(&rule, index, containing_rule_types)
+        let rule_type = self.cssrule.as_specific().ty();
+        let containing_rule_types = CssRuleTypes::from(rule_type);
+        let parse_relative_rule_type = match rule_type {
+            CssRuleType::Style | CssRuleType::Scope => Some(rule_type),
+            _ => None,
+        };
+        self.rulelist().insert_rule(
+            &rule,
+            index,
+            containing_rule_types,
+            parse_relative_rule_type,
+        )
     }
 
     // https://drafts.csswg.org/cssom/#dom-cssgroupingrule-deleterule

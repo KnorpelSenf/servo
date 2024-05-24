@@ -94,6 +94,15 @@ use std::sync::{Arc, Mutex};
 use std::{process, thread};
 
 use background_hang_monitor::HangMonitorRegister;
+use background_hang_monitor_api::{
+    BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, HangMonitorAlert,
+};
+use base::id::{
+    BroadcastChannelRouterId, BrowsingContextGroupId, BrowsingContextId, HistoryStateId,
+    MessagePortId, MessagePortRouterId, PipelineId, PipelineNamespace, PipelineNamespaceId,
+    PipelineNamespaceRequest, TopLevelBrowsingContextId, WebViewId,
+};
+use base::Epoch;
 use bluetooth_traits::BluetoothRequest;
 use canvas_traits::canvas::{CanvasId, CanvasMsg};
 use canvas_traits::webgl::WebGLThreads;
@@ -113,7 +122,6 @@ use embedder_traits::{
 use euclid::default::Size2D as UntypedSize2D;
 use euclid::Size2D;
 use gfx::font_cache_thread::FontCacheThread;
-use gfx_traits::Epoch;
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 use ipc_channel::router::ROUTER;
 use ipc_channel::Error as IpcError;
@@ -121,12 +129,6 @@ use keyboard_types::webdriver::Event as WebDriverInputEvent;
 use keyboard_types::KeyboardEvent;
 use log::{debug, error, info, trace, warn};
 use media::{GLPlayerThreads, WindowGLContext};
-use msg::constellation_msg::{
-    BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, BroadcastChannelRouterId,
-    BrowsingContextGroupId, BrowsingContextId, HangMonitorAlert, HistoryStateId, MessagePortId,
-    MessagePortRouterId, PipelineId, PipelineNamespace, PipelineNamespaceId,
-    PipelineNamespaceRequest, TopLevelBrowsingContextId, TraversalDirection, WebViewId,
-};
 use net_traits::pub_domains::reg_host;
 use net_traits::request::{Referrer, RequestBuilder};
 use net_traits::storage_thread::{StorageThreadMsg, StorageType};
@@ -142,8 +144,8 @@ use script_traits::{
     LoadData, LoadOrigin, LogEntry, MediaSessionActionType, MessagePortMsg, MouseEventType,
     PortMessageTask, SWManagerMsg, SWManagerSenders, ScriptMsg as FromScriptMsg,
     ScriptToConstellationChan, ServiceWorkerManagerFactory, ServiceWorkerMsg,
-    StructuredSerializedData, TimerSchedulerMsg, UpdatePipelineIdReason, WebDriverCommandMsg,
-    WindowSizeData, WindowSizeType,
+    StructuredSerializedData, TimerSchedulerMsg, TraversalDirection, UpdatePipelineIdReason,
+    WebDriverCommandMsg, WindowSizeData, WindowSizeType,
 };
 use serde::{Deserialize, Serialize};
 use servo_config::{opts, pref};
@@ -153,7 +155,7 @@ use style_traits::CSSPixel;
 use webgpu::{self, WebGPU, WebGPURequest};
 use webrender::{RenderApi, RenderApiSender};
 use webrender_api::DocumentId;
-use webrender_traits::WebrenderExternalImageRegistry;
+use webrender_traits::{WebRenderNetApi, WebRenderScriptApi, WebrenderExternalImageRegistry};
 
 use crate::browsingcontext::{
     AllBrowsingContextsIterator, BrowsingContext, FullyActiveBrowsingContextsIterator,
@@ -390,11 +392,11 @@ pub struct Constellation<STF, SWF> {
 
     /// A channel for content processes to send messages that will
     /// be relayed to the WebRender thread.
-    webrender_api_ipc_sender: script_traits::WebrenderIpcSender,
+    webrender_api_ipc_sender: WebRenderScriptApi,
 
     /// A channel for content process image caches to send messages
     /// that will be relayed to the WebRender thread.
-    webrender_image_api_sender: net_traits::WebrenderIpcSender,
+    webrender_image_api_sender: WebRenderNetApi,
 
     /// A map of message-port Id to info.
     message_ports: HashMap<MessagePortId, MessagePortInfo>,
@@ -783,12 +785,8 @@ where
                     scheduler_receiver,
                     document_states: HashMap::new(),
                     webrender_document: state.webrender_document,
-                    webrender_api_ipc_sender: script_traits::WebrenderIpcSender::new(
-                        webrender_ipc_sender,
-                    ),
-                    webrender_image_api_sender: net_traits::WebrenderIpcSender::new(
-                        webrender_image_ipc_sender,
-                    ),
+                    webrender_api_ipc_sender: WebRenderScriptApi::new(webrender_ipc_sender),
+                    webrender_image_api_sender: WebRenderNetApi::new(webrender_image_ipc_sender),
                     webrender_wgpu,
                     shutting_down: false,
                     handled_warnings: VecDeque::new(),
@@ -1459,6 +1457,15 @@ where
             FromCompositorMsg::NewWebView(url, top_level_browsing_context_id) => {
                 self.handle_new_top_level_browsing_context(url, top_level_browsing_context_id);
             },
+            // A top level browsing context is created and opened in both constellation and
+            // compositor.
+            FromCompositorMsg::WebViewOpened(top_level_browsing_context_id) => {
+                let msg = (
+                    Some(top_level_browsing_context_id),
+                    EmbedderMsg::WebViewOpened(top_level_browsing_context_id),
+                );
+                self.embedder_proxy.send(msg);
+            },
             // Close a top level browsing context.
             FromCompositorMsg::CloseWebView(top_level_browsing_context_id) => {
                 self.handle_close_top_level_browsing_context(top_level_browsing_context_id);
@@ -1470,48 +1477,6 @@ where
                     warn!("constellation got a SendError message without top level id");
                 }
                 self.handle_panic(top_level_browsing_context_id, error, None);
-            },
-            FromCompositorMsg::MoveResizeWebView(top_level_browsing_context_id, rect) => {
-                if self.webviews.get(top_level_browsing_context_id).is_none() {
-                    return warn!(
-                        "{}: MoveResizeWebView on unknown top-level browsing context",
-                        top_level_browsing_context_id
-                    );
-                }
-                self.compositor_proxy.send(CompositorMsg::MoveResizeWebView(
-                    top_level_browsing_context_id,
-                    rect,
-                ));
-            },
-            FromCompositorMsg::ShowWebView(webview_id, hide_others) => {
-                if self.webviews.get(webview_id).is_none() {
-                    return warn!(
-                        "{}: ShowWebView on unknown top-level browsing context",
-                        webview_id
-                    );
-                }
-                self.compositor_proxy
-                    .send(CompositorMsg::ShowWebView(webview_id, hide_others));
-            },
-            FromCompositorMsg::HideWebView(webview_id) => {
-                if self.webviews.get(webview_id).is_none() {
-                    return warn!(
-                        "{}: HideWebView on unknown top-level browsing context",
-                        webview_id
-                    );
-                }
-                self.compositor_proxy
-                    .send(CompositorMsg::HideWebView(webview_id));
-            },
-            FromCompositorMsg::RaiseWebViewToTop(webview_id, hide_others) => {
-                if self.webviews.get(webview_id).is_none() {
-                    return warn!(
-                        "{}: RaiseWebViewToTop on unknown top-level browsing context",
-                        webview_id
-                    );
-                }
-                self.compositor_proxy
-                    .send(CompositorMsg::RaiseWebViewToTop(webview_id, hide_others));
             },
             FromCompositorMsg::FocusWebView(top_level_browsing_context_id) => {
                 if self.webviews.get(top_level_browsing_context_id).is_none() {
@@ -2114,7 +2079,7 @@ where
                         options,
                         ids,
                     };
-                    if webgpu_chan.0.send((None, adapter_request)).is_err() {
+                    if webgpu_chan.0.send(adapter_request).is_err() {
                         warn!("Failed to send request adapter message on WebGPU channel");
                     }
                 },
@@ -2975,11 +2940,6 @@ where
     ) {
         let window_size = self.window_size.initial_viewport;
         let pipeline_id = PipelineId::new();
-        let msg = (
-            Some(top_level_browsing_context_id),
-            EmbedderMsg::WebViewOpened(top_level_browsing_context_id),
-        );
-        self.embedder_proxy.send(msg);
         let browsing_context_id = BrowsingContextId::from(top_level_browsing_context_id);
         let load_data = LoadData::new(
             LoadOrigin::Constellation,

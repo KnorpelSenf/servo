@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::{f32, mem};
 
 use app_units::{Au, AU_PER_PX};
+use base::id::{BrowsingContextId, PipelineId};
 use bitflags::bitflags;
 use canvas_traits::canvas::{CanvasMsg, FromLayoutMsg};
 use embedder_traits::Cursor;
@@ -21,13 +22,11 @@ use euclid::{rect, SideOffsets2D};
 use fnv::FnvHashMap;
 use gfx::text::glyph::ByteIndex;
 use gfx::text::TextRun;
-use gfx_traits::{combine_id_with_fragment_type, FragmentType, StackingContextId};
 use ipc_channel::ipc;
 use log::{debug, warn};
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image_cache::UsePlaceholder;
 use range::Range;
-use script_traits::compositor::ScrollSensitivity;
+use script_layout_interface::{combine_id_with_fragment_type, FragmentType};
 use servo_config::opts;
 use servo_geometry::{self, MaxRect};
 use style::color::AbsoluteColor;
@@ -52,7 +51,9 @@ use webrender_api::{
     ExternalScrollId, FilterOp, GlyphInstance, ImageRendering, LineStyle, NinePatchBorder,
     NinePatchBorderSource, NormalBorder, PropertyBinding, StickyOffsetBounds,
 };
+use webrender_traits::display_list::ScrollSensitivity;
 
+use super::StackingContextId;
 use crate::block::BlockFlow;
 use crate::context::LayoutContext;
 use crate::display_list::background::{self, get_cyclic};

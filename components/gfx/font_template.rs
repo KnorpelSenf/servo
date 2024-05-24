@@ -2,36 +2,46 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::cell::RefCell;
 use std::fmt::{Debug, Error, Formatter};
-use std::io::Error as IoError;
-use std::rc::Rc;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use log::warn;
+use atomic_refcell::AtomicRefCell;
+use malloc_size_of_derive::MallocSizeOf;
 use serde::{Deserialize, Serialize};
+use servo_url::ServoUrl;
 use style::computed_values::font_stretch::T as FontStretch;
 use style::computed_values::font_style::T as FontStyle;
-use style::properties::style_structs::Font as FontStyleStruct;
+use style::stylesheets::DocumentStyleSheet;
 use style::values::computed::font::FontWeight;
-use webrender_api::NativeFontHandle;
 
-use crate::font::PlatformFontMethods;
-use crate::font_cache_thread::FontIdentifier;
+use crate::font::{FontDescriptor, PlatformFontMethods};
+use crate::font_cache_thread::{
+    CSSFontFaceDescriptors, ComputedFontStyleDescriptor, FontIdentifier,
+};
 use crate::platform::font::PlatformFont;
+use crate::platform::font_list::LocalFontIdentifier;
 
 /// A reference to a [`FontTemplate`] with shared ownership and mutability.
-pub(crate) type FontTemplateRef = Rc<RefCell<FontTemplate>>;
+pub type FontTemplateRef = Arc<AtomicRefCell<FontTemplate>>;
 
 /// Describes how to select a font from a given family. This is very basic at the moment and needs
 /// to be expanded or refactored when we support more of the font styling parameters.
 ///
 /// NB: If you change this, you will need to update `style::properties::compute_font_hash()`.
-#[derive(Clone, Copy, Debug, Deserialize, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Hash, MallocSizeOf, PartialEq, Serialize)]
 pub struct FontTemplateDescriptor {
-    pub weight: FontWeight,
-    pub stretch: FontStretch,
-    pub style: FontStyle,
+    pub weight: (FontWeight, FontWeight),
+    pub stretch: (FontStretch, FontStretch),
+    pub style: (FontStyle, FontStyle),
+    #[ignore_malloc_size_of = "MallocSizeOf does not yet support RangeInclusive"]
+    pub unicode_range: Option<Vec<RangeInclusive<u32>>>,
+}
+
+impl Default for FontTemplateDescriptor {
+    fn default() -> Self {
+        Self::new(FontWeight::normal(), FontStretch::NORMAL, FontStyle::NORMAL)
+    }
 }
 
 /// FontTemplateDescriptor contains floats, which are not Eq because of NaN. However,
@@ -50,9 +60,10 @@ impl FontTemplateDescriptor {
     #[inline]
     pub fn new(weight: FontWeight, stretch: FontStretch, style: FontStyle) -> Self {
         Self {
-            weight,
-            stretch,
-            style,
+            weight: (weight, weight),
+            stretch: (stretch, stretch),
+            style: (style, style),
+            unicode_range: None,
         }
     }
 
@@ -64,24 +75,51 @@ impl FontTemplateDescriptor {
     ///
     /// The policy is to care most about differences in italicness, then weight, then stretch
     #[inline]
-    fn distance_from(&self, other: &FontTemplateDescriptor) -> f32 {
+    fn distance_from(&self, other: &FontDescriptor) -> f32 {
+        let weight = self.weight.0;
+        let style = self.style.0;
+        let stretch = self.stretch.0;
+
         // 0 <= style_part <= 180, since font-style obliqueness should be
         // between -90 and +90deg.
-        let style_part = (style_to_number(&self.style) - style_to_number(&other.style)).abs();
+        let style_part = (style_to_number(&style) - style_to_number(&other.style)).abs();
         // 0 <= weightPart <= 800
-        let weight_part = (self.weight.value() - other.weight.value()).abs();
+        let weight_part = (weight.value() - other.weight.value()).abs();
         // 0 <= stretchPart <= 8
-        let stretch_part = (self.stretch.to_percentage().0 - other.stretch.to_percentage().0).abs();
+        let stretch_part = (stretch.to_percentage().0 - other.stretch.to_percentage().0).abs();
         style_part + weight_part + stretch_part
     }
-}
 
-impl<'a> From<&'a FontStyleStruct> for FontTemplateDescriptor {
-    fn from(style: &'a FontStyleStruct) -> Self {
-        FontTemplateDescriptor {
-            weight: style.font_weight,
-            stretch: style.font_stretch,
-            style: style.font_style,
+    fn matches(&self, descriptor_to_match: &FontDescriptor) -> bool {
+        self.weight.0 <= descriptor_to_match.weight &&
+            self.weight.1 >= descriptor_to_match.weight &&
+            self.style.0 <= descriptor_to_match.style &&
+            self.style.1 >= descriptor_to_match.style &&
+            self.stretch.0 <= descriptor_to_match.stretch &&
+            self.stretch.1 >= descriptor_to_match.stretch
+    }
+
+    fn override_values_with_css_font_template_descriptors(
+        &mut self,
+        css_font_template_descriptors: &CSSFontFaceDescriptors,
+    ) {
+        if let Some(weight) = css_font_template_descriptors.weight {
+            self.weight = weight;
+        }
+        self.style = match css_font_template_descriptors.style {
+            Some(ComputedFontStyleDescriptor::Italic) => (FontStyle::ITALIC, FontStyle::ITALIC),
+            Some(ComputedFontStyleDescriptor::Normal) => (FontStyle::NORMAL, FontStyle::NORMAL),
+            Some(ComputedFontStyleDescriptor::Oblique(angle_1, angle_2)) => (
+                FontStyle::oblique(angle_1.to_float()),
+                FontStyle::oblique(angle_2.to_float()),
+            ),
+            None => self.style,
+        };
+        if let Some(stretch) = css_font_template_descriptors.stretch {
+            self.stretch = stretch;
+        }
+        if let Some(ref unicode_range) = css_font_template_descriptors.unicode_range {
+            self.unicode_range = Some(unicode_range.clone());
         }
     }
 }
@@ -89,15 +127,25 @@ impl<'a> From<&'a FontStyleStruct> for FontTemplateDescriptor {
 /// This describes all the information needed to create
 /// font instance handles. It contains a unique
 /// FontTemplateData structure that is platform specific.
+#[derive(Clone)]
 pub struct FontTemplate {
     pub identifier: FontIdentifier,
-    pub descriptor: Option<FontTemplateDescriptor>,
+    pub descriptor: FontTemplateDescriptor,
     /// The data to use for this [`FontTemplate`]. For web fonts, this is always filled, but
     /// for local fonts, this is loaded only lazily in layout.
-    ///
-    /// TODO: There is no mechanism for web fonts to unset their data!
     pub data: Option<Arc<Vec<u8>>>,
-    pub is_valid: bool,
+    /// If this font is a web font, this is a reference to the stylesheet that
+    /// created it. This will be used to remove this font from caches, when the
+    /// stylesheet is removed.
+    pub stylesheet: Option<DocumentStyleSheet>,
+}
+
+impl malloc_size_of::MallocSizeOf for FontTemplate {
+    fn size_of(&self, ops: &mut malloc_size_of::MallocSizeOfOps) -> usize {
+        self.identifier.size_of(ops) +
+            self.descriptor.size_of(ops) +
+            self.data.as_ref().map_or(0, |data| (*data).size_of(ops))
+    }
 }
 
 impl Debug for FontTemplate {
@@ -110,13 +158,56 @@ impl Debug for FontTemplate {
 /// is common, regardless of the number of instances of
 /// this font handle per thread.
 impl FontTemplate {
-    pub fn new(identifier: FontIdentifier, data: Option<Vec<u8>>) -> Result<FontTemplate, IoError> {
+    /// Create a new [`FontTemplate`] for a system font installed locally.
+    pub fn new_for_local_font(
+        identifier: LocalFontIdentifier,
+        descriptor: FontTemplateDescriptor,
+    ) -> FontTemplate {
+        FontTemplate {
+            identifier: FontIdentifier::Local(identifier),
+            descriptor,
+            data: None,
+            stylesheet: None,
+        }
+    }
+
+    /// Create a new [`FontTemplate`] for a `@font-family` with a `url(...)` `src` font.
+    pub fn new_for_remote_web_font(
+        url: ServoUrl,
+        data: Arc<Vec<u8>>,
+        css_font_template_descriptors: &CSSFontFaceDescriptors,
+        stylesheet: Option<DocumentStyleSheet>,
+    ) -> Result<FontTemplate, &'static str> {
+        let identifier = FontIdentifier::Web(url.clone());
+        let Ok(handle) = PlatformFont::new_from_data(identifier, data.clone(), 0, None) else {
+            return Err("Could not initialize platform font data for: {url:?}");
+        };
+
+        let mut descriptor = handle.descriptor();
+        descriptor
+            .override_values_with_css_font_template_descriptors(css_font_template_descriptors);
         Ok(FontTemplate {
-            identifier,
-            descriptor: None,
-            data: data.map(Arc::new),
-            is_valid: true,
+            identifier: FontIdentifier::Web(url),
+            descriptor,
+            data: Some(data),
+            stylesheet,
         })
+    }
+
+    /// Create a new [`FontTemplate`] for a `@font-family` with a `local(...)` `src`. This takes in
+    /// the template of the local font and creates a new one that reflects the properties specified
+    /// by `@font-family` in the stylesheet.
+    pub fn new_for_local_web_font(
+        local_template: FontTemplateRef,
+        css_font_template_descriptors: &CSSFontFaceDescriptors,
+        stylesheet: DocumentStyleSheet,
+    ) -> Result<FontTemplate, &'static str> {
+        let mut alias_template = local_template.borrow().clone();
+        alias_template
+            .descriptor
+            .override_values_with_css_font_template_descriptors(css_font_template_descriptors);
+        alias_template.stylesheet = Some(stylesheet);
+        Ok(alias_template)
     }
 
     pub fn identifier(&self) -> &FontIdentifier {
@@ -128,14 +219,6 @@ impl FontTemplate {
     pub fn data_if_in_memory(&self) -> Option<Arc<Vec<u8>>> {
         self.data.clone()
     }
-
-    /// Returns a [`NativeFontHandle`] for this font template, if it is local.
-    pub fn native_font_handle(&self) -> Option<NativeFontHandle> {
-        match &self.identifier {
-            FontIdentifier::Local(local_identifier) => local_identifier.native_font_handle(),
-            FontIdentifier::Web(_) => None,
-        }
-    }
 }
 
 pub trait FontTemplateRefMethods {
@@ -143,71 +226,42 @@ pub trait FontTemplateRefMethods {
     /// operation (depending on the platform) which performs synchronous disk I/O
     /// and should never be done lightly.
     fn data(&self) -> Arc<Vec<u8>>;
-    /// Return true if this is a valid [`FontTemplate`] ie it is possible to construct a [`FontHandle`]
-    /// from its data.
-    fn is_valid(&self) -> bool;
-    /// If not done already for this [`FontTemplate`] load the font into a platform font face and
-    /// populate the `descriptor` field. Note that calling [`FontTemplateRefMethods::descriptor()`]
-    /// does this implicitly. If this fails, [`FontTemplateRefMethods::is_valid()`] will return
-    /// false in the future.
-    fn instantiate(&self) -> Result<(), &'static str>;
-    /// Get the descriptor. Returns `None` when instantiating the data fails.
-    fn descriptor(&self) -> Option<FontTemplateDescriptor>;
+    /// Get the descriptor.
+    fn descriptor(&self) -> FontTemplateDescriptor;
+    /// Get the [`FontIdentifier`] for this template.
+    fn identifier(&self) -> FontIdentifier;
     /// Returns true if the given descriptor matches the one in this [`FontTemplate`].
-    fn descriptor_matches(&self, requested_desc: &FontTemplateDescriptor) -> bool;
+    fn matches_font_descriptor(&self, descriptor_to_match: &FontDescriptor) -> bool;
     /// Calculate the distance from this [`FontTemplate`]s descriptor and return it
     /// or None if this is not a valid [`FontTemplate`].
-    fn descriptor_distance(&self, requested_descriptor: &FontTemplateDescriptor) -> Option<f32>;
+    fn descriptor_distance(&self, descriptor_to_match: &FontDescriptor) -> f32;
+    /// Whether or not this character is in the unicode ranges specified in
+    /// this temlates `@font-face` definition, if any.
+    fn char_in_unicode_range(&self, character: char) -> bool;
 }
 
 impl FontTemplateRefMethods for FontTemplateRef {
-    fn descriptor(&self) -> Option<FontTemplateDescriptor> {
-        // Store the style information about the template separately from the data,
-        // so that we can do font matching against it again in the future without
-        // having to reload the font (unless it is an actual match).
-        if let Some(descriptor) = self.borrow().descriptor {
-            return Some(descriptor);
-        }
-
-        if let Err(error) = self.instantiate() {
-            warn!("Could not initiate FonteTemplate descriptor: {error:?}");
-        }
-
-        self.borrow().descriptor
+    fn descriptor(&self) -> FontTemplateDescriptor {
+        self.borrow().descriptor.clone()
     }
 
-    fn descriptor_matches(&self, requested_desc: &FontTemplateDescriptor) -> bool {
-        self.descriptor()
-            .map_or(false, |descriptor| descriptor == *requested_desc)
+    fn identifier(&self) -> FontIdentifier {
+        self.borrow().identifier.clone()
     }
 
-    fn descriptor_distance(&self, requested_descriptor: &FontTemplateDescriptor) -> Option<f32> {
-        self.descriptor()
-            .map(|descriptor| descriptor.distance_from(requested_descriptor))
+    fn matches_font_descriptor(&self, descriptor_to_match: &FontDescriptor) -> bool {
+        self.descriptor().matches(descriptor_to_match)
     }
 
-    fn instantiate(&self) -> Result<(), &'static str> {
-        if !self.borrow().is_valid {
-            return Err("Invalid font template");
-        }
-
-        let handle = PlatformFontMethods::new_from_template(self.clone(), None);
-        let mut template = self.borrow_mut();
-        template.is_valid = handle.is_ok();
-        let handle: PlatformFont = handle?;
-        template.descriptor = Some(FontTemplateDescriptor::new(
-            handle.boldness(),
-            handle.stretchiness(),
-            handle.style(),
-        ));
-        Ok(())
-    }
-
-    fn is_valid(&self) -> bool {
-        self.instantiate().is_ok()
+    fn descriptor_distance(&self, descriptor_to_match: &FontDescriptor) -> f32 {
+        self.descriptor().distance_from(descriptor_to_match)
     }
 
     fn data(&self) -> Arc<Vec<u8>> {
+        if let Some(data) = self.borrow().data.clone() {
+            return data;
+        }
+
         let mut template = self.borrow_mut();
         let identifier = template.identifier.clone();
         template
@@ -219,5 +273,16 @@ impl FontTemplateRefMethods for FontTemplateRef {
                 FontIdentifier::Web(_) => unreachable!("Web fonts should always have data."),
             })
             .clone()
+    }
+
+    fn char_in_unicode_range(&self, character: char) -> bool {
+        let character = character as u32;
+        self.borrow()
+            .descriptor
+            .unicode_range
+            .as_ref()
+            .map_or(true, |ranges| {
+                ranges.iter().any(|range| range.contains(&character))
+            })
     }
 }

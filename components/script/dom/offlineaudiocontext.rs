@@ -7,9 +7,9 @@ use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::Builder;
 
+use base::id::PipelineId;
 use dom_struct::dom_struct;
 use js::rust::HandleObject;
-use msg::constellation_msg::PipelineId;
 use servo_media::audio::context::OfflineAudioContextOptions as ServoMediaOfflineAudioContextOptions;
 
 use crate::dom::audiobuffer::{AudioBuffer, MAX_SAMPLE_RATE, MIN_SAMPLE_RATE};
@@ -81,8 +81,7 @@ impl OfflineAudioContext {
         if channel_count > MAX_CHANNEL_COUNT ||
             channel_count == 0 ||
             length == 0 ||
-            sample_rate < MIN_SAMPLE_RATE ||
-            sample_rate > MAX_SAMPLE_RATE
+            !(MIN_SAMPLE_RATE..=MAX_SAMPLE_RATE).contains(&sample_rate)
         {
             return Err(Error::NotSupported);
         }

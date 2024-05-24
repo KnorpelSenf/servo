@@ -16,13 +16,11 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::{f32, fmt};
 
+use base::id::PipelineId;
+use base::print_tree::PrintTree;
 use embedder_traits::Cursor;
 use euclid::{SideOffsets2D, Vector2D};
-use gfx_traits::print_tree::PrintTree;
-use gfx_traits::{self, StackingContextId};
-use msg::constellation_msg::PipelineId;
-use net_traits::image::base::Image;
-use script_traits::compositor::{ScrollSensitivity, ScrollTreeNodeId};
+use pixels::Image;
 use serde::Serialize;
 use servo_geometry::MaxRect;
 use style::computed_values::_servo_top_layer::T as InTopLayer;
@@ -34,6 +32,9 @@ use webrender_api::{
     FilterOp, GlyphInstance, GradientStop, ImageKey, MixBlendMode, PrimitiveFlags, Shadow,
     SpatialId, StickyOffsetBounds, TransformStyle,
 };
+use webrender_traits::display_list::{ScrollSensitivity, ScrollTreeNodeId};
+
+use super::StackingContextId;
 
 /// The factor that we multiply the blur radius by in order to inflate the boundaries of display
 /// items that involve a blur. This ensures that the display item boundaries include all the ink.

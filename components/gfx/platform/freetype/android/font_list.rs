@@ -4,15 +4,19 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use log::warn;
+use malloc_size_of_derive::MallocSizeOf;
 use serde::{Deserialize, Serialize};
+use style::values::computed::{
+    FontStretch as StyleFontStretch, FontStyle as StyleFontStyle, FontWeight as StyleFontWeight,
+};
 use style::Atom;
 use ucd::{Codepoint, UnicodeBlock};
-use webrender_api::NativeFontHandle;
 
 use super::xml::{Attribute, Node};
+use crate::font_template::{FontTemplate, FontTemplateDescriptor};
 use crate::text::util::is_cjk;
 
 lazy_static::lazy_static! {
@@ -20,18 +24,15 @@ lazy_static::lazy_static! {
 }
 
 /// An identifier for a local font on Android systems.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
 pub struct LocalFontIdentifier {
     /// The path to the font.
     pub path: Atom,
 }
 
 impl LocalFontIdentifier {
-    pub(crate) fn native_font_handle(&self) -> Option<NativeFontHandle> {
-        Some(NativeFontHandle {
-            path: PathBuf::from(&*self.path),
-            index: 0,
-        })
+    pub(crate) fn index(&self) -> u32 {
+        0
     }
 
     pub(crate) fn read_data_from_file(&self) -> Vec<u8> {
@@ -132,6 +133,7 @@ impl LocalFontIdentifier {
 struct Font {
     filename: String,
     weight: Option<i32>,
+    style: Option<String>,
 }
 
 struct FontFamily {
@@ -242,6 +244,7 @@ impl FontList {
                 fonts: vec![Font {
                     filename: item.1.into(),
                     weight: None,
+                    style: None,
                 }],
             })
             .collect()
@@ -351,6 +354,7 @@ impl FontList {
                 .map(|f| Font {
                     filename: f.clone(),
                     weight: None,
+                    style: None,
                 })
                 .collect();
 
@@ -370,10 +374,12 @@ impl FontList {
         if let Some(filename) = Self::text_content(nodes) {
             // Parse font weight
             let weight = Self::find_attrib("weight", attrs).and_then(|w| w.parse().ok());
+            let style = Self::find_attrib("style", attrs);
 
             out.push(Font {
-                filename: filename,
-                weight: weight,
+                filename,
+                weight,
+                style,
             })
         }
     }
@@ -423,7 +429,7 @@ impl FontList {
 
     fn text_content(nodes: &[Node]) -> Option<String> {
         nodes.get(0).and_then(|child| match child {
-            Node::Text(contents) => Some(contents.clone()),
+            Node::Text(contents) => Some(contents.trim().into()),
             Node::Element { .. } => None,
         })
     }
@@ -456,12 +462,34 @@ where
 
 pub fn for_each_variation<F>(family_name: &str, mut callback: F)
 where
-    F: FnMut(LocalFontIdentifier),
+    F: FnMut(FontTemplate),
 {
     let mut produce_font = |font: &Font| {
-        callback(LocalFontIdentifier {
+        let local_font_identifier = LocalFontIdentifier {
             path: Atom::from(FontList::font_absolute_path(&font.filename)),
-        })
+        };
+        let stretch = StyleFontStretch::NORMAL;
+        let weight = font
+            .weight
+            .map(|w| StyleFontWeight::from_float(w as f32))
+            .unwrap_or(StyleFontWeight::NORMAL);
+        let style = match font.style.as_deref() {
+            Some("italic") => StyleFontStyle::ITALIC,
+            Some("normal") => StyleFontStyle::NORMAL,
+            Some(value) => {
+                warn!(
+                    "unknown value \"{value}\" for \"style\" attribute in the font {}",
+                    font.filename
+                );
+                StyleFontStyle::NORMAL
+            },
+            None => StyleFontStyle::NORMAL,
+        };
+        let descriptor = FontTemplateDescriptor::new(weight, stretch, style);
+        callback(FontTemplate::new_for_local_font(
+            local_font_identifier,
+            descriptor,
+        ));
     };
 
     if let Some(family) = FONT_LIST.find_family(family_name) {

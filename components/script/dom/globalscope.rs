@@ -14,6 +14,10 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 use std::{mem, ptr};
 
+use base::id::{
+    BlobId, BroadcastChannelRouterId, MessagePortId, MessagePortRouterId, PipelineId,
+    ServiceWorkerId, ServiceWorkerRegistrationId,
+};
 use content_security_policy::CspList;
 use crossbeam_channel::Sender;
 use devtools_traits::{PageError, ScriptToDevtoolsControlMsg};
@@ -34,10 +38,6 @@ use js::rust::{
     MutableHandleValue, ParentRuntime, Runtime,
 };
 use js::{JSCLASS_IS_DOMJSCLASS, JSCLASS_IS_GLOBAL};
-use msg::constellation_msg::{
-    BlobId, BroadcastChannelRouterId, MessagePortId, MessagePortRouterId, PipelineId,
-    ServiceWorkerId, ServiceWorkerRegistrationId,
-};
 use net_traits::blob_url_store::{get_blob_origin, BlobBuf};
 use net_traits::filemanager_thread::{
     FileManagerResult, FileManagerThreadMsg, ReadFileProgress, RelativePos,
@@ -56,8 +56,7 @@ use script_traits::{
 };
 use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
 use uuid::Uuid;
-use webgpu::identity::WebGPUOpResult;
-use webgpu::{ErrorScopeId, WebGPUDevice};
+use webgpu::WebGPUDevice;
 
 use super::bindings::trace::HashMapTracedValues;
 use crate::dom::bindings::cell::{DomRefCell, RefMut};
@@ -1286,8 +1285,8 @@ impl GlobalScope {
                     // If the port is not enabled yet, or if is awaiting the completion of it's transfer,
                     // the task will be buffered and dispatched upon enablement or completion of the transfer.
                     if let Some(port_impl) = managed_port.port_impl.as_mut() {
-                        port_impl.handle_incoming(task).and_then(|to_dispatch| {
-                            Some((DomRoot::from_ref(&*managed_port.dom_port), to_dispatch))
+                        port_impl.handle_incoming(task).map(|to_dispatch| {
+                            (DomRoot::from_ref(&*managed_port.dom_port), to_dispatch)
                         })
                     } else {
                         panic!("managed-port has no port-impl.");
@@ -3023,7 +3022,7 @@ impl GlobalScope {
         unreachable!();
     }
 
-    // https://w3c.github.io/performance-timeline/#supportedentrytypes-attribute
+    /// <https://w3c.github.io/performance-timeline/#supportedentrytypes-attribute>
     pub fn supported_performance_entry_types(&self, cx: SafeJSContext) -> JSVal {
         if let Some(types) = &*self.frozen_supported_performance_entry_types.borrow() {
             return types.get();
@@ -3098,17 +3097,12 @@ impl GlobalScope {
         let _ = self.gpu_devices.borrow_mut().remove(&device);
     }
 
-    pub fn handle_wgpu_msg(
-        &self,
-        device: WebGPUDevice,
-        scope: Option<ErrorScopeId>,
-        result: WebGPUOpResult,
-    ) {
+    pub fn handle_uncaptured_gpu_error(&self, device: WebGPUDevice, error: webgpu::Error) {
         self.gpu_devices
             .borrow()
             .get(&device)
             .expect("GPUDevice not found")
-            .handle_server_msg(scope, result);
+            .fire_uncaptured_error(error);
     }
 
     pub fn handle_gamepad_event(&self, gamepad_event: GamepadEvent) {
@@ -3152,7 +3146,7 @@ impl GlobalScope {
                     let navigator = window.Navigator();
                     let selected_index = navigator.select_gamepad_index();
                     let gamepad = Gamepad::new(&global, selected_index, name, axis_bounds, button_bounds);
-                    navigator.set_gamepad(selected_index as usize, &*gamepad);
+                    navigator.set_gamepad(selected_index as usize, &gamepad);
                 }
             }),
             &self.task_canceller(TaskSourceName::Gamepad)

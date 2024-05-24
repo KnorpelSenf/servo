@@ -6,19 +6,16 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
+use base::id::{BrowsingContextId, PipelineId, TopLevelBrowsingContextId, WebViewId};
+use base::Epoch;
 use embedder_traits::Cursor;
-use gfx_traits::Epoch;
 use ipc_channel::ipc::IpcSender;
 use keyboard_types::KeyboardEvent;
-use msg::constellation_msg::{
-    BrowsingContextId, PipelineId, TopLevelBrowsingContextId, TraversalDirection, WebViewId,
-};
 use script_traits::{
     AnimationTickType, CompositorEvent, GamepadEvent, LogEntry, MediaSessionActionType,
-    WebDriverCommandMsg, WindowSizeData, WindowSizeType,
+    TraversalDirection, WebDriverCommandMsg, WindowSizeData, WindowSizeType,
 };
 use servo_url::ServoUrl;
-use webrender_api::units::DeviceRect;
 
 /// Messages to the constellation.
 pub enum ConstellationMsg {
@@ -57,18 +54,12 @@ pub enum ConstellationMsg {
     LogEntry(Option<TopLevelBrowsingContextId>, Option<String>, LogEntry),
     /// Create a new top level browsing context.
     NewWebView(ServoUrl, TopLevelBrowsingContextId),
+    /// A top level browsing context is created in both constellation and compositor.
+    WebViewOpened(TopLevelBrowsingContextId),
     /// Close a top level browsing context.
     CloseWebView(TopLevelBrowsingContextId),
     /// Panic a top level browsing context.
     SendError(Option<TopLevelBrowsingContextId>, String),
-    /// Move and/or resize a webview to the given rect.
-    MoveResizeWebView(TopLevelBrowsingContextId, DeviceRect),
-    /// Start painting a webview, and optionally stop painting all others.
-    ShowWebView(TopLevelBrowsingContextId, bool),
-    /// Stop painting a webview.
-    HideWebView(TopLevelBrowsingContextId),
-    /// Start painting a webview on top of all others, and optionally stop painting all others.
-    RaiseWebViewToTop(TopLevelBrowsingContextId, bool),
     /// Make a webview focused.
     FocusWebView(TopLevelBrowsingContextId),
     /// Make none of the webviews focused.
@@ -121,11 +112,8 @@ impl ConstellationMsg {
             Reload(..) => "Reload",
             LogEntry(..) => "LogEntry",
             NewWebView(..) => "NewWebView",
+            WebViewOpened(..) => "WebViewOpened",
             CloseWebView(..) => "CloseWebView",
-            MoveResizeWebView(..) => "MoveResizeWebView",
-            ShowWebView(..) => "ShowWebView",
-            HideWebView(..) => "HideWebView",
-            RaiseWebViewToTop(..) => "RaiseWebViewToTop",
             FocusWebView(..) => "FocusWebView",
             BlurWebView => "BlurWebView",
             SendError(..) => "SendError",

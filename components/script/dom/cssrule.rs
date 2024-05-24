@@ -6,7 +6,7 @@ use std::cell::Cell;
 
 use dom_struct::dom_struct;
 use style::shared_lock::SharedRwLock;
-use style::stylesheets::CssRule as StyleCssRule;
+use style::stylesheets::{CssRule as StyleCssRule, CssRuleType};
 
 use crate::dom::bindings::codegen::Bindings::CSSRuleBinding::CSSRuleMethods;
 use crate::dom::bindings::inheritance::Castable;
@@ -117,6 +117,8 @@ impl CSSRule {
             StyleCssRule::FontPaletteValues(_) => unimplemented!(), // TODO
             StyleCssRule::Property(_) => unimplemented!(),          // TODO
             StyleCssRule::Margin(_) => unimplemented!(),            // TODO
+            StyleCssRule::Scope(_) => unimplemented!(),             // TODO
+            StyleCssRule::StartingStyle(_) => unimplemented!(),     // TODO
         }
     }
 
@@ -147,7 +149,14 @@ impl CSSRule {
 impl CSSRuleMethods for CSSRule {
     // https://drafts.csswg.org/cssom/#dom-cssrule-type
     fn Type(&self) -> u16 {
-        self.as_specific().ty()
+        let rule_type = self.as_specific().ty() as u16;
+        // Per https://drafts.csswg.org/cssom/#dom-cssrule-type for constants > 15
+        // we return 0.
+        if rule_type > 15 {
+            0
+        } else {
+            rule_type
+        }
     }
 
     // https://drafts.csswg.org/cssom/#dom-cssrule-parentstylesheet
@@ -171,7 +180,7 @@ impl CSSRuleMethods for CSSRule {
 }
 
 pub trait SpecificCSSRule {
-    fn ty(&self) -> u16;
+    fn ty(&self) -> CssRuleType;
     fn get_css(&self) -> DOMString;
     /// Remove parentStylesheet from all transitive children
     fn deparent_children(&self) {

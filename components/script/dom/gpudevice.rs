@@ -13,24 +13,25 @@ use std::sync::{Arc, Mutex};
 
 use dom_struct::dom_struct;
 use js::jsapi::{Heap, JSObject};
-use webgpu::identity::WebGPUOpResult;
-use webgpu::wgpu::id::{BindGroupLayoutId, PipelineLayoutId};
-use webgpu::wgpu::{
+use webgpu::wgc::id::{BindGroupLayoutId, PipelineLayoutId};
+use webgpu::wgc::{
     binding_model as wgpu_bind, command as wgpu_com, pipeline as wgpu_pipe, resource as wgpu_res,
 };
-use webgpu::{self, wgt, ErrorScopeId, WebGPU, WebGPURequest};
+use webgpu::{self, wgt, PopError, WebGPU, WebGPURequest, WebGPUResponse, WebGPUResponseResult};
 
 use super::bindings::codegen::UnionTypes::GPUPipelineLayoutOrGPUAutoLayoutMode;
 use super::bindings::error::Fallible;
+use super::gpu::AsyncWGPUListener;
 use super::gpudevicelostinfo::GPUDeviceLostInfo;
 use super::gpusupportedlimits::GPUSupportedLimits;
+use super::types::GPUError;
 use crate::dom::bindings::cell::DomRefCell;
 use crate::dom::bindings::codegen::Bindings::EventBinding::EventInit;
 use crate::dom::bindings::codegen::Bindings::EventTargetBinding::EventTargetMethods;
 use crate::dom::bindings::codegen::Bindings::WebGPUBinding::{
     GPUBindGroupDescriptor, GPUBindGroupLayoutDescriptor, GPUBindingResource, GPUBufferBindingType,
     GPUBufferDescriptor, GPUCommandEncoderDescriptor, GPUComputePipelineDescriptor,
-    GPUDeviceLostReason, GPUDeviceMethods, GPUError, GPUErrorFilter, GPUPipelineLayoutDescriptor,
+    GPUDeviceLostReason, GPUDeviceMethods, GPUErrorFilter, GPUPipelineLayoutDescriptor,
     GPURenderBundleEncoderDescriptor, GPURenderPipelineDescriptor, GPUSamplerBindingType,
     GPUSamplerDescriptor, GPUShaderModuleDescriptor, GPUStorageTextureAccess,
     GPUSupportedLimitsMethods, GPUTextureDescriptor, GPUTextureDimension, GPUTextureSampleType,
@@ -43,6 +44,7 @@ use crate::dom::bindings::str::{DOMString, USVString};
 use crate::dom::bindings::trace::RootedTraceableBox;
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
+use crate::dom::gpu::response_async;
 use crate::dom::gpuadapter::GPUAdapter;
 use crate::dom::gpubindgroup::GPUBindGroup;
 use crate::dom::gpubindgrouplayout::GPUBindGroupLayout;
@@ -55,7 +57,6 @@ use crate::dom::gpuconvert::{
     convert_texture_size_to_dict, convert_texture_size_to_wgt, convert_vertex_format,
     convert_view_dimension,
 };
-use crate::dom::gpuoutofmemoryerror::GPUOutOfMemoryError;
 use crate::dom::gpupipelinelayout::GPUPipelineLayout;
 use crate::dom::gpuqueue::GPUQueue;
 use crate::dom::gpurenderbundleencoder::GPURenderBundleEncoder;
@@ -65,32 +66,8 @@ use crate::dom::gpushadermodule::GPUShaderModule;
 use crate::dom::gpusupportedfeatures::GPUSupportedFeatures;
 use crate::dom::gputexture::GPUTexture;
 use crate::dom::gpuuncapturederrorevent::GPUUncapturedErrorEvent;
-use crate::dom::gpuvalidationerror::GPUValidationError;
 use crate::dom::promise::Promise;
 use crate::realms::InRealm;
-
-#[derive(JSTraceable, MallocSizeOf)]
-struct ErrorScopeInfo {
-    op_count: u64,
-    #[ignore_malloc_size_of = "Because it is non-owning"]
-    error: Option<GPUError>,
-    #[ignore_malloc_size_of = "promises are hard"]
-    promise: Option<Rc<Promise>>,
-}
-
-#[derive(JSTraceable, MallocSizeOf)]
-struct ErrorScopeMetadata {
-    id: ErrorScopeId,
-    filter: GPUErrorFilter,
-    popped: Cell<bool>,
-}
-
-#[derive(JSTraceable, MallocSizeOf)]
-struct ScopeContext {
-    error_scopes: HashMap<ErrorScopeId, ErrorScopeInfo>,
-    scope_stack: Vec<ErrorScopeMetadata>,
-    next_scope_id: ErrorScopeId,
-}
 
 #[dom_struct]
 pub struct GPUDevice {
@@ -107,7 +84,6 @@ pub struct GPUDevice {
     #[no_trace]
     device: webgpu::WebGPUDevice,
     default_queue: Dom<GPUQueue>,
-    scope_context: DomRefCell<ScopeContext>,
     #[ignore_malloc_size_of = "promises are hard"]
     lost_promise: DomRefCell<Option<Rc<Promise>>>,
     valid: Cell<bool>,
@@ -135,11 +111,6 @@ impl GPUDevice {
             label: DomRefCell::new(USVString::from(label)),
             device,
             default_queue: Dom::from_ref(queue),
-            scope_context: DomRefCell::new(ScopeContext {
-                error_scopes: HashMap::new(),
-                scope_stack: Vec::new(),
-                next_scope_id: ErrorScopeId::new(1).unwrap(),
-            }),
             lost_promise: DomRefCell::new(None),
             valid: Cell::new(true),
         }
@@ -176,108 +147,30 @@ impl GPUDevice {
         self.device
     }
 
-    pub fn handle_server_msg(&self, scope: Option<ErrorScopeId>, result: WebGPUOpResult) {
-        let result = match result {
-            WebGPUOpResult::Success => Ok(()),
-            WebGPUOpResult::ValidationError(m) => {
-                let val_err = GPUValidationError::new(&self.global(), DOMString::from_string(m));
-                Err((
-                    GPUError::GPUValidationError(val_err),
-                    GPUErrorFilter::Validation,
-                ))
-            },
-            WebGPUOpResult::OutOfMemoryError => {
-                let oom_err = GPUOutOfMemoryError::new(&self.global());
-                Err((
-                    GPUError::GPUOutOfMemoryError(oom_err),
-                    GPUErrorFilter::Out_of_memory,
-                ))
-            },
-        };
+    pub fn channel(&self) -> WebGPU {
+        self.channel.clone()
+    }
 
-        if let Some(s_id) = scope {
-            if let Err((err, filter)) = result {
-                let scop = self
-                    .scope_context
-                    .borrow()
-                    .scope_stack
-                    .iter()
-                    .rev()
-                    .find(|meta| meta.id <= s_id && meta.filter == filter)
-                    .map(|meta| meta.id);
-                if let Some(s) = scop {
-                    self.handle_error(s, err);
-                } else {
-                    self.fire_uncaptured_error(err);
-                }
-            }
-            self.try_remove_scope(s_id);
-        } else if let Err((err, _)) = result {
-            self.fire_uncaptured_error(err);
+    pub fn dispatch_error(&self, error: webgpu::Error) {
+        if let Err(e) = self.channel.0.send(WebGPURequest::DispatchError {
+            device_id: self.device.0,
+            error,
+        }) {
+            warn!("Failed to send WebGPURequest::DispatchError due to {e:?}");
         }
     }
 
-    fn handle_error(&self, scope: ErrorScopeId, error: GPUError) {
-        let mut context = self.scope_context.borrow_mut();
-        if let Some(err_scope) = context.error_scopes.get_mut(&scope) {
-            if err_scope.error.is_none() {
-                err_scope.error = Some(error);
-            }
-        } else {
-            warn!("Could not find ErrorScope with Id({})", scope);
-        }
-    }
-
-    fn try_remove_scope(&self, scope: ErrorScopeId) {
-        let mut context = self.scope_context.borrow_mut();
-        let remove = if let Some(err_scope) = context.error_scopes.get_mut(&scope) {
-            err_scope.op_count -= 1;
-            if let Some(ref promise) = err_scope.promise {
-                if !promise.is_fulfilled() {
-                    if let Some(ref e) = err_scope.error {
-                        promise.resolve_native(e);
-                    } else if err_scope.op_count == 0 {
-                        promise.resolve_native(&None::<GPUError>);
-                    }
-                }
-            }
-            err_scope.op_count == 0 && err_scope.promise.is_some()
-        } else {
-            warn!("Could not find ErrorScope with Id({})", scope);
-            false
-        };
-        if remove {
-            let _ = context.error_scopes.remove(&scope);
-            context.scope_stack.retain(|meta| meta.id != scope);
-        }
-    }
-
-    fn fire_uncaptured_error(&self, err: GPUError) {
+    pub fn fire_uncaptured_error(&self, error: webgpu::Error) {
+        let error = GPUError::from_error(&self.global(), error);
         let ev = GPUUncapturedErrorEvent::new(
             &self.global(),
             DOMString::from("uncapturederror"),
             &GPUUncapturedErrorEventInit {
-                error: err,
+                error,
                 parent: EventInit::empty(),
             },
         );
         let _ = self.eventtarget.DispatchEvent(ev.event());
-    }
-
-    pub fn use_current_scope(&self) -> Option<ErrorScopeId> {
-        let mut context = self.scope_context.borrow_mut();
-        let scope_id = context
-            .scope_stack
-            .iter()
-            .rev()
-            .find(|meta| !meta.popped.get())
-            .map(|meta| meta.id);
-        scope_id.and_then(|s_id| {
-            context.error_scopes.get_mut(&s_id).map(|scope| {
-                scope.op_count += 1;
-                s_id
-            })
-        })
     }
 
     fn get_pipeline_layout_data(
@@ -376,24 +269,19 @@ impl GPUDeviceMethods for GPUDevice {
             .lock()
             .create_buffer_id(self.device.0.backend());
 
-        let scope_id = self.use_current_scope();
         if desc.is_none() {
-            self.handle_server_msg(
-                scope_id,
-                WebGPUOpResult::ValidationError(String::from("Invalid GPUBufferUsage")),
-            );
+            self.dispatch_error(webgpu::Error::Validation(String::from(
+                "Invalid GPUBufferUsage",
+            )));
         }
 
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateBuffer {
-                    device_id: self.device.0,
-                    buffer_id: id,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreateBuffer {
+                device_id: self.device.0,
+                buffer_id: id,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU buffer");
 
         let buffer = webgpu::WebGPUBuffer(id);
@@ -506,18 +394,15 @@ impl GPUDeviceMethods for GPUDevice {
             })
             .collect::<Vec<_>>();
 
-        let scope_id = self.use_current_scope();
-
         let desc = if valid {
             Some(wgpu_bind::BindGroupLayoutDescriptor {
                 label: convert_label(&descriptor.parent),
                 entries: Cow::Owned(entries),
             })
         } else {
-            self.handle_server_msg(
-                scope_id,
-                WebGPUOpResult::ValidationError(String::from("Invalid GPUShaderStage")),
-            );
+            self.dispatch_error(webgpu::Error::Validation(String::from(
+                "Invalid GPUShaderStage",
+            )));
             None
         };
 
@@ -528,20 +413,18 @@ impl GPUDeviceMethods for GPUDevice {
             .create_bind_group_layout_id(self.device.0.backend());
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateBindGroupLayout {
-                    device_id: self.device.0,
-                    bind_group_layout_id,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreateBindGroupLayout {
+                device_id: self.device.0,
+                bind_group_layout_id,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU BindGroupLayout");
 
         let bgl = webgpu::WebGPUBindGroupLayout(bind_group_layout_id);
 
         GPUBindGroupLayout::new(
             &self.global(),
+            self.channel.clone(),
             bgl,
             descriptor.parent.label.clone().unwrap_or_default(),
         )
@@ -564,8 +447,6 @@ impl GPUDeviceMethods for GPUDevice {
             push_constant_ranges: Cow::Owned(vec![]),
         };
 
-        let scope_id = self.use_current_scope();
-
         let pipeline_layout_id = self
             .global()
             .wgpu_id_hub()
@@ -573,14 +454,11 @@ impl GPUDeviceMethods for GPUDevice {
             .create_pipeline_layout_id(self.device.0.backend());
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreatePipelineLayout {
-                    device_id: self.device.0,
-                    pipeline_layout_id,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreatePipelineLayout {
+                device_id: self.device.0,
+                pipeline_layout_id,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU PipelineLayout");
 
         let bgls = descriptor
@@ -591,6 +469,7 @@ impl GPUDeviceMethods for GPUDevice {
         let pipeline_layout = webgpu::WebGPUPipelineLayout(pipeline_layout_id);
         GPUPipelineLayout::new(
             &self.global(),
+            self.channel.clone(),
             pipeline_layout,
             descriptor.parent.label.clone().unwrap_or_default(),
             bgls,
@@ -628,8 +507,6 @@ impl GPUDeviceMethods for GPUDevice {
             entries: Cow::Owned(entries),
         };
 
-        let scope_id = self.use_current_scope();
-
         let bind_group_id = self
             .global()
             .wgpu_id_hub()
@@ -637,20 +514,18 @@ impl GPUDeviceMethods for GPUDevice {
             .create_bind_group_id(self.device.0.backend());
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateBindGroup {
-                    device_id: self.device.0,
-                    bind_group_id,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreateBindGroup {
+                device_id: self.device.0,
+                bind_group_id,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU BindGroup");
 
         let bind_group = webgpu::WebGPUBindGroup(bind_group_id);
 
         GPUBindGroup::new(
             &self.global(),
+            self.channel.clone(),
             bind_group,
             self.device,
             &descriptor.layout,
@@ -669,23 +544,20 @@ impl GPUDeviceMethods for GPUDevice {
             .lock()
             .create_shader_module_id(self.device.0.backend());
 
-        let scope_id = self.use_current_scope();
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateShaderModule {
-                    device_id: self.device.0,
-                    program_id,
-                    program: descriptor.code.0.clone(),
-                    label: None,
-                },
-            ))
+            .send(WebGPURequest::CreateShaderModule {
+                device_id: self.device.0,
+                program_id,
+                program: descriptor.code.0.clone(),
+                label: None,
+            })
             .expect("Failed to create WebGPU ShaderModule");
 
         let shader_module = webgpu::WebGPUShaderModule(program_id);
         GPUShaderModule::new(
             &self.global(),
+            self.channel.clone(),
             shader_module,
             descriptor.parent.label.clone().unwrap_or_default(),
         )
@@ -702,7 +574,6 @@ impl GPUDeviceMethods for GPUDevice {
             .lock()
             .create_compute_pipeline_id(self.device.0.backend());
 
-        let scope_id = self.use_current_scope();
         let (layout, implicit_ids, bgls) = self.get_pipeline_layout_data(&descriptor.parent.layout);
 
         let desc = wgpu_pipe::ComputePipelineDescriptor {
@@ -710,26 +581,26 @@ impl GPUDeviceMethods for GPUDevice {
             layout,
             stage: wgpu_pipe::ProgrammableStageDescriptor {
                 module: descriptor.compute.module.id().0,
-                entry_point: Cow::Owned(descriptor.compute.entryPoint.to_string()),
+                entry_point: Some(Cow::Owned(descriptor.compute.entryPoint.to_string())),
+                constants: Cow::Owned(HashMap::new()),
+                zero_initialize_workgroup_memory: true,
             },
         };
 
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateComputePipeline {
-                    device_id: self.device.0,
-                    compute_pipeline_id,
-                    descriptor: desc,
-                    implicit_ids,
-                },
-            ))
+            .send(WebGPURequest::CreateComputePipeline {
+                device_id: self.device.0,
+                compute_pipeline_id,
+                descriptor: desc,
+                implicit_ids,
+            })
             .expect("Failed to create WebGPU ComputePipeline");
 
         let compute_pipeline = webgpu::WebGPUComputePipeline(compute_pipeline_id);
         GPUComputePipeline::new(
             &self.global(),
+            self.channel.clone(),
             compute_pipeline,
             descriptor.parent.parent.label.clone().unwrap_or_default(),
             bgls,
@@ -758,17 +629,13 @@ impl GPUDeviceMethods for GPUDevice {
             .wgpu_id_hub()
             .lock()
             .create_command_encoder_id(self.device.0.backend());
-        let scope_id = self.use_current_scope();
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateCommandEncoder {
-                    device_id: self.device.0,
-                    command_encoder_id,
-                    label: convert_label(&descriptor.parent),
-                },
-            ))
+            .send(WebGPURequest::CreateCommandEncoder {
+                device_id: self.device.0,
+                command_encoder_id,
+                label: convert_label(&descriptor.parent),
+            })
             .expect("Failed to create WebGPU command encoder");
 
         let encoder = webgpu::WebGPUCommandEncoder(command_encoder_id);
@@ -783,7 +650,7 @@ impl GPUDeviceMethods for GPUDevice {
     }
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gpudevice-createtexture>
-    fn CreateTexture(&self, descriptor: &GPUTextureDescriptor) -> DomRoot<GPUTexture> {
+    fn CreateTexture(&self, descriptor: &GPUTextureDescriptor) -> Fallible<DomRoot<GPUTexture>> {
         let size = convert_texture_size_to_dict(&descriptor.size);
         let desc = wgt::TextureUsages::from_bits(descriptor.usage).map(|usg| {
             wgpu_res::TextureDescriptor {
@@ -812,28 +679,21 @@ impl GPUDeviceMethods for GPUDevice {
             .lock()
             .create_texture_id(self.device.0.backend());
 
-        let scope_id = self.use_current_scope();
         if desc.is_none() {
-            self.handle_server_msg(
-                scope_id,
-                WebGPUOpResult::ValidationError(String::from("Invalid GPUTextureUsage")),
-            );
+            return Err(Error::Type(String::from("Invalid GPUTextureUsage")));
         }
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateTexture {
-                    device_id: self.device.0,
-                    texture_id,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreateTexture {
+                device_id: self.device.0,
+                texture_id,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU Texture");
 
         let texture = webgpu::WebGPUTexture(texture_id);
 
-        GPUTexture::new(
+        Ok(GPUTexture::new(
             &self.global(),
             texture,
             self,
@@ -845,7 +705,7 @@ impl GPUDeviceMethods for GPUDevice {
             descriptor.format,
             descriptor.usage,
             descriptor.parent.label.clone().unwrap_or_default(),
-        )
+        ))
     }
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gpudevice-createsampler>
@@ -873,23 +733,20 @@ impl GPUDeviceMethods for GPUDevice {
             border_color: None,
         };
 
-        let scope_id = self.use_current_scope();
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateSampler {
-                    device_id: self.device.0,
-                    sampler_id,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreateSampler {
+                device_id: self.device.0,
+                sampler_id,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU sampler");
 
         let sampler = webgpu::WebGPUSampler(sampler_id);
 
         GPUSampler::new(
             &self.global(),
+            self.channel.clone(),
             self.device,
             compare_enable,
             sampler,
@@ -902,7 +759,6 @@ impl GPUDeviceMethods for GPUDevice {
         &self,
         descriptor: &GPURenderPipelineDescriptor,
     ) -> DomRoot<GPURenderPipeline> {
-        let scope_id = self.use_current_scope();
         let mut valid = true;
 
         let (layout, implicit_ids, bgls) = self.get_pipeline_layout_data(&descriptor.parent.layout);
@@ -914,7 +770,11 @@ impl GPUDeviceMethods for GPUDevice {
                 vertex: wgpu_pipe::VertexState {
                     stage: wgpu_pipe::ProgrammableStageDescriptor {
                         module: descriptor.vertex.parent.module.id().0,
-                        entry_point: Cow::Owned(descriptor.vertex.parent.entryPoint.to_string()),
+                        entry_point: Some(Cow::Owned(
+                            descriptor.vertex.parent.entryPoint.to_string(),
+                        )),
+                        constants: Cow::Owned(HashMap::new()),
+                        zero_initialize_workgroup_memory: true,
                     },
                     buffers: Cow::Owned(
                         descriptor
@@ -948,7 +808,9 @@ impl GPUDeviceMethods for GPUDevice {
                     .map(|stage| wgpu_pipe::FragmentState {
                         stage: wgpu_pipe::ProgrammableStageDescriptor {
                             module: stage.parent.module.id().0,
-                            entry_point: Cow::Owned(stage.parent.entryPoint.to_string()),
+                            entry_point: Some(Cow::Owned(stage.parent.entryPoint.to_string())),
+                            constants: Cow::Owned(HashMap::new()),
+                            zero_initialize_workgroup_memory: true,
                         },
                         targets: Cow::Owned(
                             stage
@@ -1014,10 +876,9 @@ impl GPUDeviceMethods for GPUDevice {
                 multiview: None,
             })
         } else {
-            self.handle_server_msg(
-                scope_id,
-                WebGPUOpResult::ValidationError(String::from("Invalid GPUColorWriteFlags")),
-            );
+            self.dispatch_error(webgpu::Error::Validation(String::from(
+                "Invalid GPUColorWriteFlags",
+            )));
             None
         };
 
@@ -1029,15 +890,12 @@ impl GPUDeviceMethods for GPUDevice {
 
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateRenderPipeline {
-                    device_id: self.device.0,
-                    render_pipeline_id,
-                    descriptor: desc,
-                    implicit_ids,
-                },
-            ))
+            .send(WebGPURequest::CreateRenderPipeline {
+                device_id: self.device.0,
+                render_pipeline_id,
+                descriptor: desc,
+                implicit_ids,
+            })
             .expect("Failed to create WebGPU render pipeline");
 
         let render_pipeline = webgpu::WebGPURenderPipeline(render_pipeline_id);
@@ -1103,50 +961,33 @@ impl GPUDeviceMethods for GPUDevice {
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gpudevice-pusherrorscope>
     fn PushErrorScope(&self, filter: GPUErrorFilter) {
-        let mut context = self.scope_context.borrow_mut();
-        let scope_id = context.next_scope_id;
-        context.next_scope_id = ErrorScopeId::new(scope_id.get() + 1).unwrap();
-        let err_scope = ErrorScopeInfo {
-            op_count: 0,
-            error: None,
-            promise: None,
-        };
-        let res = context.error_scopes.insert(scope_id, err_scope);
-        context.scope_stack.push(ErrorScopeMetadata {
-            id: scope_id,
-            filter,
-            popped: Cell::new(false),
-        });
-        assert!(res.is_none());
+        if self
+            .channel
+            .0
+            .send(WebGPURequest::PushErrorScope {
+                device_id: self.device.0,
+                filter: filter.to_webgpu(),
+            })
+            .is_err()
+        {
+            warn!("Failed sending WebGPURequest::PushErrorScope");
+        }
     }
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gpudevice-poperrorscope>
     fn PopErrorScope(&self, comp: InRealm) -> Rc<Promise> {
-        let mut context = self.scope_context.borrow_mut();
         let promise = Promise::new_in_current_realm(comp);
-        let scope_id =
-            if let Some(meta) = context.scope_stack.iter().rev().find(|m| !m.popped.get()) {
-                meta.popped.set(true);
-                meta.id
-            } else {
-                promise.reject_error(Error::Operation);
-                return promise;
-            };
-        let remove = if let Some(err_scope) = context.error_scopes.get_mut(&scope_id) {
-            if let Some(ref e) = err_scope.error {
-                promise.resolve_native(e);
-            } else if err_scope.op_count == 0 {
-                promise.resolve_native(&None::<GPUError>);
-            }
-            err_scope.promise = Some(promise.clone());
-            err_scope.op_count == 0
-        } else {
-            error!("Could not find ErrorScope with Id({})", scope_id);
-            false
-        };
-        if remove {
-            let _ = context.error_scopes.remove(&scope_id);
-            context.scope_stack.retain(|meta| meta.id != scope_id);
+        let sender = response_async(&promise, self);
+        if self
+            .channel
+            .0
+            .send(WebGPURequest::PopErrorScope {
+                device_id: self.device.0,
+                sender,
+            })
+            .is_err()
+        {
+            warn!("Error when sending WebGPURequest::PopErrorScope");
         }
         promise
     }
@@ -1164,7 +1005,7 @@ impl GPUDeviceMethods for GPUDevice {
             if let Err(e) = self
                 .channel
                 .0
-                .send((None, WebGPURequest::DestroyDevice(self.device.0)))
+                .send(WebGPURequest::DestroyDevice(self.device.0))
             {
                 warn!("Failed to send DestroyDevice ({:?}) ({})", self.device.0, e);
             }
@@ -1172,9 +1013,37 @@ impl GPUDeviceMethods for GPUDevice {
     }
 }
 
+impl AsyncWGPUListener for GPUDevice {
+    fn handle_response(&self, response: Option<WebGPUResponseResult>, promise: &Rc<Promise>) {
+        match response {
+            Some(Ok(WebGPUResponse::PoppedErrorScope(result))) => match result {
+                Ok(None) | Err(PopError::Lost) => promise.resolve_native(&None::<Option<GPUError>>),
+                Err(PopError::Empty) => promise.reject_error(Error::Operation),
+                Ok(Some(error)) => {
+                    let error = GPUError::from_error(&self.global(), error);
+                    promise.resolve_native(&error);
+                },
+            },
+            _ => unreachable!("Wrong response recived on AsyncWGPUListener for GPUDevice"),
+        }
+    }
+}
+
 impl Drop for GPUDevice {
-    // not sure about this but this is non failable version of destroy
     fn drop(&mut self) {
-        self.Destroy()
+        if let Err(e) = self
+            .channel
+            .0
+            .send(WebGPURequest::DestroyDevice(self.device.0))
+        {
+            warn!("Failed to send DestroyDevice ({:?}) ({})", self.device.0, e);
+        }
+        if let Err(e) = self
+            .channel
+            .0
+            .send(WebGPURequest::DropDevice(self.device.0))
+        {
+            warn!("Failed to send DropDevice ({:?}) ({})", self.device.0, e);
+        }
     }
 }

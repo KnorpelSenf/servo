@@ -9,7 +9,7 @@ use std::rc::Rc;
 use dom_struct::dom_struct;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::rust::HandleObject;
-use crate::script_layout::message::QueryMsg;
+use script_layout_interface::QueryMsg;
 use style::attr::AttrValue;
 use style_traits::dom::ElementState;
 
@@ -462,8 +462,8 @@ impl HTMLElementMethods for HTMLElement {
 
         window.layout_reflow(QueryMsg::ElementInnerTextQuery);
         let text = window
-            .with_layout(|layout| layout.query_element_inner_text(Node::to_trusted_node_address(node)))
-            .unwrap_or_default();
+            .layout()
+            .query_element_inner_text(node.to_trusted_node_address());
         DOMString::from(text)
     }
 
@@ -590,6 +590,17 @@ impl HTMLElementMethods for HTMLElement {
         // Step 6-7: Set this's attached internals to a new ElementInternals instance
         internals.set_attached();
         Ok(internals)
+    }
+
+    // https://html.spec.whatwg.org/multipage/#dom-fe-autofocus
+    fn Autofocus(&self) -> bool {
+        self.element.has_attribute(&local_name!("autofocus"))
+    }
+
+    // https://html.spec.whatwg.org/multipage/#dom-fe-autofocus
+    fn SetAutofocus(&self, autofocus: bool) {
+        self.element
+            .set_bool_attribute(&local_name!("autofocus"), autofocus);
     }
 }
 
@@ -954,7 +965,7 @@ impl VirtualMethods for HTMLElement {
     }
 
     fn bind_to_tree(&self, context: &BindContext) {
-        if let Some(ref super_type) = self.super_type() {
+        if let Some(super_type) = self.super_type() {
             super_type.bind_to_tree(context);
         }
         let element = self.as_element();
@@ -975,7 +986,7 @@ impl VirtualMethods for HTMLElement {
     }
 
     fn unbind_from_tree(&self, context: &UnbindContext) {
-        if let Some(ref super_type) = self.super_type() {
+        if let Some(super_type) = self.super_type() {
             super_type.unbind_from_tree(context);
         }
 
@@ -1043,7 +1054,7 @@ impl FormControl for HTMLElement {
             .set_form_owner(form);
     }
 
-    fn to_element<'a>(&'a self) -> &'a Element {
+    fn to_element(&self) -> &Element {
         debug_assert!(self.is_form_associated_custom_element());
         self.as_element()
     }

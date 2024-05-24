@@ -7,8 +7,8 @@
 use std::fmt;
 
 use app_units::Au;
+use base::print_tree::PrintTree;
 use euclid::default::{Point2D, Rect, SideOffsets2D, Size2D};
-use gfx_traits::print_tree::PrintTree;
 use log::{debug, trace};
 use script::script_layout::wrapper_traits::ThreadSafeLayoutNode;
 use serde::Serialize;

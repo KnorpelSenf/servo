@@ -6,6 +6,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base::id::HistoryStateId;
 use cookie::Cookie;
 use headers::{ContentType, HeaderMapExt, ReferrerPolicy as ReferrerPolicyHeader};
 use http::{Error as HttpError, HeaderMap, StatusCode};
@@ -15,17 +16,14 @@ use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 use ipc_channel::router::ROUTER;
 use ipc_channel::Error as IpcError;
 use lazy_static::lazy_static;
-use log::warn;
 use malloc_size_of::malloc_size_of_is_0;
 use malloc_size_of_derive::MallocSizeOf;
 use mime::Mime;
-use msg::constellation_msg::HistoryStateId;
 use num_traits::Zero;
 use rustls::Certificate;
 use serde::{Deserialize, Serialize};
 use servo_rand::RngCore;
 use servo_url::{ImmutableOrigin, ServoUrl};
-use webrender_api::{ImageData, ImageDescriptor, ImageKey};
 
 use crate::filemanager_thread::FileManagerThreadMsg;
 use crate::request::{Request, RequestBuilder};
@@ -40,15 +38,6 @@ pub mod quality;
 pub mod request;
 pub mod response;
 pub mod storage_thread;
-
-/// Image handling.
-///
-/// It may be surprising that this goes in the network crate as opposed to the graphics crate.
-/// However, image handling is generally very integrated with the network stack (especially where
-/// caching is involved) and as a result it must live in here.
-pub mod image {
-    pub mod base;
-}
 
 /// An implementation of the [Fetch specification](https://fetch.spec.whatwg.org/)
 pub mod fetch {
@@ -352,7 +341,7 @@ where
 // See also: https://github.com/servo/servo/blob/735480/components/script/script_thread.rs#L313
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ResourceThreads {
-    core_thread: CoreResourceThread,
+    pub core_thread: CoreResourceThread,
     storage_thread: IpcSender<StorageThreadMsg>,
 }
 
@@ -827,38 +816,6 @@ pub fn http_percent_encode(bytes: &[u8]) -> String {
         .add(b'}');
 
     percent_encoding::percent_encode(bytes, HTTP_VALUE).to_string()
-}
-
-#[derive(Deserialize, Serialize)]
-pub enum NetToCompositorMsg {
-    AddImage(ImageKey, ImageDescriptor, ImageData),
-    GenerateImageKey(IpcSender<ImageKey>),
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct WebrenderIpcSender(IpcSender<NetToCompositorMsg>);
-
-impl WebrenderIpcSender {
-    pub fn new(sender: IpcSender<NetToCompositorMsg>) -> Self {
-        Self(sender)
-    }
-
-    pub fn generate_image_key(&self) -> ImageKey {
-        let (sender, receiver) = ipc::channel().unwrap();
-        self.0
-            .send(NetToCompositorMsg::GenerateImageKey(sender))
-            .expect("error sending image key generation");
-        receiver.recv().expect("error receiving image key result")
-    }
-
-    pub fn add_image(&self, key: ImageKey, descriptor: ImageDescriptor, data: ImageData) {
-        if let Err(e) = self
-            .0
-            .send(NetToCompositorMsg::AddImage(key, descriptor, data))
-        {
-            warn!("Error sending image update: {}", e);
-        }
-    }
 }
 
 lazy_static! {

@@ -5,7 +5,7 @@
 use std::fmt;
 
 use euclid::default::Point2D;
-use crate::script_layout::message::{NodesFromPointQueryType, QueryMsg};
+use script_layout_interface::{NodesFromPointQueryType, QueryMsg};
 use script_traits::UntrustedNodeAddress;
 use servo_arc::Arc;
 use servo_atoms::Atom;
@@ -91,8 +91,8 @@ impl DocumentOrShadowRoot {
         };
 
         self.window
-            .with_layout(|layout| layout.query_nodes_from_point(*client_point, query_type))
-            .unwrap_or_default()
+            .layout()
+            .query_nodes_from_point(*client_point, query_type)
     }
 
     #[allow(unsafe_code)]

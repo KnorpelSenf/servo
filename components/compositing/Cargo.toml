@@ -16,6 +16,7 @@ default = []
 multiview = []
 
 [dependencies]
+base = { workspace = true }
 canvas = { path = "../canvas" }
 compositing_traits = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -30,7 +31,6 @@ ipc-channel = { workspace = true }
 keyboard-types = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
-msg = { workspace = true }
 net_traits = { workspace = true }
 pixels = { path = "../pixels" }
 profile_traits = { workspace = true }
@@ -43,6 +43,7 @@ style_traits = { workspace = true }
 time = { workspace = true }
 webrender = { workspace = true }
 webrender_api = { workspace = true }
+webrender_traits = { workspace = true }
 webxr = { git = "https://github.com/servo/webxr" }
 
 [build-dependencies]

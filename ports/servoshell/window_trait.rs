@@ -21,7 +21,6 @@ pub const LINE_HEIGHT: f32 = 38.0;
 pub trait WindowPortsMethods: WindowMethods {
     fn get_events(&self) -> Vec<EmbedderEvent>;
     fn id(&self) -> winit::window::WindowId;
-    fn has_events(&self) -> bool;
     fn hidpi_factor(&self) -> Scale<f32, DeviceIndependentPixel, DevicePixel> {
         self.device_pixel_ratio_override()
             .unwrap_or_else(|| match opts::get().output_file {
@@ -35,10 +34,10 @@ pub trait WindowPortsMethods: WindowMethods {
     ) -> Option<Scale<f32, DeviceIndependentPixel, DevicePixel>>;
     fn page_height(&self) -> f32;
     fn get_fullscreen(&self) -> bool;
-    fn queue_embedder_events_for_winit_event(&self, event: winit::event::WindowEvent<'_>);
+    fn queue_embedder_events_for_winit_event(&self, event: winit::event::WindowEvent);
     fn is_animating(&self) -> bool;
     fn set_title(&self, _title: &str) {}
-    fn set_inner_size(&self, _size: DeviceIntSize);
+    fn request_inner_size(&self, size: DeviceIntSize) -> Option<DeviceIntSize>;
     fn set_position(&self, _point: DeviceIntPoint) {}
     fn set_fullscreen(&self, _state: bool) {}
     fn set_cursor(&self, _cursor: Cursor) {}

@@ -11,7 +11,7 @@ use std::{f64, ptr};
 use chrono::naive::{NaiveDate, NaiveDateTime};
 use chrono::{DateTime, Datelike, Weekday};
 use dom_struct::dom_struct;
-use embedder_traits::FilterPattern;
+use embedder_traits::{FilterPattern, InputMethodType};
 use encoding_rs::Encoding;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::jsapi::{
@@ -21,7 +21,6 @@ use js::jsapi::{
 use js::jsval::UndefinedValue;
 use js::rust::jsapi_wrapped::{ExecuteRegExpNoStatics, ObjectIsRegExp};
 use js::rust::{HandleObject, MutableHandleObject};
-use msg::constellation_msg::InputMethodType;
 use net_traits::blob_url_store::get_blob_origin;
 use net_traits::filemanager_thread::FileManagerThreadMsg;
 use net_traits::{CoreResourceMsg, IpcSend};
@@ -86,7 +85,7 @@ const DEFAULT_SUBMIT_VALUE: &str = "Submit";
 const DEFAULT_RESET_VALUE: &str = "Reset";
 const PASSWORD_REPLACEMENT_CHAR: char = '●';
 
-#[derive(Clone, Copy, JSTraceable, PartialEq)]
+#[derive(Clone, Copy, Default, JSTraceable, PartialEq)]
 #[allow(dead_code)]
 #[derive(MallocSizeOf)]
 pub enum InputType {
@@ -108,6 +107,7 @@ pub enum InputType {
     Search,
     Submit,
     Tel,
+    #[default]
     Text,
     Time,
     Url,
@@ -221,12 +221,6 @@ impl<'a> From<&'a Atom> for InputType {
             atom!("week") => InputType::Week,
             _ => Self::default(),
         }
-    }
-}
-
-impl Default for InputType {
-    fn default() -> InputType {
-        InputType::Text
     }
 }
 
@@ -979,8 +973,6 @@ pub trait LayoutHTMLInputElementHelpers<'dom> {
     fn value_for_layout(self) -> Cow<'dom, str>;
     fn size_for_layout(self) -> u32;
     fn selection_for_layout(self) -> Option<Range<usize>>;
-    fn checked_state_for_layout(self) -> bool;
-    fn indeterminate_state_for_layout(self) -> bool;
 }
 
 #[allow(unsafe_code)]
@@ -1081,18 +1073,6 @@ impl<'dom> LayoutHTMLInputElementHelpers<'dom> for LayoutDom<'dom, HTMLInputElem
             },
             _ => None,
         }
-    }
-
-    fn checked_state_for_layout(self) -> bool {
-        self.upcast::<Element>()
-            .get_state_for_layout()
-            .contains(ElementState::CHECKED)
-    }
-
-    fn indeterminate_state_for_layout(self) -> bool {
-        self.upcast::<Element>()
-            .get_state_for_layout()
-            .contains(ElementState::INDETERMINATE)
     }
 }
 
@@ -2208,7 +2188,13 @@ impl HTMLInputElement {
                     datetime.format("%Y-%m-%dT%H:%M:%S%.3f").to_string(),
                 ))
             },
-            InputType::Number | InputType::Range => Ok(DOMString::from(value.to_string())),
+            InputType::Number | InputType::Range => {
+                let mut value = DOMString::from(value.to_string());
+
+                value.set_best_representation_of_the_floating_point_number();
+
+                Ok(value)
+            },
             // this won't be called from other input types
             _ => unreachable!(),
         }

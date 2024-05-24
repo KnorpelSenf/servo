@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use base::id::PipelineId;
 use crossbeam_channel::{after, unbounded, Receiver, Sender};
 use devtools_traits::DevtoolScriptControlMsg;
 use dom_struct::dom_struct;
@@ -14,7 +15,6 @@ use ipc_channel::ipc::{IpcReceiver, IpcSender};
 use ipc_channel::router::ROUTER;
 use js::jsapi::{JSContext, JS_AddInterruptCallback};
 use js::jsval::UndefinedValue;
-use msg::constellation_msg::PipelineId;
 use net_traits::request::{CredentialsMode, Destination, ParserMetadata, Referrer, RequestBuilder};
 use net_traits::{CustomResponseMediator, IpcSend};
 use parking_lot::Mutex;
@@ -201,15 +201,15 @@ impl WorkerEventLoopMethods for ServiceWorkerGlobalScope {
         None
     }
 
-    fn from_control_msg(&self, msg: ServiceWorkerControlMsg) -> MixedMessage {
+    fn from_control_msg(msg: ServiceWorkerControlMsg) -> MixedMessage {
         MixedMessage::Control(msg)
     }
 
-    fn from_worker_msg(&self, msg: ServiceWorkerScriptMsg) -> MixedMessage {
+    fn from_worker_msg(msg: ServiceWorkerScriptMsg) -> MixedMessage {
         MixedMessage::ServiceWorker(msg)
     }
 
-    fn from_devtools_msg(&self, msg: DevtoolScriptControlMsg) -> MixedMessage {
+    fn from_devtools_msg(msg: DevtoolScriptControlMsg) -> MixedMessage {
         MixedMessage::Devtools(msg)
     }
 
@@ -242,7 +242,7 @@ impl ServiceWorkerGlobalScope {
                 runtime,
                 from_devtools_receiver,
                 closing,
-                Arc::new(Mutex::new(Identities::default())),
+                Arc::new(Mutex::new(Identities::new())),
             ),
             task_queue: TaskQueue::new(receiver, own_sender.clone()),
             own_sender,

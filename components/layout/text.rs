@@ -17,7 +17,7 @@ use gfx::text::util::{self, CompressionMode};
 use log::{debug, warn};
 use range::Range;
 use style::computed_values::text_rendering::T as TextRendering;
-use style::computed_values::white_space::T as WhiteSpace;
+use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::computed_values::word_break::T as WordBreak;
 use style::logical_geometry::{LogicalSize, WritingMode};
 use style::properties::style_structs::Font as FontStyleStruct;
@@ -46,7 +46,7 @@ fn text(fragments: &LinkedList<Fragment>) -> String {
 
     for fragment in fragments {
         if let SpecificFragmentInfo::UnscannedText(ref info) = fragment.specific {
-            if fragment.white_space().preserve_newlines() {
+            if fragment.white_space_collapse() != WhiteSpaceCollapse::Collapse {
                 text.push_str(&info.text);
             } else {
                 text.push_str(&info.text.replace('\n', " "));
@@ -70,7 +70,7 @@ impl TextRunScanner {
 
     pub fn scan_for_runs(
         &mut self,
-        font_context: &mut LayoutFontContext,
+        font_context: &LayoutFontContext,
         mut fragments: LinkedList<Fragment>,
     ) -> InlineFragments {
         debug!(
@@ -150,7 +150,7 @@ impl TextRunScanner {
     /// be adjusted.
     fn flush_clump_to_list(
         &mut self,
-        font_context: &mut LayoutFontContext,
+        font_context: &LayoutFontContext,
         out_fragments: &mut Vec<Fragment>,
         paragraph_bytes_processed: &mut usize,
         bidi_levels: Option<&[bidi::Level]>,
@@ -190,12 +190,10 @@ impl TextRunScanner {
                 let font_style = in_fragment.style().clone_font();
                 let inherited_text_style = in_fragment.style().get_inherited_text();
                 font_group = font_context.font_group(font_style);
-                compression = match in_fragment.white_space() {
-                    WhiteSpace::Normal | WhiteSpace::Nowrap => {
-                        CompressionMode::CompressWhitespaceNewline
-                    },
-                    WhiteSpace::Pre | WhiteSpace::PreWrap => CompressionMode::CompressNone,
-                    WhiteSpace::PreLine => CompressionMode::CompressWhitespace,
+                compression = match in_fragment.white_space_collapse() {
+                    WhiteSpaceCollapse::Collapse => CompressionMode::CompressWhitespaceNewline,
+                    WhiteSpaceCollapse::Preserve => CompressionMode::CompressNone,
+                    WhiteSpaceCollapse::PreserveBreaks => CompressionMode::CompressWhitespace,
                 };
                 text_transform = inherited_text_style.text_transform;
                 letter_spacing = inherited_text_style.letter_spacing;
@@ -205,10 +203,9 @@ impl TextRunScanner {
                     .map(|l| l.into())
                     .unwrap_or_else(|| {
                         let space_width = font_group
-                            .borrow_mut()
+                            .write()
                             .find_by_codepoint(font_context, ' ')
                             .and_then(|font| {
-                                let font = font.borrow();
                                 font.glyph_index(' ')
                                     .map(|glyph_id| font.glyph_h_advance(glyph_id))
                             })
@@ -250,7 +247,7 @@ impl TextRunScanner {
                 for (byte_index, character) in text.char_indices() {
                     if !character.is_control() {
                         let font = font_group
-                            .borrow_mut()
+                            .write()
                             .find_by_codepoint(font_context, character);
 
                         let bidi_level = match bidi_levels {
@@ -369,7 +366,7 @@ impl TextRunScanner {
                 // If no font is found (including fallbacks), there's no way we can render.
                 let font = match run_info
                     .font
-                    .or_else(|| font_group.borrow_mut().first(font_context))
+                    .or_else(|| font_group.write().first(font_context))
                 {
                     Some(font) => font,
                     None => {
@@ -379,7 +376,7 @@ impl TextRunScanner {
                 };
 
                 let (run, break_at_zero) = TextRun::new(
-                    &mut font.borrow_mut(),
+                    font,
                     run_info.text,
                     &options,
                     run_info.bidi_level,
@@ -537,14 +534,12 @@ fn bounding_box_for_run_metrics(
 /// Panics if no font can be found for the given font style.
 #[inline]
 pub fn font_metrics_for_style(
-    font_context: &mut LayoutFontContext,
+    font_context: &LayoutFontContext,
     style: crate::ServoArc<FontStyleStruct>,
 ) -> FontMetrics {
     let font_group = font_context.font_group(style);
-    let font = font_group.borrow_mut().first(font_context);
-    let font = font.as_ref().unwrap().borrow();
-
-    font.metrics.clone()
+    let font = font_group.write().first(font_context);
+    font.as_ref().unwrap().metrics.clone()
 }
 
 /// Returns the line block-size needed by the given computed style and font size.
@@ -568,7 +563,7 @@ fn split_first_fragment_at_newline_if_necessary(fragments: &mut LinkedList<Fragm
         let string_before;
         let selection_before;
         {
-            if !first_fragment.white_space().preserve_newlines() {
+            if first_fragment.white_space_collapse() == WhiteSpaceCollapse::Collapse {
                 return;
             }
 
@@ -666,10 +661,8 @@ impl RunInfo {
 
     fn has_font(&self, font: &Option<FontRef>) -> bool {
         fn identifier_and_pt_size(font: &Option<FontRef>) -> Option<(FontIdentifier, Au)> {
-            font.as_ref().map(|font| {
-                let font = font.borrow();
-                (font.identifier().clone(), font.descriptor.pt_size)
-            })
+            font.as_ref()
+                .map(|font| (font.identifier().clone(), font.descriptor.pt_size))
         }
 
         identifier_and_pt_size(&self.font) == identifier_and_pt_size(font)

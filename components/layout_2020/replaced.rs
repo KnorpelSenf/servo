@@ -6,12 +6,12 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use app_units::Au;
+use base::id::{BrowsingContextId, PipelineId};
 use canvas_traits::canvas::{CanvasId, CanvasMsg, FromLayoutMsg};
 use data_url::DataUrl;
 use ipc_channel::ipc::{self, IpcSender};
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
-use net_traits::image::base::Image;
 use net_traits::image_cache::{ImageOrMetadataAvailable, UsePlaceholder};
+use pixels::Image;
 use serde::Serialize;
 use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;

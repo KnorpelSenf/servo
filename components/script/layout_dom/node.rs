@@ -8,10 +8,10 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc as StdArc;
 
+use base::id::{BrowsingContextId, PipelineId};
 use gfx_traits::ByteIndex;
 use html5ever::{local_name, namespace_url, ns};
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
-use net_traits::image::base::{Image, ImageMetadata};
+use pixels::{Image, ImageMetadata};
 use range::Range;
 use crate::script_layout::wrapper_traits::{
     LayoutDataTrait, LayoutNode, PseudoElementType, ThreadSafeLayoutNode,
@@ -23,6 +23,7 @@ use crate::script_layout::{
 use servo_arc::Arc;
 use servo_url::ServoUrl;
 use style;
+use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::context::SharedStyleContext;
 use style::dom::{NodeInfo, TElement, TNode, TShadowRoot};
 use style::properties::ComputedValues;
@@ -337,11 +338,10 @@ impl<'dom> ThreadSafeLayoutNode<'dom> for ServoThreadSafeLayoutNode<'dom> {
             //
             // If you implement other values for this property, you will almost certainly
             // want to update this check.
-            !self
-                .style(context)
+            self.style(context)
                 .get_inherited_text()
-                .white_space
-                .preserve_newlines()
+                .white_space_collapse ==
+                WhiteSpaceCollapse::Collapse
         }
     }
 

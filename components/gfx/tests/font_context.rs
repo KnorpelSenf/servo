@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::prelude::*;
@@ -13,29 +13,34 @@ use app_units::Au;
 use gfx::font::{
     fallback_font_families, FontDescriptor, FontFamilyDescriptor, FontFamilyName, FontSearchScope,
 };
-use gfx::font_cache_thread::{FontIdentifier, FontTemplateAndWebRenderFontKey, FontTemplates};
-use gfx::font_context::{FontContext, FontSource};
-use gfx::font_template::FontTemplateDescriptor;
+use gfx::font_cache_thread::{CSSFontFaceDescriptors, FontIdentifier, FontSource};
+use gfx::font_context::FontContext;
+use gfx::font_store::FontTemplates;
+use gfx::font_template::{FontTemplate, FontTemplateRef};
+use ipc_channel::ipc;
+use net_traits::ResourceThreads;
 use servo_arc::Arc;
 use servo_atoms::Atom;
 use servo_url::ServoUrl;
 use style::properties::longhands::font_variant_caps::computed_value::T as FontVariantCaps;
 use style::properties::style_structs::Font as FontStyleStruct;
+use style::stylesheets::Stylesheet;
 use style::values::computed::font::{
     FamilyName, FontFamily, FontFamilyList, FontFamilyNameSyntax, FontSize, FontStretch, FontStyle,
     FontWeight, SingleFontFamily,
 };
 use style::values::computed::{FontLanguageOverride, XLang};
 use style::values::generics::font::LineHeight;
-use webrender_api::{FontInstanceKey, FontKey, IdNamespace};
+use webrender_api::{FontInstanceFlags, FontInstanceKey, FontKey, IdNamespace};
 
-struct TestFontSource {
-    families: HashMap<String, FontTemplates>,
+#[derive(Clone)]
+struct MockFontCacheThread {
+    families: RefCell<HashMap<String, FontTemplates>>,
     find_font_count: Rc<Cell<isize>>,
 }
 
-impl TestFontSource {
-    fn new() -> TestFontSource {
+impl MockFontCacheThread {
+    fn new() -> MockFontCacheThread {
         let mut csstest_ascii = FontTemplates::default();
         Self::add_face(&mut csstest_ascii, "csstest-ascii");
 
@@ -50,18 +55,22 @@ impl TestFontSource {
         families.insert("CSSTest Basic".to_owned(), csstest_basic);
         families.insert(fallback_font_families(None)[0].to_owned(), fallback);
 
-        TestFontSource {
-            families,
+        MockFontCacheThread {
+            families: RefCell::new(families),
             find_font_count: Rc::new(Cell::new(0)),
         }
     }
 
     fn identifier_for_font_name(name: &str) -> FontIdentifier {
+        FontIdentifier::Web(Self::url_for_font_name(name))
+    }
+
+    fn url_for_font_name(name: &str) -> ServoUrl {
         let mut path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "tests", "support", "CSSTest"]
             .iter()
             .collect();
         path.push(format!("{}.ttf", name));
-        FontIdentifier::Web(ServoUrl::from_file_path(path).unwrap())
+        ServoUrl::from_file_path(path).unwrap()
     }
 
     fn add_face(family: &mut FontTemplates, name: &str) {
@@ -71,31 +80,53 @@ impl TestFontSource {
         path.push(format!("{}.ttf", name));
 
         let file = File::open(path).unwrap();
+        let data: Vec<u8> = file.bytes().map(|b| b.unwrap()).collect();
         family.add_template(
-            Self::identifier_for_font_name(name),
-            Some(file.bytes().map(|b| b.unwrap()).collect()),
-        )
+            FontTemplate::new_for_remote_web_font(
+                Self::url_for_font_name(name),
+                std::sync::Arc::new(data),
+                &CSSFontFaceDescriptors::new(name),
+                None,
+            )
+            .unwrap(),
+        );
     }
 }
 
-impl FontSource for TestFontSource {
-    fn get_font_instance(&mut self, _key: FontKey, _size: Au) -> FontInstanceKey {
+impl FontSource for MockFontCacheThread {
+    fn find_matching_font_templates(
+        &self,
+        descriptor_to_match: Option<&FontDescriptor>,
+        font_family_name: &FontFamilyName,
+    ) -> Vec<FontTemplateRef> {
+        self.find_font_count.set(self.find_font_count.get() + 1);
+        self.families
+            .borrow_mut()
+            .get_mut(font_family_name.name())
+            .map(|family| family.find_for_descriptor(descriptor_to_match))
+            .unwrap_or_default()
+    }
+
+    fn get_system_font_instance(
+        &self,
+        _: FontIdentifier,
+        _: Au,
+        _: FontInstanceFlags,
+    ) -> FontInstanceKey {
         FontInstanceKey(IdNamespace(0), 0)
     }
 
-    fn font_template(
-        &mut self,
-        template_descriptor: FontTemplateDescriptor,
-        family_descriptor: FontFamilyDescriptor,
-    ) -> Option<FontTemplateAndWebRenderFontKey> {
-        self.find_font_count.set(self.find_font_count.get() + 1);
-        self.families
-            .get_mut(family_descriptor.name())
-            .and_then(|family| family.find_font_for_style(&template_descriptor))
-            .map(|template| FontTemplateAndWebRenderFontKey {
-                font_template: template,
-                font_key: FontKey(IdNamespace(0), 0),
-            })
+    fn get_web_font(&self, _: std::sync::Arc<Vec<u8>>, _: u32) -> webrender_api::FontKey {
+        FontKey(IdNamespace(0), 0)
+    }
+
+    fn get_web_font_instance(
+        &self,
+        _: webrender_api::FontKey,
+        _: f32,
+        _: FontInstanceFlags,
+    ) -> FontInstanceKey {
+        FontInstanceKey(IdNamespace(0), 0)
     }
 }
 
@@ -136,47 +167,54 @@ fn font_family(names: Vec<&str>) -> FontFamily {
     }
 }
 
+fn mock_resource_threads() -> ResourceThreads {
+    let (core_sender, _) = ipc::channel().unwrap();
+    let (storage_sender, _) = ipc::channel().unwrap();
+    ResourceThreads::new(core_sender, storage_sender)
+}
+
 #[test]
 fn test_font_group_is_cached_by_style() {
-    let source = TestFontSource::new();
-    let mut context = FontContext::new(source);
+    let source = MockFontCacheThread::new();
+    let context = FontContext::new(source, mock_resource_threads());
 
     let style1 = style();
 
     let mut style2 = style();
     style2.set_font_style(FontStyle::ITALIC);
 
-    assert_eq!(
-        context.font_group(Arc::new(style1.clone())).as_ptr(),
-        context.font_group(Arc::new(style1.clone())).as_ptr(),
+    assert!(
+        std::ptr::eq(
+            &*context.font_group(Arc::new(style1.clone())).read(),
+            &*context.font_group(Arc::new(style1.clone())).read()
+        ),
         "the same font group should be returned for two styles with the same hash"
     );
 
-    assert_ne!(
-        context.font_group(Arc::new(style1.clone())).as_ptr(),
-        context.font_group(Arc::new(style2.clone())).as_ptr(),
+    assert!(
+        !std::ptr::eq(
+            &*context.font_group(Arc::new(style1.clone())).read(),
+            &*context.font_group(Arc::new(style2.clone())).read()
+        ),
         "different font groups should be returned for two styles with different hashes"
     )
 }
 
 #[test]
 fn test_font_group_find_by_codepoint() {
-    let source = TestFontSource::new();
+    let source = MockFontCacheThread::new();
     let count = source.find_font_count.clone();
-    let mut context = FontContext::new(source);
+    let mut context = FontContext::new(source, mock_resource_threads());
 
     let mut style = style();
     style.set_font_family(font_family(vec!["CSSTest ASCII", "CSSTest Basic"]));
 
     let group = context.font_group(Arc::new(style));
 
-    let font = group
-        .borrow_mut()
-        .find_by_codepoint(&mut context, 'a')
-        .unwrap();
+    let font = group.write().find_by_codepoint(&mut context, 'a').unwrap();
     assert_eq!(
-        font.borrow().template.borrow().identifier,
-        TestFontSource::identifier_for_font_name("csstest-ascii")
+        font.identifier(),
+        MockFontCacheThread::identifier_for_font_name("csstest-ascii")
     );
     assert_eq!(
         count.get(),
@@ -184,13 +222,10 @@ fn test_font_group_find_by_codepoint() {
         "only the first font in the list should have been loaded"
     );
 
-    let font = group
-        .borrow_mut()
-        .find_by_codepoint(&mut context, 'a')
-        .unwrap();
+    let font = group.write().find_by_codepoint(&mut context, 'a').unwrap();
     assert_eq!(
-        font.borrow().template.borrow().identifier,
-        TestFontSource::identifier_for_font_name("csstest-ascii")
+        font.identifier(),
+        MockFontCacheThread::identifier_for_font_name("csstest-ascii")
     );
     assert_eq!(
         count.get(),
@@ -198,60 +233,49 @@ fn test_font_group_find_by_codepoint() {
         "we shouldn't load the same font a second time"
     );
 
-    let font = group
-        .borrow_mut()
-        .find_by_codepoint(&mut context, 'á')
-        .unwrap();
+    let font = group.write().find_by_codepoint(&mut context, 'á').unwrap();
     assert_eq!(
-        font.borrow().template.borrow().identifier,
-        TestFontSource::identifier_for_font_name("csstest-basic-regular")
+        font.identifier(),
+        MockFontCacheThread::identifier_for_font_name("csstest-basic-regular")
     );
     assert_eq!(count.get(), 2, "both fonts should now have been loaded");
 }
 
 #[test]
 fn test_font_fallback() {
-    let source = TestFontSource::new();
-    let mut context = FontContext::new(source);
+    let source = MockFontCacheThread::new();
+    let mut context = FontContext::new(source, mock_resource_threads());
 
     let mut style = style();
     style.set_font_family(font_family(vec!["CSSTest ASCII"]));
 
     let group = context.font_group(Arc::new(style));
 
-    let font = group
-        .borrow_mut()
-        .find_by_codepoint(&mut context, 'a')
-        .unwrap();
+    let font = group.write().find_by_codepoint(&mut context, 'a').unwrap();
     assert_eq!(
-        font.borrow().template.borrow().identifier,
-        TestFontSource::identifier_for_font_name("csstest-ascii"),
+        font.identifier(),
+        MockFontCacheThread::identifier_for_font_name("csstest-ascii"),
         "a family in the group should be used if there is a matching glyph"
     );
 
-    let font = group
-        .borrow_mut()
-        .find_by_codepoint(&mut context, 'á')
-        .unwrap();
+    let font = group.write().find_by_codepoint(&mut context, 'á').unwrap();
     assert_eq!(
-        font.borrow().template.borrow().identifier,
-        TestFontSource::identifier_for_font_name("csstest-basic-regular"),
+        font.identifier(),
+        MockFontCacheThread::identifier_for_font_name("csstest-basic-regular"),
         "a fallback font should be used if there is no matching glyph in the group"
     );
 }
 
 #[test]
 fn test_font_template_is_cached() {
-    let source = TestFontSource::new();
+    let source = MockFontCacheThread::new();
     let count = source.find_font_count.clone();
-    let mut context = FontContext::new(source);
+    let context = FontContext::new(source, mock_resource_threads());
 
     let mut font_descriptor = FontDescriptor {
-        template_descriptor: FontTemplateDescriptor {
-            weight: FontWeight::normal(),
-            stretch: FontStretch::hundred(),
-            style: FontStyle::normal(),
-        },
+        weight: FontWeight::normal(),
+        stretch: FontStretch::hundred(),
+        style: FontStyle::normal(),
         variant: FontVariantCaps::Normal,
         pt_size: Au(10),
     };
@@ -259,14 +283,19 @@ fn test_font_template_is_cached() {
     let family_descriptor =
         FontFamilyDescriptor::new(FontFamilyName::from("CSSTest Basic"), FontSearchScope::Any);
 
-    let font1 = context.font(&font_descriptor, &family_descriptor).unwrap();
+    let font_template = context.matching_templates(&font_descriptor, &family_descriptor)[0].clone();
+
+    let font1 = context
+        .font(font_template.clone(), &font_descriptor)
+        .unwrap();
 
     font_descriptor.pt_size = Au(20);
-    let font2 = context.font(&font_descriptor, &family_descriptor).unwrap();
+    let font2 = context
+        .font(font_template.clone(), &font_descriptor)
+        .unwrap();
 
     assert_ne!(
-        font1.borrow().descriptor.pt_size,
-        font2.borrow().descriptor.pt_size,
+        font1.descriptor.pt_size, font2.descriptor.pt_size,
         "the same font should not have been returned"
     );
 

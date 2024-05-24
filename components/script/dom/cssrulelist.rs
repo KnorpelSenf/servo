@@ -8,8 +8,8 @@ use dom_struct::dom_struct;
 use servo_arc::Arc;
 use style::shared_lock::Locked;
 use style::stylesheets::{
-    AllowImportRules, CssRuleTypes, CssRules, CssRulesHelpers, KeyframesRule, RulesMutateError,
-    StylesheetLoader as StyleStylesheetLoader,
+    AllowImportRules, CssRuleType, CssRuleTypes, CssRules, CssRulesHelpers, KeyframesRule,
+    RulesMutateError, StylesheetLoader as StyleStylesheetLoader,
 };
 
 use crate::dom::bindings::cell::DomRefCell;
@@ -97,6 +97,7 @@ impl CSSRuleList {
         rule: &str,
         idx: u32,
         containing_rule_types: CssRuleTypes,
+        parse_relative_rule_type: Option<CssRuleType>,
     ) -> Fallible<u32> {
         let css_rules = if let RulesSource::Rules(ref rules) = self.rules {
             rules
@@ -112,8 +113,7 @@ impl CSSRuleList {
         let owner = self
             .parent_stylesheet
             .get_owner()
-            .map(DomRoot::downcast::<HTMLElement>)
-            .flatten();
+            .and_then(DomRoot::downcast::<HTMLElement>);
         let loader = owner
             .as_ref()
             .map(|element| StylesheetLoader::for_element(element));
@@ -123,6 +123,7 @@ impl CSSRuleList {
             &parent_stylesheet.contents,
             index,
             containing_rule_types,
+            parse_relative_rule_type,
             loader.as_ref().map(|l| l as &dyn StyleStylesheetLoader),
             AllowImportRules::Yes,
         )?;
@@ -135,7 +136,7 @@ impl CSSRuleList {
         Ok(idx)
     }
 
-    // In case of a keyframe rule, index must be valid.
+    /// In case of a keyframe rule, index must be valid.
     pub fn remove_rule(&self, index: u32) -> ErrorResult {
         let index = index as usize;
         let mut guard = self.parent_stylesheet.shared_lock().write();
@@ -163,7 +164,7 @@ impl CSSRuleList {
         }
     }
 
-    // Remove parent stylesheets from all children
+    /// Remove parent stylesheets from all children
     pub fn deparent_all(&self) {
         for rule in self.dom_rules.borrow().iter() {
             if let Some(r) = rule.get() {

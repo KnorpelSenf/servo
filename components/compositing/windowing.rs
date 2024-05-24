@@ -7,14 +7,15 @@
 use std::fmt::{Debug, Error, Formatter};
 use std::time::Duration;
 
+use base::id::{PipelineId, TopLevelBrowsingContextId};
 use embedder_traits::{EmbedderProxy, EventLoopWaker};
 use euclid::Scale;
 use gfx::rendering_context::RenderingContext;
 use keyboard_types::KeyboardEvent;
 use libc::c_void;
-use msg::constellation_msg::{PipelineId, TopLevelBrowsingContextId, TraversalDirection};
 use script_traits::{
-    GamepadEvent, MediaSessionActionType, MouseButton, TouchEventType, TouchId, WheelDelta,
+    GamepadEvent, MediaSessionActionType, MouseButton, TouchEventType, TouchId, TraversalDirection,
+    WheelDelta,
 };
 use servo_geometry::DeviceIndependentPixel;
 use servo_url::ServoUrl;
@@ -249,7 +250,10 @@ impl EmbedderCoordinates {
     /// This should be used when drawing directly to the framebuffer with OpenGL commands.
     pub fn flip_rect(&self, rect: &DeviceIntRect) -> DeviceIntRect {
         let mut result = *rect;
-        result.min.y = self.framebuffer.height - result.min.y - result.size().height;
+        let min_y = self.framebuffer.height - result.max.y;
+        let max_y = self.framebuffer.height - result.min.y;
+        result.min.y = min_y;
+        result.max.y = max_y;
         result
     }
 
@@ -257,5 +261,67 @@ impl EmbedderCoordinates {
     /// This should be used when drawing directly to the framebuffer with OpenGL commands.
     pub fn get_flipped_viewport(&self) -> DeviceIntRect {
         self.flip_rect(&self.get_viewport())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use euclid::{Point2D, Scale, Size2D};
+    use webrender_api::units::DeviceIntRect;
+
+    use super::EmbedderCoordinates;
+
+    #[test]
+    fn test() {
+        let pos = Point2D::new(0, 0);
+        let viewport = Size2D::new(800, 600);
+        let screen = Size2D::new(1080, 720);
+        let coordinates = EmbedderCoordinates {
+            hidpi_factor: Scale::new(1.),
+            screen,
+            screen_avail: screen,
+            window: (viewport, pos),
+            framebuffer: viewport,
+            viewport: DeviceIntRect::from_origin_and_size(pos, viewport),
+        };
+
+        // Check if viewport conversion is correct.
+        let viewport = DeviceIntRect::new(Point2D::new(0, 0), Point2D::new(800, 600));
+        assert_eq!(coordinates.get_viewport(), viewport);
+        assert_eq!(coordinates.get_flipped_viewport(), viewport);
+
+        // Check rects with different y positions inside the viewport.
+        let rect1 = DeviceIntRect::new(Point2D::new(0, 0), Point2D::new(800, 400));
+        let rect2 = DeviceIntRect::new(Point2D::new(0, 100), Point2D::new(800, 600));
+        let rect3 = DeviceIntRect::new(Point2D::new(0, 200), Point2D::new(800, 500));
+        assert_eq!(
+            coordinates.flip_rect(&rect1),
+            DeviceIntRect::new(Point2D::new(0, 200), Point2D::new(800, 600))
+        );
+        assert_eq!(
+            coordinates.flip_rect(&rect2),
+            DeviceIntRect::new(Point2D::new(0, 0), Point2D::new(800, 500))
+        );
+        assert_eq!(
+            coordinates.flip_rect(&rect3),
+            DeviceIntRect::new(Point2D::new(0, 100), Point2D::new(800, 400))
+        );
+
+        // Check rects with different x positions.
+        let rect1 = DeviceIntRect::new(Point2D::new(0, 0), Point2D::new(700, 400));
+        let rect2 = DeviceIntRect::new(Point2D::new(100, 100), Point2D::new(800, 600));
+        let rect3 = DeviceIntRect::new(Point2D::new(300, 200), Point2D::new(600, 500));
+        assert_eq!(
+            coordinates.flip_rect(&rect1),
+            DeviceIntRect::new(Point2D::new(0, 200), Point2D::new(700, 600))
+        );
+        assert_eq!(
+            coordinates.flip_rect(&rect2),
+            DeviceIntRect::new(Point2D::new(100, 0), Point2D::new(800, 500))
+        );
+        assert_eq!(
+            coordinates.flip_rect(&rect3),
+            DeviceIntRect::new(Point2D::new(300, 100), Point2D::new(600, 400))
+        );
     }
 }

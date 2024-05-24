@@ -11,18 +11,17 @@ use std::sync::{Arc, Mutex};
 use std::{f32, fmt};
 
 use app_units::Au;
+use base::id::{BrowsingContextId, PipelineId};
 use bitflags::bitflags;
 use canvas_traits::canvas::{CanvasId, CanvasMsg};
 use euclid::default::{Point2D, Rect, Size2D, Vector2D};
 use gfx::text::glyph::ByteIndex;
 use gfx::text::text_run::{TextRun, TextRunSlice};
-use gfx_traits::StackingContextId;
 use html5ever::{local_name, namespace_url, ns};
 use ipc_channel::ipc::IpcSender;
 use log::debug;
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
-use net_traits::image::base::{Image, ImageMetadata};
 use net_traits::image_cache::{ImageOrMetadataAvailable, UsePlaceholder};
+use pixels::{Image, ImageMetadata};
 use range::*;
 use script::script_layout::wrapper_traits::{
     PseudoElementType, ThreadSafeLayoutElement, ThreadSafeLayoutNode,
@@ -41,8 +40,9 @@ use style::computed_values::overflow_wrap::T as OverflowWrap;
 use style::computed_values::overflow_x::T as StyleOverflow;
 use style::computed_values::position::T as Position;
 use style::computed_values::text_decoration_line::T as TextDecorationLine;
+use style::computed_values::text_wrap_mode::T as TextWrapMode;
 use style::computed_values::transform_style::T as TransformStyle;
-use style::computed_values::white_space::T as WhiteSpace;
+use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::computed_values::word_break::T as WordBreak;
 use style::logical_geometry::{Direction, LogicalMargin, LogicalRect, LogicalSize, WritingMode};
 use style::properties::ComputedValues;
@@ -56,9 +56,9 @@ use style::values::generics::transform;
 use webrender_api::units::LayoutTransform;
 use webrender_api::{self, ImageKey};
 
-use crate::context::{with_thread_local_font_context, LayoutContext};
+use crate::context::LayoutContext;
 use crate::display_list::items::{ClipScrollNodeIndex, OpaqueNode, BLUR_INFLATION_FACTOR};
-use crate::display_list::ToLayout;
+use crate::display_list::{StackingContextId, ToLayout};
 use crate::floats::ClearType;
 use crate::flow::{GetBaseFlow, ImmutableFlowUtils};
 use crate::flow_ref::FlowRef;
@@ -851,9 +851,8 @@ impl Fragment {
             ))),
         );
         unscanned_ellipsis_fragments.push_back(ellipsis_fragment);
-        let ellipsis_fragments = with_thread_local_font_context(layout_context, |font_context| {
-            TextRunScanner::new().scan_for_runs(font_context, unscanned_ellipsis_fragments)
-        });
+        let ellipsis_fragments = TextRunScanner::new()
+            .scan_for_runs(&layout_context.font_context, unscanned_ellipsis_fragments);
         debug_assert_eq!(ellipsis_fragments.len(), 1);
         ellipsis_fragment = ellipsis_fragments.fragments.into_iter().next().unwrap();
         ellipsis_fragment.flags |= FragmentFlags::IS_ELLIPSIS;
@@ -1539,8 +1538,12 @@ impl Fragment {
         &self.selected_style
     }
 
-    pub fn white_space(&self) -> WhiteSpace {
-        self.style().get_inherited_text().white_space
+    pub fn white_space_collapse(&self) -> WhiteSpaceCollapse {
+        self.style().get_inherited_text().white_space_collapse
+    }
+
+    pub fn text_wrap_mode(&self) -> TextWrapMode {
+        self.style().get_inherited_text().text_wrap_mode
     }
 
     pub fn color(&self) -> Color {
@@ -1586,7 +1589,7 @@ impl Fragment {
     /// Returns true if this element can be split. This is true for text fragments, unless
     /// `white-space: pre` or `white-space: nowrap` is set.
     pub fn can_split(&self) -> bool {
-        self.is_scanned_text_fragment() && self.white_space().allow_wrap()
+        self.is_scanned_text_fragment() && self.text_wrap_mode() == TextWrapMode::Wrap
     }
 
     /// Returns true if and only if this fragment is a generated content fragment.
@@ -1703,7 +1706,7 @@ impl Fragment {
                 .metrics_for_range(range)
                 .advance_width;
 
-            let min_line_inline_size = if self_.white_space().allow_wrap() {
+            let min_line_inline_size = if self_.text_wrap_mode() == TextWrapMode::Wrap {
                 text_fragment_info.run.min_width_for_range(range)
             } else {
                 max_line_inline_size
@@ -1968,7 +1971,7 @@ impl Fragment {
             // see if we're going to overflow the line. If so, perform a best-effort split.
             let mut remaining_range = slice.text_run_range();
             let split_is_empty = inline_start_range.is_empty() &&
-                (self.white_space().allow_wrap() ||
+                (self.text_wrap_mode() == TextWrapMode::Wrap ||
                     !self.requires_line_break_afterward_if_wrapping_on_newlines());
             if split_is_empty {
                 // We're going to overflow the line.
@@ -2341,9 +2344,10 @@ impl Fragment {
                 return InlineMetrics::new(Au(0), Au(0), Au(0));
             }
             // See CSS 2.1 § 10.8.1.
-            let font_metrics = with_thread_local_font_context(layout_context, |font_context| {
-                text::font_metrics_for_style(font_context, self_.style.clone_font())
-            });
+            let font_metrics = text::font_metrics_for_style(
+                &layout_context.font_context,
+                self_.style.clone_font(),
+            );
             let line_height = text::line_height_from_style(&self_.style, &font_metrics);
             InlineMetrics::from_font_metrics(&info.run.font_metrics, line_height)
         }
@@ -2421,10 +2425,10 @@ impl Fragment {
                 VerticalAlign::Keyword(kw) => match kw {
                     VerticalAlignKeyword::Baseline => {},
                     VerticalAlignKeyword::Middle => {
-                        let font_metrics =
-                            with_thread_local_font_context(layout_context, |font_context| {
-                                text::font_metrics_for_style(font_context, self.style.clone_font())
-                            });
+                        let font_metrics = text::font_metrics_for_style(
+                            &layout_context.font_context,
+                            self.style.clone_font(),
+                        );
                         offset += (content_inline_metrics.ascent -
                             content_inline_metrics.space_below_baseline -
                             font_metrics.x_height)
@@ -2520,7 +2524,8 @@ impl Fragment {
                 // FIXME: Should probably use a whitelist of styles that can safely differ (#3165)
                 if self.style().get_font() != other.style().get_font() ||
                     self.text_decoration_line() != other.text_decoration_line() ||
-                    self.white_space() != other.white_space() ||
+                    self.white_space_collapse() != other.white_space_collapse() ||
+                    self.text_wrap_mode() != other.text_wrap_mode() ||
                     self.color() != other.color()
                 {
                     return false;
@@ -2893,7 +2898,7 @@ impl Fragment {
     }
 
     pub fn strip_leading_whitespace_if_necessary(&mut self) -> WhitespaceStrippingResult {
-        if self.white_space().preserve_spaces() {
+        if self.white_space_collapse() == WhiteSpaceCollapse::Preserve {
             return WhitespaceStrippingResult::RetainFragment;
         }
 
@@ -2963,7 +2968,7 @@ impl Fragment {
 
     /// Returns true if the entire fragment was stripped.
     pub fn strip_trailing_whitespace_if_necessary(&mut self) -> WhitespaceStrippingResult {
-        if self.white_space().preserve_spaces() {
+        if self.white_space_collapse() == WhiteSpaceCollapse::Preserve {
             return WhitespaceStrippingResult::RetainFragment;
         }
 

@@ -15,14 +15,15 @@ use euclid::{Point2D, Vector2D};
 use gilrs::{EventType, Gilrs};
 use keyboard_types::{Key, KeyboardEvent, Modifiers, ShortcutMatcher};
 use log::{debug, error, info, trace, warn};
+use servo::base::id::TopLevelBrowsingContextId as WebViewId;
 use servo::compositing::windowing::{EmbedderEvent, WebRenderDebugOption};
 use servo::embedder_traits::{
     CompositorEventVariant, ContextMenuResult, EmbedderMsg, FilterPattern, PermissionPrompt,
     PermissionRequest, PromptDefinition, PromptOrigin, PromptResult,
 };
-use servo::msg::constellation_msg::{TopLevelBrowsingContextId as WebViewId, TraversalDirection};
 use servo::script_traits::{
     GamepadEvent, GamepadIndex, GamepadInputBounds, GamepadUpdateType, TouchEventType,
+    TraversalDirection,
 };
 use servo::servo_config::opts;
 use servo::servo_url::ServoUrl;
@@ -37,6 +38,7 @@ use crate::window_trait::{WindowPortsMethods, LINE_HEIGHT};
 pub struct WebViewManager<Window: WindowPortsMethods + ?Sized> {
     current_url: Option<ServoUrl>,
     current_url_string: Option<String>,
+    status_text: Option<String>,
 
     /// List of top-level browsing contexts.
     /// Modified by EmbedderMsg::WebViewOpened and EmbedderMsg::WebViewClosed,
@@ -86,6 +88,7 @@ where
             title: None,
             current_url: None,
             current_url_string: None,
+            status_text: None,
             webviews: HashMap::default(),
             creation_order: vec![],
             focused_webview_id: None,
@@ -119,7 +122,7 @@ where
     }
 
     pub fn focused_webview_id(&self) -> Option<WebViewId> {
-        self.focused_webview_id.clone()
+        self.focused_webview_id
     }
 
     pub fn current_url_string(&self) -> Option<&str> {
@@ -128,6 +131,10 @@ where
 
     pub fn load_status(&self) -> LoadStatus {
         self.load_status
+    }
+
+    pub fn status_text(&self) -> Option<String> {
+        self.status_text.clone()
     }
 
     pub fn get_events(&mut self) -> Vec<EmbedderEvent> {
@@ -441,8 +448,9 @@ where
                 trace_embedder_msg!(msg, "{msg:?}");
             }
             match msg {
-                EmbedderMsg::Status(_status) => {
-                    // FIXME: surface this status string in the UI somehow
+                EmbedderMsg::Status(status) => {
+                    self.status_text = status;
+                    need_update = true;
                 },
                 EmbedderMsg::ChangePageTitle(title) => {
                     self.title = title;
@@ -477,7 +485,7 @@ where
                                 .push(EmbedderEvent::MoveResizeWebView(webview_id, new_rect));
                         }
                     }
-                    self.window.set_inner_size(size);
+                    self.window.request_inner_size(size);
                 },
                 EmbedderMsg::Prompt(definition, origin) => {
                     let res = if opts::get().headless {

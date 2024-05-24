@@ -10,17 +10,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use base::id::PipelineId;
 use crossbeam_channel::{unbounded, Sender};
 use dom_struct::dom_struct;
 use euclid::{Scale, Size2D};
 use js::jsapi::{
     HandleValueArray, Heap, IsCallable, IsConstructor, JSAutoRealm, JSObject,
-    JS_ClearPendingException, JS_IsExceptionPending, NewArrayObject,
+    JS_ClearPendingException, JS_IsExceptionPending, NewArrayObject, Value,
 };
 use js::jsval::{JSVal, ObjectValue, UndefinedValue};
 use js::rust::wrappers::{Call, Construct1};
 use js::rust::{HandleValue, Runtime};
-use msg::constellation_msg::PipelineId;
 use net_traits::image_cache::ImageCache;
 use pixels::PixelFormat;
 use profile_traits::ipc;
@@ -288,7 +288,7 @@ impl PaintWorkletGlobalScope {
                 }
                 // Step 5.4
                 entry
-                    .insert(Box::new(Heap::default()))
+                    .insert(Box::<Heap<Value>>::default())
                     .set(paint_instance.get());
             },
         };

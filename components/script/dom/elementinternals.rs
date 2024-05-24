@@ -143,7 +143,7 @@ impl ElementInternals {
         }
 
         if let SubmissionValue::FormData(datums) = &*self.submission_value.borrow() {
-            entry_list.extend(datums.iter().map(|d| d.clone()));
+            entry_list.extend(datums.iter().cloned());
             return;
         }
         let name = self
@@ -169,7 +169,7 @@ impl ElementInternals {
                 entry_list.push(FormDatum {
                     ty: DOMString::from("file"),
                     name,
-                    value: FormDatumValue::File(DomRoot::from_ref(&*file)),
+                    value: FormDatumValue::File(DomRoot::from_ref(file)),
                 });
             },
         }
@@ -238,7 +238,7 @@ impl ElementInternalsMethods for ElementInternals {
         if bits.is_empty() {
             self.set_validation_message(DOMString::new());
         } else {
-            self.set_validation_message(message.unwrap_or_else(DOMString::new));
+            self.set_validation_message(message.unwrap_or_default());
         }
 
         // Step 6: If element's customError validity flag is true, then set element's custom validity error
@@ -294,7 +294,7 @@ impl ElementInternalsMethods for ElementInternals {
         Ok(self.labels_node_list.or_init(|| {
             NodeList::new_labels_list(
                 self.target_element.upcast::<Node>().owner_doc().window(),
-                &*self.target_element,
+                &self.target_element,
             )
         }))
     }

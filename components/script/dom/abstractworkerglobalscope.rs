@@ -91,9 +91,9 @@ pub trait WorkerEventLoopMethods {
     fn task_queue(&self) -> &TaskQueue<Self::WorkerMsg>;
     fn handle_event(&self, event: Self::Event) -> bool;
     fn handle_worker_post_event(&self, worker: &TrustedWorkerAddress) -> Option<AutoWorkerReset>;
-    fn from_control_msg(&self, msg: Self::ControlMsg) -> Self::Event;
-    fn from_worker_msg(&self, msg: Self::WorkerMsg) -> Self::Event;
-    fn from_devtools_msg(&self, msg: DevtoolScriptControlMsg) -> Self::Event;
+    fn from_control_msg(msg: Self::ControlMsg) -> Self::Event;
+    fn from_worker_msg(msg: Self::WorkerMsg) -> Self::Event;
+    fn from_devtools_msg(msg: DevtoolScriptControlMsg) -> Self::Event;
     fn control_receiver(&self) -> &Receiver<Self::ControlMsg>;
 }
 
@@ -114,13 +114,13 @@ pub fn run_worker_event_loop<T, WorkerMsg, Event>(
         .map(|_| scope.from_devtools_receiver());
     let task_queue = worker_scope.task_queue();
     let event = select! {
-        recv(worker_scope.control_receiver()) -> msg => worker_scope.from_control_msg(msg.unwrap()),
+        recv(worker_scope.control_receiver()) -> msg => T::from_control_msg(msg.unwrap()),
         recv(task_queue.select()) -> msg => {
             task_queue.take_tasks(msg.unwrap());
-            worker_scope.from_worker_msg(task_queue.recv().unwrap())
+            T::from_worker_msg(task_queue.recv().unwrap())
         },
         recv(devtools_port.unwrap_or(&crossbeam_channel::never())) -> msg =>
-            worker_scope.from_devtools_msg(msg.unwrap()),
+            T::from_devtools_msg(msg.unwrap()),
     };
     let mut sequential = vec![];
     sequential.push(event);
@@ -132,13 +132,13 @@ pub fn run_worker_event_loop<T, WorkerMsg, Event>(
     while !scope.is_closing() {
         // Batch all events that are ready.
         // The task queue will throttle non-priority tasks if necessary.
-        match task_queue.try_recv() {
+        match task_queue.take_tasks_and_recv() {
             Err(_) => match devtools_port.map(|port| port.try_recv()) {
                 None => {},
                 Some(Err(_)) => break,
-                Some(Ok(ev)) => sequential.push(worker_scope.from_devtools_msg(ev)),
+                Some(Ok(ev)) => sequential.push(T::from_devtools_msg(ev)),
             },
-            Ok(ev) => sequential.push(worker_scope.from_worker_msg(ev)),
+            Ok(ev) => sequential.push(T::from_worker_msg(ev)),
         }
     }
     // Step 3

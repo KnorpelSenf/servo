@@ -8,6 +8,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use background_hang_monitor::HangMonitorRegister;
+use background_hang_monitor_api::{
+    BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, HangMonitorAlert,
+};
+use base::id::{
+    BrowsingContextId, HistoryStateId, PipelineId, PipelineNamespace, PipelineNamespaceId,
+    PipelineNamespaceRequest, TopLevelBrowsingContextId,
+};
+use base::Epoch;
 use bluetooth_traits::BluetoothRequest;
 use canvas_traits::webgl::WebGLPipeline;
 use compositing_traits::{CompositionPipeline, CompositorMsg, CompositorProxy};
@@ -15,17 +23,11 @@ use crossbeam_channel::{unbounded, Sender};
 use devtools_traits::{DevtoolsControlMsg, ScriptToDevtoolsControlMsg};
 use embedder_traits::EventLoopWaker;
 use gfx::font_cache_thread::FontCacheThread;
-use gfx_traits::Epoch;
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 use ipc_channel::router::ROUTER;
 use ipc_channel::Error;
 use log::{debug, error, warn};
 use media::WindowGLContext;
-use msg::constellation_msg::{
-    BackgroundHangMonitorControlMsg, BackgroundHangMonitorRegister, BrowsingContextId,
-    HangMonitorAlert, HistoryStateId, PipelineId, PipelineNamespace, PipelineNamespaceId,
-    PipelineNamespaceRequest, TopLevelBrowsingContextId,
-};
 use net::image_cache::ImageCacheImpl;
 use net_traits::image_cache::ImageCache;
 use net_traits::ResourceThreads;
@@ -183,10 +185,10 @@ pub struct InitialPipelineState {
     pub prev_throttled: bool,
 
     /// Webrender api.
-    pub webrender_image_api_sender: net_traits::WebrenderIpcSender,
+    pub webrender_image_api_sender: webrender_traits::WebRenderNetApi,
 
     /// Webrender api.
-    pub webrender_api_sender: script_traits::WebrenderIpcSender,
+    pub webrender_api_sender: webrender_traits::WebRenderScriptApi,
 
     /// The ID of the document processed by this script thread.
     pub webrender_document: DocumentId,
@@ -500,8 +502,8 @@ pub struct UnprivilegedPipelineContent {
     opts: Opts,
     prefs: HashMap<String, PrefValue>,
     pipeline_namespace_id: PipelineNamespaceId,
-    webrender_api_sender: script_traits::WebrenderIpcSender,
-    webrender_image_api_sender: net_traits::WebrenderIpcSender,
+    webrender_api_sender: webrender_traits::WebRenderScriptApi,
+    webrender_image_api_sender: webrender_traits::WebRenderNetApi,
     webrender_document: DocumentId,
     webgl_chan: Option<WebGLPipeline>,
     webxr_registry: webxr_api::Registry,

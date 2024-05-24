@@ -5,18 +5,18 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
+use base::id::{
+    BroadcastChannelRouterId, BrowsingContextId, HistoryStateId, MessagePortId,
+    MessagePortRouterId, PipelineId, ServiceWorkerId, ServiceWorkerRegistrationId,
+    TopLevelBrowsingContextId,
+};
+use base::Epoch;
 use canvas_traits::canvas::{CanvasId, CanvasMsg};
 use devtools_traits::{ScriptToDevtoolsControlMsg, WorkerId};
 use embedder_traits::{EmbedderMsg, MediaSessionEvent};
 use euclid::default::Size2D as UntypedSize2D;
 use euclid::Size2D;
-use gfx_traits::Epoch;
 use ipc_channel::ipc::{IpcReceiver, IpcSender};
-use msg::constellation_msg::{
-    BroadcastChannelRouterId, BrowsingContextId, HistoryStateId, MessagePortId,
-    MessagePortRouterId, PipelineId, ServiceWorkerId, ServiceWorkerRegistrationId,
-    TopLevelBrowsingContextId, TraversalDirection,
-};
 use net_traits::request::RequestBuilder;
 use net_traits::storage_thread::StorageType;
 use net_traits::CoreResourceMsg;
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use servo_url::{ImmutableOrigin, ServoUrl};
 use smallvec::SmallVec;
 use style_traits::CSSPixel;
-use webgpu::{wgpu, WebGPU, WebGPUResponseResult};
+use webgpu::{wgc, WebGPU, WebGPUResponseResult};
 use webrender_api::units::{DeviceIntPoint, DeviceIntSize};
 
 use crate::{
@@ -258,8 +258,8 @@ pub enum ScriptMsg {
     /// Create a WebGPU Adapter instance
     RequestAdapter(
         IpcSender<Option<WebGPUResponseResult>>,
-        wgpu::instance::RequestAdapterOptions,
-        SmallVec<[wgpu::id::AdapterId; 4]>,
+        wgc::instance::RequestAdapterOptions,
+        SmallVec<[wgc::id::AdapterId; 4]>,
     ),
     /// Get WebGPU channel
     GetWebGPUChan(IpcSender<Option<WebGPU>>),
@@ -491,4 +491,13 @@ pub enum SWManagerMsg {
     /// as it will be needed when implementing
     /// <https://github.com/servo/servo/issues/24660>
     PostMessageToClient,
+}
+
+/// The direction of a history traversal
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum TraversalDirection {
+    /// Travel forward the given number of documents.
+    Forward(usize),
+    /// Travel backward the given number of documents.
+    Back(usize),
 }

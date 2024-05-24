@@ -3,7 +3,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use bitflags::bitflags;
-use gfx_traits::{combine_id_with_fragment_type, FragmentType};
+use script_layout_interface::{combine_id_with_fragment_type, FragmentType};
 use serde::Serialize;
 use style::dom::OpaqueNode;
 use style::selector_parser::PseudoElement;
@@ -91,6 +91,12 @@ bitflags! {
         /// Whether or not this Fragment was created to contain a replaced element or is
         /// a replaced element.
         const IS_REPLACED = 0b00000100;
+        /// Whether or not this Fragment was created to contain a list item marker
+        /// with a used value of `list-style-position: outside`.
+        const IS_OUTSIDE_LIST_ITEM_MARKER = 0b00001000;
+        /// Avoid painting the fragment, this is used for empty table cells when 'empty-cells' is 'hide'.
+        /// This flag doesn't avoid hit-testing.
+        const DO_NOT_PAINT = 0b00010000;
     }
 }
 

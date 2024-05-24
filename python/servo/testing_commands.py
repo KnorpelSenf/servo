@@ -153,7 +153,6 @@ class MachCommands(CommandBase):
             "hyper_serde",
             "layout_2013",
             "layout_2020",
-            "msg",
             "net",
             "net_traits",
             "selectors",
@@ -163,6 +162,7 @@ class MachCommands(CommandBase):
             "constellation",
             "style_config",
             "compositing",
+            "pixels",
         ]
         if not packages:
             packages = set(os.listdir(path.join(self.context.topdir, "tests", "unit"))) - set(['.DS_Store'])

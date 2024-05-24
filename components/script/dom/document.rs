@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::slice::from_ref;
 use std::time::{Duration, Instant};
 
+use base::id::BrowsingContextId;
 use canvas_traits::webgl::{self, WebGLContextId, WebGLMsg};
 use content_security_policy::{self as csp, CspList};
 use cookie::Cookie;
@@ -33,7 +34,6 @@ use metrics::{
     ProgressiveWebMetric,
 };
 use mime::{self, Mime};
-use msg::constellation_msg::BrowsingContextId;
 use net_traits::pub_domains::is_pub_domain;
 use net_traits::request::RequestBuilder;
 use net_traits::response::HttpsState;
@@ -44,11 +44,11 @@ use num_traits::ToPrimitive;
 use percent_encoding::percent_decode;
 use profile_traits::ipc as profile_ipc;
 use profile_traits::time::{TimerMetadata, TimerMetadataFrameType, TimerMetadataReflowType};
-use crate::script_layout::message::{Msg, PendingRestyle, ReflowGoal};
-use crate::script_layout::TrustedNodeAddress;
+use script_layout_interface::{PendingRestyle, ReflowGoal, TrustedNodeAddress};
 use script_traits::{
-    AnimationState, DocumentActivity, MouseButton, MouseEventType, MsDuration, ScriptMsg,
-    TouchEventType, TouchId, UntrustedNodeAddress, WheelDelta,
+    AnimationState, AnimationTickType, CompositorEvent, DocumentActivity, MouseButton,
+    MouseEventType, MsDuration, ScriptMsg, TouchEventType, TouchId, UntrustedNodeAddress,
+    WheelDelta,
 };
 use servo_arc::Arc;
 use servo_atoms::Atom;
@@ -58,7 +58,6 @@ use servo_url::{ImmutableOrigin, MutableOrigin, ServoUrl};
 use style::attr::AttrValue;
 use style::context::QuirksMode;
 use style::invalidation::element::restyle_hints::RestyleHint;
-use style::media_queries::Device;
 use style::selector_parser::Snapshot;
 use style::shared_lock::SharedRwLock as StyleSharedRwLock;
 use style::str::{split_html_space_chars, str_join};
@@ -447,6 +446,16 @@ pub struct Document {
     dirty_root: MutNullableDom<Element>,
     /// <https://html.spec.whatwg.org/multipage/#will-declaratively-refresh>
     declarative_refresh: DomRefCell<Option<DeclarativeRefresh>>,
+    /// Pending composition events, to be handled at the next rendering opportunity.
+    #[no_trace]
+    #[ignore_malloc_size_of = "CompositorEvent contains data from outside crates"]
+    pending_compositor_events: DomRefCell<Vec<CompositorEvent>>,
+    /// The index of the last mouse move event in the pending compositor events queue.
+    mouse_move_event_index: DomRefCell<Option<usize>>,
+    /// Pending animation ticks, to be handled at the next rendering opportunity.
+    #[no_trace]
+    #[ignore_malloc_size_of = "AnimationTickType contains data from an outside crate"]
+    pending_animation_ticks: DomRefCell<AnimationTickType>,
 }
 
 #[derive(JSTraceable, MallocSizeOf)]
@@ -744,8 +753,10 @@ impl Document {
                 .parent()
                 .and_then(|parent| parent.document())
                 .map(|document| document.base_url());
-            if document_url.as_str() == "about:srcdoc" && container_base_url.is_some() {
-                return container_base_url.unwrap();
+            if document_url.as_str() == "about:srcdoc" {
+                if let Some(base_url) = container_base_url {
+                    return base_url;
+                }
             }
             // Step 2: If document's URL is about:blank, and document's browsing
             // context's creator base URL is non-null, then return that creator base URL.
@@ -839,9 +850,7 @@ impl Document {
         let old_mode = self.quirks_mode.replace(new_mode);
 
         if old_mode != new_mode {
-            let _ = self
-                .window
-                .with_layout(move |layout| layout.process(Msg::SetQuirksMode(new_mode)));
+            self.window.layout_mut().set_quirks_mode(new_mode);
         }
     }
 
@@ -981,21 +990,20 @@ impl Document {
         let point = target
             .as_ref()
             .map(|element| {
-                // FIXME(#8275, pcwalton): This is pretty bogus when multiple layers are involved.
-                // Really what needs to happen is that this needs to go through layout to ask which
-                // layer the element belongs to, and have it send the scroll message to the
-                // compositor.
+                // TODO: This strategy is completely wrong if the element we are scrolling to in
+                // inside other scrollable containers. Ideally this should use an implementation of
+                // `scrollIntoView` when that is available:
+                // See https://github.com/servo/servo/issues/24059.
                 let rect = element.upcast::<Node>().bounding_content_box_or_zero();
 
                 // In order to align with element edges, we snap to unscaled pixel boundaries, since
                 // the paint thread currently does the same for drawing elements. This is important
                 // for pages that require pixel perfect scroll positioning for proper display
-                // (like Acid2). Since we don't have the device pixel ratio here, this might not be
-                // accurate, but should work as long as the ratio is a whole number. Once #8275 is
-                // fixed this should actually take into account the real device pixel ratio.
+                // (like Acid2).
+                let device_pixel_ratio = self.window.device_pixel_ratio().get();
                 (
-                    rect.origin.x.to_nearest_px() as f32,
-                    rect.origin.y.to_nearest_px() as f32,
+                    rect.origin.x.to_nearest_pixel(device_pixel_ratio),
+                    rect.origin.y.to_nearest_pixel(device_pixel_ratio),
                 )
             })
             .or_else(|| {
@@ -1009,16 +1017,8 @@ impl Document {
             });
 
         if let Some((x, y)) = point {
-            // Step 3
-            let global_scope = self.window.upcast::<GlobalScope>();
-            self.window.update_viewport_for_scroll(x, y);
-            self.window.perform_a_scroll(
-                x,
-                y,
-                global_scope.pipeline_id().root_scroll_id(),
-                ScrollBehavior::Instant,
-                target.as_deref(),
-            );
+            self.window
+                .scroll(x as f64, y as f64, ScrollBehavior::Instant)
         }
     }
 
@@ -1225,7 +1225,7 @@ impl Document {
     }
 
     #[allow(unsafe_code)]
-    pub unsafe fn handle_mouse_event(
+    pub unsafe fn handle_mouse_button_event(
         &self,
         button: MouseButton,
         client_point: Point2D<f32>,
@@ -3219,7 +3219,53 @@ impl Document {
             animations: DomRefCell::new(Animations::new()),
             dirty_root: Default::default(),
             declarative_refresh: Default::default(),
+            pending_animation_ticks: Default::default(),
+            pending_compositor_events: Default::default(),
+            mouse_move_event_index: Default::default(),
         }
+    }
+
+    /// Note a pending animation tick, to be processed at the next `update_the_rendering` task.
+    pub fn note_pending_animation_tick(&self, tick_type: AnimationTickType) {
+        self.pending_animation_ticks.borrow_mut().extend(tick_type);
+    }
+
+    /// As part of a `update_the_rendering` task, tick all pending animations.
+    pub fn tick_all_animations(&self) {
+        let tick_type = mem::take(&mut *self.pending_animation_ticks.borrow_mut());
+        if tick_type.contains(AnimationTickType::REQUEST_ANIMATION_FRAME) {
+            self.run_the_animation_frame_callbacks();
+        }
+        if tick_type.contains(AnimationTickType::CSS_ANIMATIONS_AND_TRANSITIONS) {
+            self.maybe_mark_animating_nodes_as_dirty();
+        }
+    }
+
+    /// Note a pending compositor event, to be processed at the next `update_the_rendering` task.
+    pub fn note_pending_compositor_event(&self, event: CompositorEvent) {
+        let mut pending_compositor_events = self.pending_compositor_events.borrow_mut();
+        if matches!(event, CompositorEvent::MouseMoveEvent { .. }) {
+            // First try to replace any existing mouse move event.
+            if let Some(mouse_move_event) = self
+                .mouse_move_event_index
+                .borrow()
+                .and_then(|index| pending_compositor_events.get_mut(index))
+            {
+                *mouse_move_event = event;
+                return;
+            }
+
+            *self.mouse_move_event_index.borrow_mut() = Some(pending_compositor_events.len());
+        }
+
+        pending_compositor_events.push(event);
+    }
+
+    /// Get pending compositor events, for processing within an `update_the_rendering` task.
+    pub fn take_pending_compositor_events(&self) -> Vec<CompositorEvent> {
+        // Reset the mouse event index.
+        *self.mouse_move_event_index.borrow_mut() = None;
+        mem::take(&mut *self.pending_compositor_events.borrow_mut())
     }
 
     pub fn set_csp_list(&self, csp_list: Option<CspList>) {
@@ -3475,16 +3521,6 @@ impl Document {
         let have_changed = stylesheets.has_changed();
         stylesheets.flush_without_invalidation();
         have_changed
-    }
-
-    /// Runs the given closure using the Stylo `Device` suitable for media query evaluation.
-    ///
-    /// TODO: This can just become a getter when each Layout is more strongly associated with
-    /// its given Document and Window.
-    pub fn with_device<T>(&self, call: impl FnOnce(&Device) -> T) -> T {
-        self.window
-            .with_layout(move |layout| call(layout.device()))
-            .unwrap()
     }
 
     pub fn salvageable(&self) -> bool {
@@ -3850,12 +3886,10 @@ impl Document {
 
         let cloned_stylesheet = sheet.clone();
         let insertion_point2 = insertion_point.clone();
-        let _ = self.window.with_layout(move |layout| {
-            layout.add_stylesheet(
-                cloned_stylesheet,
-                insertion_point2.as_ref().map(|s| s.sheet.clone()),
-            );
-        });
+        self.window.layout_mut().add_stylesheet(
+            cloned_stylesheet,
+            insertion_point2.as_ref().map(|s| s.sheet.clone()),
+        );
 
         DocumentOrShadowRoot::add_stylesheet(
             owner,
@@ -3868,18 +3902,18 @@ impl Document {
 
     /// Given a stylesheet, load all web fonts from it in Layout.
     pub fn load_web_fonts_from_stylesheet(&self, stylesheet: Arc<Stylesheet>) {
-        let _ = self.window.with_layout(move |layout| {
-            layout.load_web_fonts_from_stylesheet(stylesheet);
-        });
+        self.window
+            .layout()
+            .load_web_fonts_from_stylesheet(stylesheet);
     }
 
     /// Remove a stylesheet owned by `owner` from the list of document sheets.
     #[allow(crown::unrooted_must_root)] // Owner needs to be rooted already necessarily.
     pub fn remove_stylesheet(&self, owner: &Element, stylesheet: &Arc<Stylesheet>) {
         let cloned_stylesheet = stylesheet.clone();
-        let _ = self
-            .window
-            .with_layout(|layout| layout.remove_stylesheet(cloned_stylesheet));
+        self.window
+            .layout_mut()
+            .remove_stylesheet(cloned_stylesheet);
 
         DocumentOrShadowRoot::remove_stylesheet(
             owner,

@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use egui::{
-    CentralPanel, Color32, Frame, Key, Modifiers, PaintCallback, Pos2, Spinner, TopBottomPanel,
-    Vec2,
+    pos2, CentralPanel, Color32, Frame, Key, Modifiers, PaintCallback, Pos2, Spinner,
+    TopBottomPanel, Vec2,
 };
 use egui_glow::CallbackFn;
 use egui_winit::EventResponse;
@@ -18,11 +18,12 @@ use gleam::gl;
 use glow::NativeFramebuffer;
 use log::{trace, warn};
 use servo::compositing::windowing::EmbedderEvent;
-use servo::msg::constellation_msg::TraversalDirection;
 use servo::rendering_context::RenderingContext;
+use servo::script_traits::TraversalDirection;
 use servo::servo_geometry::DeviceIndependentPixel;
 use servo::servo_url::ServoUrl;
 use servo::style_traits::DevicePixel;
+use winit::event::{ElementState, MouseButton};
 
 use crate::egui_glue::EguiGlow;
 use crate::events_loop::EventsLoop;
@@ -48,6 +49,8 @@ pub struct Minibrowser {
     location_dirty: Cell<bool>,
 
     load_status: LoadStatus,
+
+    status_text: Option<String>,
 }
 
 pub enum MinibrowserEvent {
@@ -61,7 +64,6 @@ impl Minibrowser {
     pub fn new(
         rendering_context: &RenderingContext,
         events_loop: &EventsLoop,
-        window: &dyn WindowPortsMethods,
         initial_url: ServoUrl,
     ) -> Self {
         let gl = unsafe {
@@ -70,10 +72,6 @@ impl Minibrowser {
 
         // Adapted from https://github.com/emilk/egui/blob/9478e50d012c5138551c38cbee16b07bc1fcf283/crates/egui_glow/examples/pure_glow.rs
         let context = EguiGlow::new(events_loop.as_winit(), Arc::new(gl), None);
-        context
-            .egui_ctx
-            .set_pixels_per_point(window.hidpi_factor().get());
-
         let widget_surface_fbo = match rendering_context.context_surface_info() {
             Ok(Some(info)) => NonZeroU32::new(info.framebuffer_object).map(NativeFramebuffer),
             Ok(None) => panic!("Failed to get widget surface info from surfman!"),
@@ -90,14 +88,19 @@ impl Minibrowser {
             location: RefCell::new(initial_url.to_string()),
             location_dirty: false.into(),
             load_status: LoadStatus::LoadComplete,
+            status_text: None,
         }
     }
 
     /// Preprocess the given [winit::event::WindowEvent], returning unconsumed for mouse events in
     /// the Servo browser rect. This is needed because the CentralPanel we create for our webview
     /// would otherwise make egui report events in that area as consumed.
-    pub fn on_event(&mut self, event: &winit::event::WindowEvent<'_>) -> EventResponse {
-        let mut result = self.context.on_event(event);
+    pub fn on_window_event(
+        &mut self,
+        window: &winit::window::Window,
+        event: &winit::event::WindowEvent,
+    ) -> EventResponse {
+        let mut result = self.context.on_window_event(window, event);
         result.consumed &= match event {
             winit::event::WindowEvent::CursorMoved { position, .. } => {
                 let scale = Scale::<_, DeviceIndependentPixel, _>::new(
@@ -107,6 +110,24 @@ impl Minibrowser {
                     Some(winit_position_to_euclid_point(*position).to_f32() / scale);
                 self.last_mouse_position
                     .map_or(false, |p| self.is_in_browser_rect(p))
+            },
+            winit::event::WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Forward,
+                ..
+            } => {
+                self.event_queue
+                    .borrow_mut()
+                    .push(MinibrowserEvent::Forward);
+                true
+            },
+            winit::event::WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Back,
+                ..
+            } => {
+                self.event_queue.borrow_mut().push(MinibrowserEvent::Back);
+                true
             },
             winit::event::WindowEvent::MouseWheel { .. } |
             winit::event::WindowEvent::MouseInput { .. } => self
@@ -217,6 +238,19 @@ impl Minibrowser {
                 return;
             };
             let mut embedder_events = vec![];
+
+            if let Some(status_text) = &self.status_text {
+                let position = Some(pos2(0.0, ctx.available_rect().max.y));
+                egui::containers::popup::show_tooltip_at(
+                    ctx,
+                    "tooltip_for_status_text".into(),
+                    position,
+                    |ui| {
+                        ui.label(status_text.clone());
+                    },
+                );
+            }
+
             CentralPanel::default()
                 .frame(Frame::none())
                 .show(ctx, |ui| {
@@ -371,6 +405,15 @@ impl Minibrowser {
         need_update
     }
 
+    pub fn update_status_text(
+        &mut self,
+        browser: &mut WebViewManager<dyn WindowPortsMethods>,
+    ) -> bool {
+        let need_update = browser.status_text() != self.status_text;
+        self.status_text = browser.status_text();
+        need_update
+    }
+
     /// Updates all fields taken from the given [WebViewManager], such as the location field.
     /// Returns true iff the egui needs an update.
     pub fn update_webview_data(
@@ -381,6 +424,8 @@ impl Minibrowser {
         //       because logical OR would short-circuit if any of the functions return true.
         //       We want to ensure that all functions are called. The "bitwise OR" operator
         //       does not short-circuit.
-        self.update_location_in_toolbar(browser) | self.update_spinner_in_toolbar(browser)
+        self.update_location_in_toolbar(browser) |
+            self.update_spinner_in_toolbar(browser) |
+            self.update_status_text(browser)
     }
 }

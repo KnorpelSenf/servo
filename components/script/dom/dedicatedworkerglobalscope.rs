@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
+use base::id::{BrowsingContextId, PipelineId, TopLevelBrowsingContextId};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use devtools_traits::DevtoolScriptControlMsg;
 use dom_struct::dom_struct;
@@ -15,7 +16,6 @@ use ipc_channel::router::ROUTER;
 use js::jsapi::{Heap, JSContext, JSObject, JS_AddInterruptCallback};
 use js::jsval::UndefinedValue;
 use js::rust::{CustomAutoRooter, CustomAutoRooterGuard, HandleValue};
-use msg::constellation_msg::{BrowsingContextId, PipelineId, TopLevelBrowsingContextId};
 use net_traits::image_cache::ImageCache;
 use net_traits::request::{
     CredentialsMode, Destination, ParserMetadata, Referrer, RequestBuilder, RequestMode,
@@ -219,15 +219,15 @@ impl WorkerEventLoopMethods for DedicatedWorkerGlobalScope {
         Some(ar)
     }
 
-    fn from_control_msg(&self, msg: DedicatedWorkerControlMsg) -> MixedMessage {
+    fn from_control_msg(msg: DedicatedWorkerControlMsg) -> MixedMessage {
         MixedMessage::Control(msg)
     }
 
-    fn from_worker_msg(&self, msg: DedicatedWorkerScriptMsg) -> MixedMessage {
+    fn from_worker_msg(msg: DedicatedWorkerScriptMsg) -> MixedMessage {
         MixedMessage::Worker(msg)
     }
 
-    fn from_devtools_msg(&self, msg: DevtoolScriptControlMsg) -> MixedMessage {
+    fn from_devtools_msg(msg: DevtoolScriptControlMsg) -> MixedMessage {
         MixedMessage::Devtools(msg)
     }
 

@@ -77,10 +77,12 @@ use gfx::font::FontMetrics;
 use gfx::text::glyph::GlyphStore;
 use serde::Serialize;
 use servo_arc::Arc;
+use style::computed_values::text_wrap_mode::T as TextWrapMode;
 use style::computed_values::vertical_align::T as VerticalAlign;
-use style::computed_values::white_space::T as WhiteSpace;
+use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
 use style::context::QuirksMode;
 use style::logical_geometry::WritingMode;
+use style::properties::style_structs::InheritedText;
 use style::properties::ComputedValues;
 use style::values::computed::{Clear, Length};
 use style::values::generics::box_::VerticalAlignKeyword;
@@ -659,11 +661,17 @@ pub(super) struct InlineFormattingContextState<'a, 'b> {
     /// Whether or not this InlineFormattingContext has processed any in flow content at all.
     had_inflow_content: bool,
 
-    /// The currently white-space setting of this line. This is stored on the
+    /// The currently white-space-collapse setting of this line. This is stored on the
     /// [`InlineFormattingContextState`] because when a soft wrap opportunity is defined
-    /// by the boundary between two characters, the white-space property of their nearest
+    /// by the boundary between two characters, the white-space-collapse property of their
+    /// nearest common ancestor is used.
+    white_space_collapse: WhiteSpaceCollapse,
+
+    /// The currently text-wrap-mode setting of this line. This is stored on the
+    /// [`InlineFormattingContextState`] because when a soft wrap opportunity is defined
+    /// by the boundary between two characters, the text-wrap-mode property of their nearest
     /// common ancestor is used.
-    white_space: WhiteSpace,
+    text_wrap_mode: TextWrapMode,
 
     /// The offset of the first and last baselines in the inline formatting context that we
     /// are laying out. This is used to propagate baselines to the ancestors of
@@ -697,7 +705,9 @@ impl<'a, 'b> InlineFormattingContextState<'a, 'b> {
             Some(inline_box_state) => &inline_box_state.base.style,
             None => self.containing_block.style,
         };
-        self.white_space = style.get_inherited_text().white_space;
+        let style_text = style.get_inherited_text();
+        self.white_space_collapse = style_text.white_space_collapse;
+        self.text_wrap_mode = style_text.text_wrap_mode;
     }
 
     fn processing_br_element(&self) -> bool {
@@ -745,11 +755,10 @@ impl<'a, 'b> InlineFormattingContextState<'a, 'b> {
         if inline_box_state
             .base_fragment_info
             .flags
-            .contains(FragmentFlags::IS_BR_ELEMENT)
+            .contains(FragmentFlags::IS_BR_ELEMENT) &&
+            self.deferred_br_clear == Clear::None
         {
-            if self.deferred_br_clear == Clear::None {
-                self.deferred_br_clear = inline_box_state.base.style.clone_clear();
-            }
+            self.deferred_br_clear = inline_box_state.base.style.clone_clear();
         }
 
         let line_item = inline_box_state
@@ -1287,7 +1296,7 @@ impl<'a, 'b> InlineFormattingContextState<'a, 'b> {
     ) {
         let inline_advance = Length::from(glyph_store.total_advance());
         let flags = if glyph_store.is_whitespace() {
-            SegmentContentFlags::from(text_run.parent_style.get_inherited_text().white_space)
+            SegmentContentFlags::from(text_run.parent_style.get_inherited_text())
         } else {
             SegmentContentFlags::empty()
         };
@@ -1308,8 +1317,11 @@ impl<'a, 'b> InlineFormattingContextState<'a, 'b> {
                 &container_state.style,
                 self.inline_box_state_stack.last().map(|c| &c.base),
             );
-            let mut block_size =
-                container_state.get_block_size_contribution(vertical_align, &font_metrics);
+            let mut block_size = container_state.get_block_size_contribution(
+                vertical_align,
+                &font_metrics,
+                &container_state.font_metrics,
+            );
             block_size.adjust_for_baseline_offset(container_state.baseline_offset);
             block_size
         } else if quirks_mode && !flags.is_collapsible_whitespace() {
@@ -1395,7 +1407,7 @@ impl<'a, 'b> InlineFormattingContextState<'a, 'b> {
         if self.current_line_segment.line_items.is_empty() {
             return;
         }
-        if !self.white_space.allow_wrap() {
+        if self.text_wrap_mode == TextWrapMode::Nowrap {
             return;
         }
 
@@ -1499,13 +1511,13 @@ impl SegmentContentFlags {
     }
 }
 
-impl From<WhiteSpace> for SegmentContentFlags {
-    fn from(white_space: WhiteSpace) -> Self {
+impl From<&InheritedText> for SegmentContentFlags {
+    fn from(style_text: &InheritedText) -> Self {
         let mut flags = Self::empty();
-        if !white_space.preserve_spaces() {
+        if style_text.white_space_collapse != WhiteSpaceCollapse::Preserve {
             flags.insert(Self::COLLAPSIBLE_WHITESPACE);
         }
-        if white_space.allow_wrap() {
+        if style_text.text_wrap_mode == TextWrapMode::Wrap {
             flags.insert(Self::WRAPPABLE_WHITESPACE);
         }
         flags
@@ -1629,11 +1641,11 @@ impl InlineFormattingContext {
 
         // It's unfortunate that it isn't possible to get this during IFC text processing, but in
         // that situation the style of the containing block is unknown.
-        let default_font_metrics = layout_context.with_font_context(|font_context| {
-            get_font_for_first_font_for_style(style, font_context)
-                .map(|font| font.borrow().metrics.clone())
-        });
+        let default_font_metrics =
+            get_font_for_first_font_for_style(style, &layout_context.font_context)
+                .map(|font| font.metrics.clone());
 
+        let style_text = containing_block.style.get_inherited_text();
         let mut ifc = InlineFormattingContextState {
             positioning_context,
             containing_block,
@@ -1659,7 +1671,8 @@ impl InlineFormattingContext {
             have_deferred_soft_wrap_opportunity: false,
             prevent_soft_wrap_opportunity_before_next_atomic: false,
             had_inflow_content: false,
-            white_space: containing_block.style.get_inherited_text().white_space,
+            white_space_collapse: style_text.white_space_collapse,
+            text_wrap_mode: style_text.text_wrap_mode,
             baselines: Baselines::default(),
         };
 
@@ -1757,34 +1770,30 @@ impl InlineFormattingContext {
         // For the purposes of `text-transform: capitalize` the start of the IFC is a word boundary.
         let mut on_word_boundary = true;
 
-        layout_context.with_font_context(|font_context| {
-            let mut linebreaker = None;
-            self.foreach(|iter_item| match iter_item {
-                InlineFormattingContextIterItem::Item(InlineLevelBox::TextRun(
-                    ref mut text_run,
-                )) => {
-                    text_run.break_and_shape(
-                        font_context,
-                        &mut linebreaker,
-                        &mut ifc_fonts,
-                        &mut last_inline_box_ended_with_white_space,
-                        &mut on_word_boundary,
-                    );
-                },
-                InlineFormattingContextIterItem::Item(InlineLevelBox::InlineBox(inline_box)) => {
-                    if let Some(font) =
-                        get_font_for_first_font_for_style(&inline_box.style, font_context)
-                    {
-                        inline_box.default_font_index =
-                            Some(add_or_get_font(&font, &mut ifc_fonts));
-                    }
-                },
-                InlineFormattingContextIterItem::Item(InlineLevelBox::Atomic(_)) => {
-                    last_inline_box_ended_with_white_space = false;
-                    on_word_boundary = true;
-                },
-                _ => {},
-            });
+        let mut linebreaker = None;
+        self.foreach(|iter_item| match iter_item {
+            InlineFormattingContextIterItem::Item(InlineLevelBox::TextRun(ref mut text_run)) => {
+                text_run.break_and_shape(
+                    &layout_context.font_context,
+                    &mut linebreaker,
+                    &mut ifc_fonts,
+                    &mut last_inline_box_ended_with_white_space,
+                    &mut on_word_boundary,
+                );
+            },
+            InlineFormattingContextIterItem::Item(InlineLevelBox::InlineBox(inline_box)) => {
+                if let Some(font) = get_font_for_first_font_for_style(
+                    &inline_box.style,
+                    &layout_context.font_context,
+                ) {
+                    inline_box.default_font_index = Some(add_or_get_font(&font, &mut ifc_fonts));
+                }
+            },
+            InlineFormattingContextIterItem::Item(InlineLevelBox::Atomic(_)) => {
+                last_inline_box_ended_with_white_space = false;
+                on_word_boundary = true;
+            },
+            _ => {},
         });
 
         self.font_metrics = ifc_fonts;
@@ -1807,6 +1816,7 @@ impl InlineContainerState {
         let mut strut_block_sizes = Self::get_block_sizes_with_style(
             effective_vertical_align(&style, parent_container),
             &style,
+            &font_metrics,
             &font_metrics,
             line_height,
         );
@@ -1842,6 +1852,7 @@ impl InlineContainerState {
         vertical_align: VerticalAlign,
         style: &ComputedValues,
         font_metrics: &FontMetrics,
+        font_metrics_of_first_font: &FontMetrics,
         line_height: Length,
     ) -> LineBlockSizes {
         if !is_baseline_relative(vertical_align) {
@@ -1890,6 +1901,8 @@ impl InlineContainerState {
         // considering with other zero line height boxes that converge on other block axis
         // locations when using the above formula.
         if style.get_font().line_height != LineHeight::Normal {
+            ascent = font_metrics_of_first_font.ascent;
+            descent = font_metrics_of_first_font.descent;
             let half_leading =
                 (Au::from_f32_px(line_height.px()) - (ascent + descent)).scale_by(0.5);
             ascent += half_leading;
@@ -1907,11 +1920,13 @@ impl InlineContainerState {
         &self,
         vertical_align: VerticalAlign,
         font_metrics: &FontMetrics,
+        font_metrics_of_first_font: &FontMetrics,
     ) -> LineBlockSizes {
         Self::get_block_sizes_with_style(
             vertical_align,
             &self.style,
             font_metrics,
+            font_metrics_of_first_font,
             line_height(&self.style, font_metrics),
         )
     }
@@ -1921,8 +1936,11 @@ impl InlineContainerState {
         child_vertical_align: VerticalAlign,
         child_block_size: &LineBlockSizes,
     ) -> Au {
-        let block_size =
-            self.get_block_size_contribution(child_vertical_align.clone(), &self.font_metrics);
+        let block_size = self.get_block_size_contribution(
+            child_vertical_align.clone(),
+            &self.font_metrics,
+            &self.font_metrics,
+        );
         self.baseline_offset +
             match child_vertical_align {
                 // `top` and `bottom are not actually relative to the baseline, but this value is unused
@@ -2144,7 +2162,7 @@ impl IndependentFormattingContext {
             &mut ifc.prevent_soft_wrap_opportunity_before_next_atomic,
             false,
         );
-        if ifc.white_space.allow_wrap() && !soft_wrap_opportunity_prevented {
+        if ifc.text_wrap_mode == TextWrapMode::Wrap && !soft_wrap_opportunity_prevented {
             ifc.process_soft_wrap_opportunity();
         }
 
@@ -2398,16 +2416,15 @@ impl<'a> ContentSizesComputation<'a> {
                         if run.glyph_store.is_whitespace() {
                             // If this run is a forced line break, we *must* break the line
                             // and start measuring from the inline origin once more.
-                            if text_run.glyph_run_is_preserved_newline(run) {
+                            if text_run.glyph_run_is_preserved_newline(segment, run) {
                                 self.forced_line_break();
                                 self.current_line = ContentSizes::zero();
                                 continue;
                             }
 
-                            let white_space =
-                                text_run.parent_style.get_inherited_text().white_space;
-                            if !white_space.preserve_spaces() {
-                                // TODO: need to handle !white_space.allow_wrap().
+                            let style_text = text_run.parent_style.get_inherited_text();
+                            if style_text.white_space_collapse != WhiteSpaceCollapse::Preserve {
+                                // TODO: need to handle TextWrapMode::Nowrap.
                                 self.line_break_opportunity();
                                 // Discard any leading whitespace in the line. This will always be trimmed.
                                 if self.had_content_yet {
@@ -2417,7 +2434,7 @@ impl<'a> ContentSizesComputation<'a> {
                                 }
                                 continue;
                             }
-                            if white_space.allow_wrap() {
+                            if style_text.text_wrap_mode == TextWrapMode::Wrap {
                                 self.commit_pending_whitespace();
                                 self.line_break_opportunity();
                                 self.current_line.max_content += advance;

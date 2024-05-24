@@ -51,18 +51,13 @@ use crate::script_runtime::JSContext;
 use crate::script_thread::ScriptThread;
 
 /// <https://dom.spec.whatwg.org/#concept-element-custom-element-state>
-#[derive(Clone, Copy, Eq, JSTraceable, MallocSizeOf, PartialEq)]
+#[derive(Clone, Copy, Default, Eq, JSTraceable, MallocSizeOf, PartialEq)]
 pub enum CustomElementState {
     Undefined,
     Failed,
+    #[default]
     Uncustomized,
     Custom,
-}
-
-impl Default for CustomElementState {
-    fn default() -> CustomElementState {
-        CustomElementState::Uncustomized
-    }
 }
 
 /// <https://html.spec.whatwg.org/multipage/#customelementregistry>
@@ -489,12 +484,11 @@ impl CustomElementRegistryMethods for CustomElementRegistry {
         if form_associated {
             let _ac = JSAutoRealm::new(*cx, proto_object.get());
             unsafe {
-                match self.add_form_associated_callbacks(proto_object.handle(), &mut callbacks) {
-                    Err(error) => {
-                        self.element_definition_is_running.set(false);
-                        return Err(error);
-                    },
-                    Ok(()) => {},
+                if let Err(error) =
+                    self.add_form_associated_callbacks(proto_object.handle(), &mut callbacks)
+                {
+                    self.element_definition_is_running.set(false);
+                    return Err(error);
                 }
             }
         }
@@ -678,6 +672,7 @@ pub struct CustomElementDefinition {
 }
 
 impl CustomElementDefinition {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         name: LocalName,
         local_name: LocalName,

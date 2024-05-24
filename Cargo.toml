@@ -16,7 +16,9 @@ app_units = "0.7"
 arrayvec = "0.7"
 async-tungstenite = { version = "0.23", features = ["tokio-rustls-webpki-roots"] }
 atomic_refcell = "0.1.13"
+background_hang_monitor_api = { path = "components/shared/background_hang_monitor" }
 backtrace = "0.3"
+base = { path = "components/shared/base" }
 base64 = "0.21.7"
 bitflags = "2.5"
 bluetooth_traits = { path = "components/shared/bluetooth" }
@@ -27,7 +29,7 @@ compositing_traits = { path = "components/shared/compositing" }
 content-security-policy = { version = "0.5", features = ["serde"] }
 cookie = "0.12"
 crossbeam-channel = "0.5"
-cssparser = { version = "0.33", features = ["serde"], git = "https://github.com/servo/rust-cssparser/", rev = "aaa966d9d6ae70c4b8a62bb5e3a14c068bb7dff0" }
+cssparser = { version = "0.33", features = ["serde"], git = "https://github.com/servo/rust-cssparser", rev = "aaa966d9d6ae70c4b8a62bb5e3a14c068bb7dff0" }
 darling = { version = "0.20", default-features = false }
 data-url = "0.1.0"
 devtools_traits = { path = "components/shared/devtools" }
@@ -36,6 +38,7 @@ encoding_rs = "0.8"
 env_logger = "0.10"
 euclid = "0.22"
 fnv = "1.0"
+freetype-sys = "0.20"
 fxhash = "0.2"
 getopts = "0.2.11"
 gfx_traits = { path = "components/shared/gfx" }
@@ -44,12 +47,11 @@ glib = "0.19"
 gstreamer = { version = "0.22", features = ["v1_18"] }
 gstreamer-base = "0.22"
 gstreamer-gl = "0.22"
-gstreamer-gl-sys = { version = "0.22" }
-gstreamer-gl-wayland = { version = "0.22" }
+gstreamer-gl-sys = "0.22"
 gstreamer-sys = "0.22"
 gstreamer-video = "0.22"
 headers = "0.3"
-html5ever = "0.26"
+html5ever = "0.27"
 http = "0.2"
 hyper = "0.14"
 hyper-rustls = { version = "0.24", default-features = false, features = ["acceptor", "http1", "http2", "logging", "tls12", "webpki-tokio"] }
@@ -59,21 +61,20 @@ imsz = "0.2"
 indexmap = { version = "2.2.6", features = ["std"] }
 ipc-channel = "0.18"
 itertools = "0.12"
-jemallocator = "0.5.4"
 jemalloc-sys = "0.5.4"
-keyboard-types = "0.6"
+jemallocator = "0.5.4"
+keyboard-types = "0.7"
 lazy_static = "1.4"
 libc = "0.2"
 log = "0.4"
-malloc_size_of = { git = "https://github.com/servo/stylo", branch = "2024-03-01", features = ["servo"] }
+malloc_size_of = { git = "https://github.com/servo/stylo", branch = "2024-04-16", features = ["servo"] }
 malloc_size_of_derive = "0.1"
 mime = "0.3.13"
 mime_guess = "2.0.3"
 mozangle = "0.5.1"
-msg = { path = "components/shared/msg" }
 net_traits = { path = "components/shared/net" }
-num_cpus = "1.1.0"
 num-traits = "0.2"
+num_cpus = "1.1.0"
 parking_lot = "0.12"
 percent-encoding = "2.3"
 proc-macro2 = "1"
@@ -84,54 +85,55 @@ rand_core = "0.6"
 rand_isaac = "0.3"
 rayon = "1"
 regex = "1.10"
-rustls = { version = "0.21.10", features = ["dangerous_configuration"] }
+rustls = { version = "0.21.12", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0.4"
 script = { path = "components/script" }
 script_traits = { path = "components/shared/script" }
-selectors = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-serde = "1.0.198"
+selectors = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+serde = "1.0.202"
 serde_bytes = "0.11"
 serde_json = "1.0"
 servo-media = { git = "https://github.com/servo/media" }
 servo-media-dummy = { git = "https://github.com/servo/media" }
 servo-media-gstreamer = { git = "https://github.com/servo/media" }
-servo_arc = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-servo_atoms = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-size_of_test = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
+servo_arc = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+servo_atoms = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+size_of_test = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
 smallbitvec = "2.5.3"
 smallvec = "1.13"
 sparkle = "0.1.26"
 string_cache = "0.8"
 string_cache_codegen = "0.5"
-style = { git = "https://github.com/servo/stylo", branch = "2024-03-01", features = ["servo"] }
-style_config = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-style_traits = { git = "https://github.com/servo/stylo", branch = "2024-03-01", features = ["servo"] }
+style = { git = "https://github.com/servo/stylo", branch = "2024-04-16", features = ["servo"] }
+style_config = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+style_traits = { git = "https://github.com/servo/stylo", branch = "2024-04-16", features = ["servo"] }
 # NOTE: the sm-angle feature only enables ANGLE on Windows, not other platforms!
 surfman = { version = "0.9", features = ["chains", "sm-angle", "sm-angle-default"] }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 thin-vec = "0.2.13"
 time = "0.1.41"
-to_shmem = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
+to_shmem = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
 tokio = "1"
 tokio-rustls = "0.24"
 tungstenite = "0.20"
+uluru = "3.0"
 unicode-bidi = "0.3.15"
+unicode-properties = { version = "0.1.1", features = ["emoji"] }
 unicode-script = "0.5"
 unicode-segmentation = "1.1.0"
 url = "2.5"
 uuid = { version = "1.8.0", features = ["v4"] }
 webdriver = "0.49.0"
-webpki = "0.22"
 webpki-roots = "0.25"
 webrender = { git = "https://github.com/servo/webrender", branch = "0.64", features = ["capture"] }
 webrender_api = { git = "https://github.com/servo/webrender", branch = "0.64" }
 webrender_traits = { path = "components/shared/webrender" }
-wgpu-core = "0.18"
-wgpu-types = "0.18"
+wgpu-core = { git = "https://github.com/gfx-rs/wgpu", rev = "d0a5e48aa7e84683114c3870051cc414ae92ac03" }
+wgpu-types = { git = "https://github.com/gfx-rs/wgpu", rev = "d0a5e48aa7e84683114c3870051cc414ae92ac03" }
 winapi = "0.3"
 xi-unicode = "0.1.0"
-xml5ever = "0.17"
+xml5ever = "0.18"
 
 [profile.release]
 opt-level = 3
@@ -160,13 +162,13 @@ debug-assertions = false
 # servo_atoms = { path = "../stylo/atoms" }
 # size_of_test = { path = "../stylo/size_of_test" }
 # static_prefs = { path = "../stylo/style_static_prefs" }
+# style = { path = "../stylo/style" }
 # style_config = { path = "../stylo/style_config" }
 # style_derive = { path = "../stylo/style_derive" }
-# style = { path = "../stylo/style" }
 # style_traits = { path = "../stylo/style_traits" }
 # to_shmem = { path = "../stylo/to_shmem" }
 #
-# Or for another git dependency:
+# Or for another Git dependency:
 #
 # [patch."https://github.com/servo/<repository>"]
 # <crate> = { path = "/path/to/local/checkout" }

@@ -7,11 +7,11 @@ use std::num::NonZeroU32;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
+use base::id::{BlobId, BlobIndex, PipelineNamespaceId};
 use dom_struct::dom_struct;
 use encoding_rs::UTF_8;
 use js::jsapi::JSObject;
 use js::rust::HandleObject;
-use msg::constellation_msg::{BlobId, BlobIndex, PipelineNamespaceId};
 use net_traits::filemanager_thread::RelativePos;
 use script_traits::serializable::BlobImpl;
 use uuid::Uuid;
@@ -197,18 +197,18 @@ pub fn blob_parts_to_bytes(
     let mut ret = vec![];
     for blobpart in &mut blobparts {
         match blobpart {
-            &mut ArrayBufferOrArrayBufferViewOrBlobOrString::String(ref s) => {
+            ArrayBufferOrArrayBufferViewOrBlobOrString::String(s) => {
                 ret.extend(s.as_bytes());
             },
-            &mut ArrayBufferOrArrayBufferViewOrBlobOrString::Blob(ref b) => {
+            ArrayBufferOrArrayBufferViewOrBlobOrString::Blob(b) => {
                 let bytes = b.get_bytes().unwrap_or(vec![]);
                 ret.extend(bytes);
             },
-            &mut ArrayBufferOrArrayBufferViewOrBlobOrString::ArrayBuffer(ref mut a) => unsafe {
+            ArrayBufferOrArrayBufferViewOrBlobOrString::ArrayBuffer(a) => unsafe {
                 let bytes = a.as_slice();
                 ret.extend(bytes);
             },
-            &mut ArrayBufferOrArrayBufferViewOrBlobOrString::ArrayBufferView(ref mut a) => unsafe {
+            ArrayBufferOrArrayBufferViewOrBlobOrString::ArrayBufferView(a) => unsafe {
                 let bytes = a.as_slice();
                 ret.extend(bytes);
             },

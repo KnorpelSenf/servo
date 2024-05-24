@@ -5,14 +5,13 @@
 use std::cell::{OnceCell, RefCell};
 use std::sync::Arc;
 
+use base::id::BrowsingContextId;
+use base::WebRenderEpochToU16;
 use embedder_traits::Cursor;
 use euclid::{Point2D, SideOffsets2D, Size2D};
 use fnv::FnvHashMap;
 use gfx::text::glyph::GlyphStore;
-use gfx_traits::WebRenderEpochToU16;
-use msg::constellation_msg::BrowsingContextId;
 use net_traits::image_cache::UsePlaceholder;
-use script_traits::compositor::{CompositorDisplayListInfo, ScrollSensitivity, ScrollTreeNodeId};
 use servo_geometry::MaxRect;
 use style::color::{AbsoluteColor, ColorSpace};
 use style::computed_values::text_decoration_style::T as ComputedTextDecorationStyle;
@@ -24,13 +23,16 @@ use style::values::specified::text::TextDecorationLine;
 use style::values::specified::ui::CursorKind;
 use style_traits::CSSPixel;
 use webrender_api::{self as wr, units, BoxShadowClipMode, ClipChainId};
+use webrender_traits::display_list::{
+    CompositorDisplayListInfo, ScrollSensitivity, ScrollTreeNodeId,
+};
 use wr::units::LayoutVector2D;
 
 use crate::context::LayoutContext;
 use crate::display_list::conversions::ToWebRender;
 use crate::display_list::stacking_context::StackingContextSection;
 use crate::fragment_tree::{
-    BackgroundMode, BoxFragment, Fragment, FragmentTree, Tag, TextFragment,
+    BackgroundMode, BoxFragment, Fragment, FragmentFlags, FragmentTree, Tag, TextFragment,
 };
 use crate::geom::{LogicalRect, PhysicalPoint, PhysicalRect};
 use crate::replaced::IntrinsicSizes;
@@ -629,6 +631,14 @@ impl<'a> BuilderForBoxFragment<'a> {
             self.build_outline(builder);
         } else {
             self.build_hit_test(builder);
+            if self
+                .fragment
+                .base
+                .flags
+                .contains(FragmentFlags::DO_NOT_PAINT)
+            {
+                return;
+            }
             self.build_background(builder);
             self.build_box_shadow(builder);
             self.build_border(builder);

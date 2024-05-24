@@ -5,10 +5,10 @@
 use std::sync::Arc;
 
 use app_units::Au;
+use base::id::{BrowsingContextId, PipelineId};
+use base::print_tree::PrintTree;
 use gfx::font::FontMetrics;
 use gfx::text::glyph::GlyphStore;
-use gfx_traits::print_tree::PrintTree;
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use serde::Serialize;
 use servo_arc::Arc as ServoArc;
 use style::properties::ComputedValues;
@@ -46,11 +46,6 @@ pub(crate) enum Fragment {
     Text(TextFragment),
     Image(ImageFragment),
     IFrame(IFrameFragment),
-}
-
-#[derive(Serialize)]
-pub(crate) struct FloatFragment {
-    pub box_fragment: BoxFragment,
 }
 
 #[derive(Serialize)]

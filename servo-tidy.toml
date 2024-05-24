@@ -34,7 +34,6 @@ packages = [
 
     # New versions of these dependencies is pulled in by GStreamer / GLib.
     "itertools",
-    "proc-macro-crate",
     "toml",
 
     # Duplicated by winit.
@@ -65,13 +64,8 @@ packages = [
 
     # Stylo uses phf 0.11, while script and other dependencies use 0.10.
     "phf",
-    "phf_codegen",
     "phf_generator",
     "phf_shared",
-
-    # These can be removed once winit, font-kit, etc are upgraded
-    "core-graphics",
-    "core-text",
 ]
 # Files that are ignored for all tidy and lint checks.
 files = [

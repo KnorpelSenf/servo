@@ -78,7 +78,6 @@ impl Tokenizer {
         Tokenizer { inner }
     }
 
-    #[must_use]
     pub fn feed(&mut self, input: &mut BufferQueue) -> TokenizerResult<DomRoot<HTMLScriptElement>> {
         match self.inner.feed(input) {
             TokenizerResult::Done => TokenizerResult::Done,
@@ -202,7 +201,7 @@ impl Iterator for SerializationIterator {
         if let Some(SerializationCommand::OpenElement(ref e)) = res {
             self.stack
                 .push(SerializationCommand::CloseElement(e.clone()));
-            for c in rev_children_iter(&*e.upcast::<Node>()) {
+            for c in rev_children_iter(e.upcast::<Node>()) {
                 self.push_node(&c);
             }
         }

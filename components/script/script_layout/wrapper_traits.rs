@@ -9,10 +9,10 @@ use std::fmt::Debug;
 use std::sync::Arc as StdArc;
 
 use atomic_refcell::AtomicRef;
-use gfx_traits::{ByteIndex, FragmentType};
+use base::id::{BrowsingContextId, PipelineId};
+use gfx_traits::ByteIndex;
 use html5ever::{local_name, namespace_url, ns, LocalName, Namespace};
-use msg::constellation_msg::{BrowsingContextId, PipelineId};
-use net_traits::image::base::{Image, ImageMetadata};
+use pixels::{Image, ImageMetadata};
 use range::Range;
 use servo_arc::Arc;
 use servo_url::ServoUrl;
@@ -24,8 +24,9 @@ use style::properties::ComputedValues;
 use style::selector_parser::{PseudoElement, PseudoElementCascadeType, SelectorImpl};
 use style::stylist::RuleInclusion;
 
-use crate::script_layout::{
-    GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutNodeType, SVGSVGData, StyleData,
+use crate::{
+    FragmentType, GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutNodeType, SVGSVGData,
+    StyleData,
 };
 
 pub trait LayoutDataTrait: Default + Send + Sync + 'static {}

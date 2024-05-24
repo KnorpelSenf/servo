@@ -6,8 +6,7 @@ use std::cell::Cell;
 use std::string::String;
 
 use dom_struct::dom_struct;
-use webgpu::identity::WebGPUOpResult;
-use webgpu::wgpu::resource;
+use webgpu::wgc::resource;
 use webgpu::{wgt, WebGPU, WebGPURequest, WebGPUTexture, WebGPUTextureView};
 
 use crate::dom::bindings::cell::DomRefCell;
@@ -109,7 +108,19 @@ impl GPUTexture {
 
 impl Drop for GPUTexture {
     fn drop(&mut self) {
-        self.Destroy()
+        if self.destroyed.get() {
+            return;
+        }
+        if let Err(e) = self
+            .channel
+            .0
+            .send(WebGPURequest::DropTexture(self.texture.0))
+        {
+            warn!(
+                "Failed to send WebGPURequest::DropTexture({:?}) ({})",
+                self.texture.0, e
+            );
+        };
     }
 }
 
@@ -132,8 +143,6 @@ impl GPUTextureMethods for GPUTexture {
 
     /// <https://gpuweb.github.io/gpuweb/#dom-gputexture-createview>
     fn CreateView(&self, descriptor: &GPUTextureViewDescriptor) -> DomRoot<GPUTextureView> {
-        let scope_id = self.device.use_current_scope();
-
         let desc = if !matches!(descriptor.mipLevelCount, Some(0)) &&
             !matches!(descriptor.arrayLayerCount, Some(0))
         {
@@ -154,12 +163,10 @@ impl GPUTextureMethods for GPUTexture {
                 },
             })
         } else {
-            self.device.handle_server_msg(
-                scope_id,
-                WebGPUOpResult::ValidationError(String::from(
+            self.device
+                .dispatch_error(webgpu::Error::Validation(String::from(
                     "arrayLayerCount and mipLevelCount cannot be 0",
-                )),
-            );
+                )));
             None
         };
 
@@ -171,21 +178,19 @@ impl GPUTextureMethods for GPUTexture {
 
         self.channel
             .0
-            .send((
-                scope_id,
-                WebGPURequest::CreateTextureView {
-                    texture_id: self.texture.0,
-                    texture_view_id,
-                    device_id: self.device.id().0,
-                    descriptor: desc,
-                },
-            ))
+            .send(WebGPURequest::CreateTextureView {
+                texture_id: self.texture.0,
+                texture_view_id,
+                device_id: self.device.id().0,
+                descriptor: desc,
+            })
             .expect("Failed to create WebGPU texture view");
 
         let texture_view = WebGPUTextureView(texture_view_id);
 
         GPUTextureView::new(
             &self.global(),
+            self.channel.clone(),
             texture_view,
             self,
             descriptor.parent.label.clone().unwrap_or_default(),
@@ -197,11 +202,10 @@ impl GPUTextureMethods for GPUTexture {
         if self.destroyed.get() {
             return;
         }
-        if let Err(e) = self
-            .channel
-            .0
-            .send((None, WebGPURequest::DestroyTexture(self.texture.0)))
-        {
+        if let Err(e) = self.channel.0.send(WebGPURequest::DestroyTexture {
+            device_id: self.device.id().0,
+            texture_id: self.texture.0,
+        }) {
             warn!(
                 "Failed to send WebGPURequest::DestroyTexture({:?}) ({})",
                 self.texture.0, e
