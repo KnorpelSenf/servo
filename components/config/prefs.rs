@@ -206,6 +206,8 @@ mod gen {
                 webgpu: {
                     /// Enable WebGPU APIs.
                     enabled: bool,
+                    /// List of comma-separated backends to be used by wgpu
+                    wgpu_backend: String,
                 },
                 bluetooth: {
                     enabled: bool,
@@ -265,6 +267,9 @@ mod gen {
                     testing: {
                         allowed_in_nonsecure_contexts: bool,
                     }
+                },
+                resize_observer: {
+                    enabled: bool,
                 },
                 script: {
                     asynch: bool,
@@ -545,6 +550,9 @@ mod gen {
                 http_cache: {
                     #[serde(rename = "network.http-cache.disabled")]
                     disabled: bool,
+                },
+                local_directory_listing: {
+                    enabled: bool,
                 },
                 mime: {
                     sniff: bool,

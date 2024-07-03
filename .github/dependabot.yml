@@ -8,6 +8,13 @@ updates:
   allow:
   - dependency-type: direct
   - dependency-type: indirect
+  groups:
+    gstreamer-related:
+       patterns:
+         - "gio*"
+         - "glib*"
+         - "gobject*"
+         - "gstreamer*"
   ignore:
   # Ignore all stylo crates as their upgrades are coordinated via companion PRs.
   - dependency-name: servo_atoms

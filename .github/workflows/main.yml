@@ -35,7 +35,7 @@ jobs:
     uses: ./.github/workflows/linux.yml
     with:
       unit-tests: true
-      wpt-layout: ${{ github.event_name == 'pull_request' && 'none' || 'all' }}
+      wpt-layout: ${{ github.event_name == 'pull_request' && 'none' || '2020' }}
     secrets: inherit
 
   build-android:
@@ -45,6 +45,13 @@ jobs:
     with:
       profile: "release"
     secrets: inherit
+
+  build-ohos:
+    name: OpenHarmony
+    if: ${{ github.event_name != 'pull_request' }}
+    uses: ./.github/workflows/ohos.yml
+    with:
+      profile: "release"
 
   build-result:
     name: Result
@@ -56,6 +63,7 @@ jobs:
       - "build-mac"
       - "build-linux"
       - "build-android"
+      - "build-ohos"
     steps:
       - name: Merge build timings
         uses: actions/upload-artifact/merge@v4

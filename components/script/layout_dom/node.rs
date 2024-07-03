@@ -9,7 +9,7 @@ use std::fmt;
 use std::sync::Arc as StdArc;
 
 use base::id::{BrowsingContextId, PipelineId};
-use gfx_traits::ByteIndex;
+use fonts_traits::ByteIndex;
 use html5ever::{local_name, namespace_url, ns};
 use pixels::{Image, ImageMetadata};
 use range::Range;
@@ -311,6 +311,11 @@ impl<'dom> ThreadSafeLayoutNode<'dom> for ServoThreadSafeLayoutNode<'dom> {
                 element: el,
                 pseudo: self.pseudo,
             })
+    }
+
+    fn as_html_element(&self) -> Option<ServoThreadSafeLayoutElement<'dom>> {
+        self.as_element()
+            .filter(|element| element.element.is_html_element())
     }
 
     fn style_data(&self) -> Option<&'dom StyleData> {

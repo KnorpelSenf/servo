@@ -96,6 +96,11 @@ jobs:
         with:
           crate: taplo-cli
           locked: true
+      - name: Install cargo-deny
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-deny
+          locked: true
       - name: Bootstrap Python
         run: python3 -m pip install --upgrade pip
       - name: Bootstrap dependencies
@@ -106,7 +111,7 @@ jobs:
         run: python3 ./mach test-tidy --no-progress --all
       - name: Build (${{ inputs.profile }})
         run: |
-          python3 ./mach build --locked --${{ inputs.profile }}
+          python3 ./mach build --use-crown --locked --${{ inputs.profile }}
           cp -r target/cargo-timings target/cargo-timings-linux
       - name: Smoketest
         run: xvfb-run python3 ./mach smoketest --${{ inputs.profile  }}

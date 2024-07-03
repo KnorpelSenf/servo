@@ -147,22 +147,23 @@ class MachCommands(CommandBase):
                 test_patterns.append(test)
 
         self_contained_tests = [
-            "servoshell",
             "background_hang_monitor",
-            "gfx",
+            "base",
+            "compositing",
+            "constellation",
+            "crown",
+            "fonts",
             "hyper_serde",
             "layout_2013",
             "layout_2020",
             "net",
             "net_traits",
-            "selectors",
-            "script_traits",
-            "servo_config",
-            "crown",
-            "constellation",
-            "style_config",
-            "compositing",
             "pixels",
+            "script_traits",
+            "selectors",
+            "servo_config",
+            "servoshell",
+            "style_config",
         ]
         if not packages:
             packages = set(os.listdir(path.join(self.context.topdir, "tests", "unit"))) - set(['.DS_Store'])
@@ -227,7 +228,7 @@ class MachCommands(CommandBase):
     def test_tidy(self, all_files, no_progress):
         tidy_failed = tidy.scan(not all_files, not no_progress)
 
-        print("\r ➤  Checking formatting of rust files...")
+        print("\r ➤  Checking formatting of Rust files...")
         rustfmt_failed = call(["cargo", "fmt", "--", *UNSTABLE_RUSTFMT_ARGUMENTS, "--check"])
         if rustfmt_failed:
             print("Run `./mach fmt` to fix the formatting")
@@ -303,8 +304,8 @@ class MachCommands(CommandBase):
              category='testing',
              parser=wpt.create_parser)
     @CommandBase.common_command_arguments(build_configuration=False, build_type=True)
-    def test_wpt(self, build_type: BuildType, **kwargs):
-        return self._test_wpt(build_type=build_type, **kwargs)
+    def test_wpt(self, build_type: BuildType, with_asan=False, **kwargs):
+        return self._test_wpt(build_type=build_type, with_asan=with_asan, **kwargs)
 
     @Command('test-wpt-android',
              description='Run the web platform test suite in an Android emulator',
@@ -320,12 +321,12 @@ class MachCommands(CommandBase):
         )
         return self._test_wpt(build_type=build_type, android=True, **kwargs)
 
-    def _test_wpt(self, build_type: BuildType, android=False, **kwargs):
+    def _test_wpt(self, build_type: BuildType, with_asan=False, android=False, **kwargs):
         if not android:
             os.environ.update(self.build_env())
 
         # TODO(mrobinson): Why do we pass the wrong binary path in when running WPT on Android?
-        binary_path = self.get_binary_path(build_type=build_type)
+        binary_path = self.get_binary_path(build_type=build_type, asan=with_asan)
         return_value = wpt.run.run_tests(binary_path, **kwargs)
         return return_value if not kwargs["always_succeed"] else 0
 
@@ -767,11 +768,11 @@ tests/wpt/mozilla/tests for Servo-only tests""" % reference_path)
     @CommandArgument('params', nargs='...',
                      help="Command-line arguments to be passed through to Servo")
     @CommandBase.common_command_arguments(build_configuration=False, build_type=True)
-    def smoketest(self, build_type: BuildType, params):
+    def smoketest(self, build_type: BuildType, params, with_asan=False):
         # We pass `-f` here so that any thread panic will cause Servo to exit,
         # preventing a panic from hanging execution. This means that these kind
         # of panics won't cause timeouts on CI.
-        return self.context.commands.dispatch('run', self.context, build_type=build_type,
+        return self.context.commands.dispatch('run', self.context, build_type=build_type, with_asan=with_asan,
                                               params=params + ['-f', 'tests/html/close-on-load.html'])
 
     @Command('try', description='Runs try jobs by force pushing to try branch', category='testing')

@@ -22,10 +22,9 @@ use embedder_traits::resources::{self, Resource};
 use euclid::default::{Point2D as UntypedPoint2D, Rect as UntypedRect, Size2D as UntypedSize2D};
 use euclid::{Point2D, Scale, Size2D, Vector2D};
 use fnv::FnvHashMap;
+use fonts::{FontCacheThread, FontContext, FontContextWebFontMethods};
+use fonts_traits::WebFontLoadFinishedCallback;
 use fxhash::FxHashMap;
-use gfx::font_cache_thread::FontCacheThread;
-use gfx::font_context::{FontContext, FontContextWebFontMethods};
-use gfx_traits::WebFontLoadFinishedCallback;
 use ipc_channel::ipc::IpcSender;
 use layout::context::LayoutContext;
 use layout::display_list::{DisplayList, WebRenderImageInfo};
@@ -50,13 +49,12 @@ use profile_traits::time::{
 };
 use script::layout_dom::{ServoLayoutDocument, ServoLayoutElement, ServoLayoutNode};
 use script_layout_interface::{
-    node_id_from_scroll_id, Layout, LayoutConfig, LayoutFactory, NodesFromPointQueryType,
-    OffsetParentResponse, ReflowComplete, ReflowGoal, ScriptReflow, TrustedNodeAddress,
+    Layout, LayoutConfig, LayoutFactory, NodesFromPointQueryType, OffsetParentResponse,
+    ReflowComplete, ReflowGoal, ScriptReflow, TrustedNodeAddress,
 };
 use script_traits::{
-    ConstellationControlMsg, DrawAPaintImageResult, IFrameSizeMsg, LayoutControlMsg,
-    LayoutMsg as ConstellationMsg, PaintWorkletError, Painter, ScrollState, UntrustedNodeAddress,
-    WindowSizeData, WindowSizeType,
+    ConstellationControlMsg, DrawAPaintImageResult, IFrameSizeMsg, LayoutMsg as ConstellationMsg,
+    PaintWorkletError, Painter, ScrollState, UntrustedNodeAddress, WindowSizeData, WindowSizeType,
 };
 use servo_arc::Arc as ServoArc;
 use servo_atoms::Atom;
@@ -220,21 +218,17 @@ impl Drop for ScriptReflowResult {
     }
 }
 
-impl Layout for LayoutThread {
-    fn handle_constellation_message(
-        &mut self,
-        constellation_message: script_traits::LayoutControlMsg,
-    ) {
-        match constellation_message {
-            LayoutControlMsg::SetScrollStates(new_scroll_states) => {
-                self.set_scroll_states(new_scroll_states);
-            },
-            LayoutControlMsg::PaintMetric(epoch, paint_time) => {
-                self.paint_time_metrics.maybe_set_metric(epoch, paint_time);
-            },
-        }
+impl Drop for LayoutThread {
+    fn drop(&mut self) {
+        let (keys, instance_keys) = self
+            .font_context
+            .collect_unused_webrender_resources(true /* all */);
+        self.webrender_api
+            .remove_unused_font_resources(keys, instance_keys)
     }
+}
 
+impl Layout for LayoutThread {
     fn device(&self) -> &Device {
         self.stylist.device()
     }
@@ -469,6 +463,17 @@ impl Layout for LayoutThread {
         _painter: Box<dyn Painter>,
     ) {
     }
+
+    fn set_scroll_states(&mut self, scroll_states: &[ScrollState]) {
+        *self.scroll_offsets.borrow_mut() = scroll_states
+            .iter()
+            .map(|scroll_state| (scroll_state.scroll_id, scroll_state.scroll_offset))
+            .collect();
+    }
+
+    fn set_epoch_paint_time(&mut self, epoch: Epoch, paint_time: u64) {
+        self.paint_time_metrics.maybe_set_metric(epoch, paint_time);
+    }
 }
 
 impl LayoutThread {
@@ -597,11 +602,12 @@ impl LayoutThread {
         let locked_script_channel = Mutex::new(self.script_chan.clone());
         let pipeline_id = self.id;
         let web_font_finished_loading_callback = move |succeeded: bool| {
-            if succeeded {
-                let _ = locked_script_channel
-                    .lock()
-                    .send(ConstellationControlMsg::WebFontLoaded(pipeline_id));
-            }
+            let _ = locked_script_channel
+                .lock()
+                .send(ConstellationControlMsg::WebFontLoaded(
+                    pipeline_id,
+                    succeeded,
+                ));
         };
 
         // Find all font-face rules and notify the font cache of them.
@@ -615,9 +621,10 @@ impl LayoutThread {
         );
 
         if self.debug.load_webfonts_synchronously && newly_loading_font_count > 0 {
+            // TODO: Handle failure in web font loading
             let _ = self
                 .script_chan
-                .send(ConstellationControlMsg::WebFontLoaded(self.id));
+                .send(ConstellationControlMsg::WebFontLoaded(self.id, true));
         }
     }
 
@@ -856,28 +863,6 @@ impl LayoutThread {
         );
     }
 
-    fn set_scroll_states(&mut self, new_scroll_states: Vec<ScrollState>) {
-        let mut script_scroll_states = vec![];
-        let mut layout_scroll_states = HashMap::new();
-        for new_state in &new_scroll_states {
-            let offset = new_state.scroll_offset;
-            layout_scroll_states.insert(new_state.scroll_id, offset);
-
-            if new_state.scroll_id.is_root() {
-                script_scroll_states.push((UntrustedNodeAddress::from_id(0), offset))
-            } else if let Some(node_id) = node_id_from_scroll_id(new_state.scroll_id.0 as usize) {
-                script_scroll_states.push((UntrustedNodeAddress::from_id(node_id), offset))
-            }
-        }
-        let _ = self
-            .script_chan
-            .send(ConstellationControlMsg::SetScrollState(
-                self.id,
-                script_scroll_states,
-            ));
-        self.scroll_offsets = RefCell::new(layout_scroll_states);
-    }
-
     fn perform_post_style_recalc_layout_passes(
         &self,
         fragment_tree: Arc<FragmentTree>,
@@ -964,6 +949,12 @@ impl LayoutThread {
             // denate send display list
             self.webrender_api
                 .send_display_list(display_list.compositor_info, display_list.wr.end().1);
+
+            let (keys, instance_keys) = self
+                .font_context
+                .collect_unused_webrender_resources(false /* all */);
+            self.webrender_api
+                .remove_unused_font_resources(keys, instance_keys)
         }
 
         self.update_iframe_sizes(iframe_sizes);
@@ -1081,7 +1072,7 @@ impl LayoutThread {
         );
 
         // Preserve any previously computed root font size.
-        device.set_root_font_size(self.stylist.device().root_font_size());
+        device.set_root_font_size(self.stylist.device().root_font_size().px());
 
         let sheet_origins_affected_by_device_change = self.stylist.set_device(device, guards);
         self.stylist
@@ -1270,7 +1261,7 @@ impl FontMetricsProvider for LayoutFontMetricsProvider {
             .or_else(|| {
                 font_group
                     .write()
-                    .find_by_codepoint(font_context, '0')?
+                    .find_by_codepoint(font_context, '0', None)?
                     .metrics
                     .zero_horizontal_advance
             })
@@ -1281,7 +1272,7 @@ impl FontMetricsProvider for LayoutFontMetricsProvider {
             .or_else(|| {
                 font_group
                     .write()
-                    .find_by_codepoint(font_context, '\u{6C34}')?
+                    .find_by_codepoint(font_context, '\u{6C34}', None)?
                     .metrics
                     .ic_horizontal_advance
             })

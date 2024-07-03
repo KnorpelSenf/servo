@@ -1,10 +1,10 @@
 [package]
 name = "libservo"
-version = "0.0.1"
-authors = ["The Servo Project Developers"]
-license = "MPL-2.0"
-edition = "2018"
-publish = false
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [lib]
 name = "servo"
@@ -48,8 +48,8 @@ devtools_traits = { workspace = true }
 embedder_traits = { workspace = true }
 env_logger = { workspace = true }
 euclid = { workspace = true }
-gfx = { path = "../gfx" }
-gfx_traits = { workspace = true }
+fonts = { path = "../fonts" }
+fonts_traits = { workspace = true }
 gleam = { workspace = true }
 gstreamer = { workspace = true, optional = true }
 ipc-channel = { workspace = true }

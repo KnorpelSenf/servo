@@ -5,6 +5,7 @@
 #![deny(unsafe_code)]
 
 pub mod display_list;
+pub mod rendering_context;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,8 @@ use webrender_api::{
     FontInstanceFlags, FontInstanceKey, FontKey, HitTestFlags, ImageData, ImageDescriptor,
     ImageKey, NativeFontHandle, PipelineId as WebRenderPipelineId,
 };
+
+pub use crate::rendering_context::RenderingContext;
 
 /// This trait is used as a bridge between the different GL clients
 /// in Servo that handles WebRender ExternalImages and the WebRender
@@ -188,16 +191,18 @@ pub trait WebRenderFontApi {
         flags: FontInstanceFlags,
     ) -> FontInstanceKey;
     fn add_font(&self, data: Arc<Vec<u8>>, index: u32) -> FontKey;
-    /// Forward an already prepared `AddFont` message, sending it on to the compositor. This is used
-    /// to get WebRender [`FontKey`]s for web fonts in the per-layout `FontContext`.
+    fn add_system_font(&self, handle: NativeFontHandle) -> FontKey;
+
+    /// Forward a `AddFont` message, sending it on to the compositor. This is used to get WebRender
+    /// [`FontKey`]s for web fonts in the per-layout `FontContext`.
     fn forward_add_font_message(
         &self,
         bytes_receiver: IpcBytesReceiver,
         font_index: u32,
         result_sender: IpcSender<FontKey>,
     );
-    /// Forward an already prepared `AddFontInstance` message, sending it on to the compositor. This
-    /// is used to get WebRender [`FontInstanceKey`]s for web fonts in the per-layout `FontContext`.
+    /// Forward a `AddFontInstance` message, sending it on to the compositor. This is used to get
+    /// WebRender [`FontInstanceKey`]s for web fonts in the per-layout `FontContext`.
     fn forward_add_font_instance_message(
         &self,
         font_key: FontKey,
@@ -205,7 +210,6 @@ pub trait WebRenderFontApi {
         flags: FontInstanceFlags,
         result_receiver: IpcSender<FontInstanceKey>,
     );
-    fn add_system_font(&self, handle: NativeFontHandle) -> FontKey;
 }
 
 pub enum CanvasToCompositorMsg {
@@ -254,6 +258,8 @@ pub enum ScriptToCompositorMsg {
     GenerateImageKey(IpcSender<ImageKey>),
     /// Perform a resource update operation.
     UpdateImages(Vec<SerializedImageUpdate>),
+    /// Remove the given font resources from our WebRender instance.
+    RemoveFonts(Vec<FontKey>, Vec<FontInstanceKey>),
 }
 
 /// A mechanism to send messages from networking to the WebRender instance.
@@ -416,6 +422,19 @@ impl WebRenderScriptApi {
                 warn!("error sending image data: {}", e);
             }
         });
+    }
+
+    pub fn remove_unused_font_resources(
+        &self,
+        keys: Vec<FontKey>,
+        instance_keys: Vec<FontInstanceKey>,
+    ) {
+        if keys.is_empty() && instance_keys.is_empty() {
+            return;
+        }
+        let _ = self
+            .0
+            .send(ScriptToCompositorMsg::RemoveFonts(keys, instance_keys));
     }
 }
 

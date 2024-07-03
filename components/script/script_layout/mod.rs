@@ -23,7 +23,7 @@ use canvas_traits::canvas::{CanvasId, CanvasMsg};
 use crossbeam_channel::Sender;
 use euclid::default::{Point2D, Rect};
 use euclid::Size2D;
-use gfx::font_cache_thread::FontCacheThread;
+use fonts::FontCacheThread;
 use ipc_channel::ipc::IpcSender;
 use malloc_size_of_derive::MallocSizeOf;
 use metrics::PaintTimeMetrics;
@@ -32,8 +32,8 @@ use net_traits::ResourceThreads;
 use profile_traits::mem::Report;
 use profile_traits::time;
 use script_traits::{
-    ConstellationControlMsg, InitialScriptState, LayoutControlMsg, LayoutMsg, LoadData, Painter,
-    ScrollState, UntrustedNodeAddress, WindowSizeData,
+    ConstellationControlMsg, InitialScriptState, LayoutMsg, LoadData, Painter, ScrollState,
+    UntrustedNodeAddress, WindowSizeData,
 };
 use serde::{Deserialize, Serialize};
 use servo_arc::Arc as ServoArc;
@@ -179,9 +179,6 @@ pub trait LayoutFactory: Send + Sync {
 }
 
 pub trait Layout {
-    /// Handle a single message from the Constellation.
-    fn handle_constellation_message(&mut self, msg: LayoutControlMsg);
-
     /// Get a reference to this Layout's Stylo `Device` used to handle media queries and
     /// resolve font metrics.
     fn device(&self) -> &Device;
@@ -228,6 +225,12 @@ pub trait Layout {
         properties: Vec<Atom>,
         painter: Box<dyn Painter>,
     );
+
+    /// Set the scroll states of this layout after a compositor scroll.
+    fn set_scroll_states(&mut self, scroll_states: &[ScrollState]);
+
+    /// Set the paint time for a specific epoch.
+    fn set_epoch_paint_time(&mut self, epoch: Epoch, paint_time: u64);
 
     fn query_content_box(&self, node: OpaqueNode) -> Option<Rect<Au>>;
     fn query_content_boxes(&self, node: OpaqueNode) -> Vec<Rect<Au>>;

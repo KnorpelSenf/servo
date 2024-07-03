@@ -44,7 +44,6 @@ use net_traits::image_cache::{
 use net_traits::storage_thread::StorageType;
 use net_traits::ResourceThreads;
 use num_traits::ToPrimitive;
-use parking_lot::Mutex as ParkMutex;
 use profile_traits::ipc as ProfiledIpc;
 use profile_traits::mem::ProfilerChan as MemProfilerChan;
 use profile_traits::time::ProfilerChan as TimeProfilerChan;
@@ -182,7 +181,6 @@ pub enum ReflowReason {
     StylesheetLoaded,
     Timer,
     Viewport,
-    WebFontLoaded,
     WindowResize,
     WorkletLoaded,
 }
@@ -1953,6 +1951,10 @@ impl Window {
     /// may happen in the only case a query reflow may bail out, that is, if the
     /// viewport size is not present). See #11223 for an example of that.
     pub fn reflow(&self, reflow_goal: ReflowGoal, reason: ReflowReason) -> bool {
+        // Fetch the pending web fonts before layout, in case a font loads during
+        // the layout.
+        let pending_web_fonts = self.layout.borrow().waiting_for_web_fonts_to_load();
+
         self.Document().ensure_safe_to_run_script_or_layout();
         let for_display = reflow_goal == ReflowGoal::Full;
 
@@ -1981,6 +1983,24 @@ impl Window {
             );
         }
 
+        let document = self.Document();
+        let font_face_set = document.Fonts();
+        let is_ready_state_complete = document.ReadyState() == DocumentReadyState::Complete;
+
+        // From https://drafts.csswg.org/css-font-loading/#font-face-set-ready:
+        // > A FontFaceSet is pending on the environment if any of the following are true:
+        // >  - the document is still loading
+        // >  - the document has pending stylesheet requests
+        // >  - the document has pending layout operations which might cause the user agent to request
+        // >    a font, or which depend on recently-loaded fonts
+        //
+        // Thus, we are queueing promise resolution here. This reflow should have been triggered by
+        // a "rendering opportunity" in `ScriptThread::handle_web_font_loaded, which should also
+        // make sure a microtask checkpoint happens, triggering the promise callback.
+        if !pending_web_fonts && is_ready_state_complete {
+            font_face_set.fulfill_ready_promise_if_needed();
+        }
+
         // If writing a screenshot, check if the script has reached a state
         // where it's safe to write the image. This means that:
         // 1) The reflow is for display (otherwise it could be a query)
@@ -1990,8 +2010,6 @@ impl Window {
         // that this pipeline is ready to write the image (from the script thread
         // perspective at least).
         if self.prepare_for_screenshot && for_display {
-            let document = self.Document();
-
             // Checks if the html element has reftest-wait attribute present.
             // See http://testthewebforward.org/docs/reftests.html
             let html_element = document.GetDocumentElement();
@@ -1999,9 +2017,7 @@ impl Window {
                 elem.has_class(&atom!("reftest-wait"), CaseSensitivity::CaseSensitive)
             });
 
-            let pending_web_fonts = self.layout.borrow().waiting_for_web_fonts_to_load();
             let has_sent_idle_message = self.has_sent_idle_message.get();
-            let is_ready_state_complete = document.ReadyState() == DocumentReadyState::Complete;
             let pending_images = !self.pending_layout_images.borrow().is_empty();
 
             if !has_sent_idle_message &&
@@ -2540,7 +2556,7 @@ impl Window {
         replace_surrogates: bool,
         user_agent: Cow<'static, str>,
         player_context: WindowGLContext,
-        gpu_id_hub: Arc<ParkMutex<Identities>>,
+        gpu_id_hub: Arc<Identities>,
         inherited_secure_context: Option<bool>,
     ) -> DomRoot<Self> {
         let error_reporter = CSSErrorReporter {

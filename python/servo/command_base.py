@@ -10,6 +10,9 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import json
+import pathlib
 from enum import Enum
 from typing import Dict, List, Optional
 import functools
@@ -32,6 +35,7 @@ from glob import glob
 from os import path
 from subprocess import PIPE
 from xml.etree.ElementTree import XML
+from packaging.version import parse as parse_version
 
 import toml
 
@@ -43,6 +47,7 @@ import servo.util as util
 from servo.util import download_file, get_default_cache_dir
 
 NIGHTLY_REPOSITORY_URL = "https://servo-builds2.s3.amazonaws.com/"
+ASAN_LEAK_SUPPRESSION_FILE = "support/suppressed_leaks_for_asan.txt"
 
 
 @dataclass
@@ -273,7 +278,7 @@ class CommandBase(object):
 
         config_path = path.join(context.topdir, ".servobuild")
         if path.exists(config_path):
-            with open(config_path) as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 self.config = toml.loads(f.read())
         else:
             self.config = {}
@@ -309,6 +314,9 @@ class CommandBase(object):
         self.config["android"].setdefault("ndk", "")
         self.config["android"].setdefault("toolchain", "")
 
+        self.config.setdefault("ohos", {})
+        self.config["ohos"].setdefault("ndk", "")
+
         # Set default android target
         self.setup_configuration_for_android_target("armv7-linux-androideabi")
 
@@ -331,19 +339,28 @@ class CommandBase(object):
         apk_name = "servoapp.apk"
         return path.join(base_path, build_type.directory_name(), apk_name)
 
-    def get_binary_path(self, build_type: BuildType, target=None, android=False):
+    def get_binary_path(self, build_type: BuildType, target=None, android=False, asan=False):
+        if target is None and asan:
+            target = servo.platform.host_triple()
+
         base_path = util.get_target_dir()
+
         if android:
             base_path = path.join(base_path, self.config["android"]["target"])
-            return path.join(base_path, build_type.directory_name(), "libsimpleservo.so")
         elif target:
             base_path = path.join(base_path, target)
+        if android or (target is not None and "-ohos" in target):
+            return path.join(base_path, build_type.directory_name(), "libservoshell.so")
 
         binary_name = f"servo{servo.platform.get().executable_suffix()}"
         binary_path = path.join(base_path, build_type.directory_name(), binary_name)
 
         if not path.exists(binary_path):
-            raise BuildNotFound('No Servo binary found. Perhaps you forgot to run `./mach build`?')
+            if target is None:
+                print("WARNING: Fallback to host-triplet prefixed target dirctory for binary path.")
+                return self.get_binary_path(build_type, target=servo.platform.host_triple(), android=android)
+            else:
+                raise BuildNotFound('No Servo binary found. Perhaps you forgot to run `./mach build`?')
         return binary_path
 
     def detach_volume(self, mounted_volume):
@@ -512,7 +529,11 @@ class CommandBase(object):
         # Argument-less str.split normalizes leading, trailing, and double spaces
         env['RUSTFLAGS'] = " ".join(env['RUSTFLAGS'].split())
 
+        # Suppress known false-positives during memory leak sanitizing.
+        env["LSAN_OPTIONS"] = f"{env.get('LSAN_OPTIONS', '')}:suppressions={ASAN_LEAK_SUPPRESSION_FILE}"
+
         self.build_android_env_if_needed(env)
+        self.build_ohos_env_if_needed(env)
 
         return env
 
@@ -578,7 +599,7 @@ class CommandBase(object):
         host_cxx = env.get('HOST_CXX') or shutil.which("clang++")
 
         llvm_toolchain = path.join(env['ANDROID_NDK_ROOT'], "toolchains", "llvm", "prebuilt", host)
-        env['PATH'] = (path.join(llvm_toolchain, "bin") + ':' + env['PATH'])
+        env['PATH'] = (env['PATH'] + ':' + path.join(llvm_toolchain, "bin"))
 
         def to_ndk_bin(prog):
             return path.join(llvm_toolchain, "bin", prog)
@@ -601,18 +622,20 @@ class CommandBase(object):
         env['HOST_CXX'] = host_cxx
         env['HOST_CFLAGS'] = ''
         env['HOST_CXXFLAGS'] = ''
-        env['CC'] = to_ndk_bin("clang")
-        env['CPP'] = to_ndk_bin("clang") + " -E"
-        env['CXX'] = to_ndk_bin("clang++")
+        env['TARGET_CC'] = to_ndk_bin("clang")
+        env['TARGET_CPP'] = to_ndk_bin("clang") + " -E"
+        env['TARGET_CXX'] = to_ndk_bin("clang++")
 
-        env['AR'] = to_ndk_bin("llvm-ar")
-        env['RANLIB'] = to_ndk_bin("llvm-ranlib")
-        env['OBJCOPY'] = to_ndk_bin("llvm-objcopy")
-        env['YASM'] = to_ndk_bin("yasm")
-        env['STRIP'] = to_ndk_bin("llvm-strip")
+        env['TARGET_AR'] = to_ndk_bin("llvm-ar")
+        env['TARGET_RANLIB'] = to_ndk_bin("llvm-ranlib")
+        env['TARGET_OBJCOPY'] = to_ndk_bin("llvm-objcopy")
+        env['TARGET_YASM'] = to_ndk_bin("yasm")
+        env['TARGET_STRIP'] = to_ndk_bin("llvm-strip")
         env['RUST_FONTCONFIG_DLOPEN'] = "on"
 
         env["LIBCLANG_PATH"] = path.join(llvm_toolchain, "lib64")
+        env["CLANG_PATH"] = to_ndk_bin("clang")
+
         # A cheat-sheet for some of the build errors caused by getting the search path wrong...
         #
         # fatal error: 'limits' file not found
@@ -624,8 +647,8 @@ class CommandBase(object):
         #
         # Also worth remembering: autoconf uses C for its configuration,
         # even for C++ builds, so the C flags need to line up with the C++ flags.
-        env['CFLAGS'] = "--target=" + android_toolchain_name
-        env['CXXFLAGS'] = "--target=" + android_toolchain_name
+        env['TARGET_CFLAGS'] = "--target=" + android_toolchain_name
+        env['TARGET_CXXFLAGS'] = "--target=" + android_toolchain_name
 
         # These two variables are needed for the mozjs compilation.
         env['ANDROID_API_LEVEL'] = android_api
@@ -645,7 +668,135 @@ class CommandBase(object):
         if not os.path.exists(env['AAR_OUT_DIR']):
             os.makedirs(env['AAR_OUT_DIR'])
 
-        env['PKG_CONFIG_SYSROOT_DIR'] = path.join(llvm_toolchain, 'sysroot')
+        env['TARGET_PKG_CONFIG_SYSROOT_DIR'] = path.join(llvm_toolchain, 'sysroot')
+
+    def build_ohos_env_if_needed(self, env: Dict[str, str]):
+        if not (self.cross_compile_target and self.cross_compile_target.endswith('-ohos')):
+            return
+
+        # Paths to OpenHarmony SDK and build tools:
+        # Note: `OHOS_SDK_NATIVE` is the CMake variable name the `hvigor` build-system
+        # uses for the native directory of the SDK, so we use the same name to be consistent.
+        if "OHOS_SDK_NATIVE" not in env and self.config["ohos"]["ndk"]:
+            env["OHOS_SDK_NATIVE"] = self.config["ohos"]["ndk"]
+
+        if "OHOS_SDK_NATIVE" not in env:
+            print("Please set the OHOS_SDK_NATIVE environment variable to the location of the `native` directory "
+                  "in the OpenHarmony SDK.")
+            sys.exit(1)
+
+        ndk_root = pathlib.Path(env["OHOS_SDK_NATIVE"])
+
+        if not ndk_root.is_dir():
+            print(f"OHOS_SDK_NATIVE is not set to a valid directory: `{ndk_root}`")
+            sys.exit(1)
+
+        ndk_root = ndk_root.resolve()
+        package_info = ndk_root.joinpath("oh-uni-package.json")
+        try:
+            with open(package_info) as meta_file:
+                meta = json.load(meta_file)
+            ohos_api_version = int(meta['apiVersion'])
+            ohos_sdk_version = parse_version(meta['version'])
+            if ohos_sdk_version < parse_version('4.0'):
+                print("Warning: mach build currently assumes at least the OpenHarmony 4.0 SDK is used.")
+            print(f"Info: The OpenHarmony SDK {ohos_sdk_version} is targeting API-level {ohos_api_version}")
+        except Exception as e:
+            print(f"Failed to read metadata information from {package_info}")
+            print(f"Exception: {e}")
+
+        # The OpenHarmony SDK for Windows hosts currently does not contain a libclang shared library,
+        # which is required by `bindgen` (see issue
+        # https://gitee.com/openharmony/third_party_llvm-project/issues/I8H50W). Using upstream `clang` is currently
+        # also not easily possible, since `libcxx` support still needs to be upstreamed (
+        # https://github.com/llvm/llvm-project/pull/73114).
+        os_type = platform.system().lower()
+        if os_type not in ["linux", "darwin"]:
+            raise Exception("OpenHarmony builds are currently only supported on Linux and macOS Hosts.")
+
+        llvm_toolchain = ndk_root.joinpath("llvm")
+        llvm_bin = llvm_toolchain.joinpath("bin")
+        ohos_sysroot = ndk_root.joinpath("sysroot")
+        if not (llvm_toolchain.is_dir() and llvm_bin.is_dir()):
+            print(f"Expected to find `llvm` and `llvm/bin` folder under $OHOS_SDK_NATIVE at `{llvm_toolchain}`")
+            sys.exit(1)
+        if not ohos_sysroot.is_dir():
+            print(f"Could not find OpenHarmony sysroot in {ndk_root}")
+            sys.exit(1)
+
+        # Note: We don't use the `<target_triple>-clang` wrappers on purpose, since
+        # a) the OH 4.0 SDK does not have them yet AND
+        # b) the wrappers in the newer SDKs are bash scripts, which can cause problems
+        # on windows, depending on how the wrapper is called.
+        # Instead, we ensure that all the necessary flags for the c-compiler are set
+        # via environment variables such as `TARGET_CFLAGS`.
+        def to_sdk_llvm_bin(prog: str):
+            if is_windows():
+                prog = prog + '.exe'
+            llvm_prog = llvm_bin.joinpath(prog)
+            if not llvm_prog.is_file():
+                raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), llvm_prog)
+            return str(llvm_bin.joinpath(prog))
+
+        # CC and CXX should already be set to appropriate host compilers by `build_env()`
+        env['HOST_CC'] = env['CC']
+        env['HOST_CXX'] = env['CXX']
+        env['TARGET_AR'] = to_sdk_llvm_bin("llvm-ar")
+        env['TARGET_RANLIB'] = to_sdk_llvm_bin("llvm-ranlib")
+        env['TARGET_READELF'] = to_sdk_llvm_bin("llvm-readelf")
+        env['TARGET_OBJCOPY'] = to_sdk_llvm_bin("llvm-objcopy")
+        env['TARGET_STRIP'] = to_sdk_llvm_bin("llvm-strip")
+
+        rust_target_triple = str(self.cross_compile_target).replace('-', '_')
+        ndk_clang = to_sdk_llvm_bin("clang")
+        ndk_clangxx = to_sdk_llvm_bin("clang++")
+        env[f'CC_{rust_target_triple}'] = ndk_clang
+        env[f'CXX_{rust_target_triple}'] = ndk_clangxx
+        # The clang target name is different from the LLVM target name
+        clang_target_triple = str(self.cross_compile_target).replace('-unknown-', '-')
+        clang_target_triple_underscore = clang_target_triple.replace('-', '_')
+        env[f'CC_{clang_target_triple_underscore}'] = ndk_clang
+        env[f'CXX_{clang_target_triple_underscore}'] = ndk_clangxx
+        # rustc linker
+        env[f'CARGO_TARGET_{rust_target_triple.upper()}_LINKER'] = ndk_clang
+        # We could also use a cross-compile wrapper
+        env["RUSTFLAGS"] += f' -Clink-arg=--target={clang_target_triple}'
+        env["RUSTFLAGS"] += f' -Clink-arg=--sysroot={ohos_sysroot}'
+
+        env['HOST_CFLAGS'] = ''
+        env['HOST_CXXFLAGS'] = ''
+        ohos_cflags = ['-D__MUSL__', f' --target={clang_target_triple}', f' --sysroot={ohos_sysroot}']
+        if clang_target_triple.startswith('armv7-'):
+            ohos_cflags.extend(['-march=armv7-a', '-mfloat-abi=softfp', '-mtune=generic-armv7-a', '-mthumb'])
+        ohos_cflags_str = " ".join(ohos_cflags)
+        env['TARGET_CFLAGS'] = ohos_cflags_str
+        env['TARGET_CPPFLAGS'] = '-D__MUSL__'
+        env['TARGET_CXXFLAGS'] = ohos_cflags_str
+
+        # CMake related flags
+        cmake_toolchain_file = ndk_root.joinpath("build", "cmake", "ohos.toolchain.cmake")
+        if cmake_toolchain_file.is_file():
+            env[f'CMAKE_TOOLCHAIN_FILE_{rust_target_triple}'] = str(cmake_toolchain_file)
+        else:
+            print(
+                f"Warning: Failed to find the OpenHarmony CMake Toolchain file - Expected it at {cmake_toolchain_file}")
+        env[f'CMAKE_C_COMPILER_{rust_target_triple}'] = ndk_clang
+        env[f'CMAKE_CXX_COMPILER_{rust_target_triple}'] = ndk_clangxx
+
+        # pkg-config
+        pkg_config_path = '{}:{}'.format(str(ohos_sysroot.joinpath("usr", "lib", "pkgconfig")),
+                                         str(ohos_sysroot.joinpath("usr", "share", "pkgconfig")))
+        env[f'PKG_CONFIG_SYSROOT_DIR_{rust_target_triple}'] = str(ohos_sysroot)
+        env[f'PKG_CONFIG_PATH_{rust_target_triple}'] = pkg_config_path
+
+        # bindgen / libclang-sys
+        env["LIBCLANG_PATH"] = path.join(llvm_toolchain, "lib")
+        env["CLANG_PATH"] = ndk_clangxx
+        env[f'CXXSTDLIB_{clang_target_triple_underscore}'] = "c++"
+        bindgen_extra_clangs_args_var = f'BINDGEN_EXTRA_CLANG_ARGS_{rust_target_triple}'
+        bindgen_extra_clangs_args = env.get(bindgen_extra_clangs_args_var, "")
+        bindgen_extra_clangs_args = bindgen_extra_clangs_args + " " + ohos_cflags_str
+        env[bindgen_extra_clangs_args_var] = bindgen_extra_clangs_args
 
     @staticmethod
     def common_command_arguments(build_configuration=False, build_type=False):
@@ -664,6 +815,7 @@ class CommandBase(object):
                                 help='Build in release mode without debug assertions'),
                 CommandArgument('--profile', group="Build Type",
                                 help='Build with custom Cargo profile'),
+                CommandArgument('--with-asan', action='store_true', help="Build with AddressSanitizer")
             ]
 
         if build_configuration:
@@ -711,6 +863,12 @@ class CommandBase(object):
                     help='Build with frame pointer enabled, used by the background hang monitor.',
                 ),
                 CommandArgument('--without-wgl', group="Feature Selection", default=None, action='store_true'),
+                CommandArgument(
+                    '--use-crown',
+                    default=False,
+                    action='store_true',
+                    help="Enable Servo's `crown` linter tool"
+                )
             ]
 
         def decorator_function(original_function):
@@ -825,6 +983,8 @@ class CommandBase(object):
         env=None, verbose=False,
         debug_mozjs=False, with_debug_assertions=False,
         with_frame_pointer=False, without_wgl=False,
+        use_crown=False,
+        target_override: Optional[str] = None,
         **_kwargs
     ):
         env = env or self.build_env()
@@ -842,16 +1002,35 @@ class CommandBase(object):
 
         args = []
         if "--manifest-path" not in cargo_args:
-            if self.is_android_build:
-                port = "jniapi"
-            else:
-                port = "servoshell"
             args += [
                 "--manifest-path",
-                path.join(self.context.topdir, "ports", port, "Cargo.toml"),
+                path.join(self.context.topdir, "ports", "servoshell", "Cargo.toml"),
             ]
-        if self.cross_compile_target:
+        if target_override:
+            args += ["--target", target_override]
+        elif self.cross_compile_target:
             args += ["--target", self.cross_compile_target]
+            if self.is_android_build or '-ohos' in self.cross_compile_target:
+                # Note: in practice `cargo rustc` should just be used unconditionally.
+                assert command != 'build', "For Android / OpenHarmony `cargo rustc` must be used instead of cargo build"
+                if command == 'rustc':
+                    args += ["--lib", "--crate-type=cdylib"]
+
+        if use_crown:
+            if 'CARGO_BUILD_RUSTC' in env:
+                current_rustc = env['CARGO_BUILD_RUSTC']
+                if current_rustc != 'crown':
+                    print('Error: `mach` was called with `--use-crown` while `CARGO_BUILD_RUSTC` was'
+                          f'already set to `{current_rustc}` in the parent environment.\n'
+                          'These options conflict, please specify only one of them.')
+                    sys.exit(1)
+            env['CARGO_BUILD_RUSTC'] = 'crown'
+            # Changing `RUSTC` or `CARGO_BUILD_RUSTC` does not cause `cargo check` to
+            # recheck files with the new compiler. `cargo build` is not affected and
+            # triggers a rebuild as expected. To also make `check` work as expected,
+            # we add a dummy `cfg` to RUSTFLAGS when using crown, so as to have different
+            # RUSTFLAGS when using `crown`, to reliably trigger re-checking.
+            env['RUSTFLAGS'] = env.get('RUSTFLAGS', "") + " --cfg=crown"
 
         if "-p" not in cargo_args:  # We're building specific package, that may not have features
             features = list(self.features)

@@ -1,12 +1,11 @@
 [package]
 name = "script"
-version = "0.0.1"
-authors = ["The Servo Project Developers"]
-license = "MPL-2.0"
-edition = "2018"
-publish = false
-
 build = "build.rs"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [lib]
 name = "script"
@@ -38,7 +37,7 @@ base64 = { workspace = true }
 bitflags = { workspace = true }
 bluetooth_traits = { workspace = true }
 canvas_traits = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 content-security-policy = { workspace = true }
 cookie = { workspace = true }
 crossbeam-channel = { workspace = true }
@@ -54,8 +53,8 @@ enum-iterator = "0.3"
 euclid = { workspace = true }
 fnv = { workspace = true }
 fxhash = { workspace = true }
-gfx_traits = { workspace = true }
-gfx = { path = "../gfx" }
+fonts_traits = { workspace = true }
+fonts = { path = "../fonts" }
 headers = { workspace = true }
 html5ever = { workspace = true }
 http = { workspace = true }
@@ -90,7 +89,6 @@ regex = { workspace = true }
 script_traits = { workspace = true }
 selectors = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_bytes = { workspace = true }
 servo-media = { workspace = true }
 servo_allocator = { path = "../allocator" }
 servo_arc = { workspace = true }

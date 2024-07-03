@@ -55,6 +55,7 @@ use crossbeam_channel::{unbounded, Sender};
 use embedder_traits::{EmbedderMsg, EmbedderProxy, EmbedderReceiver, EventLoopWaker};
 use env_logger::Builder as EnvLoggerBuilder;
 use euclid::Scale;
+use fonts::FontCacheThread;
 #[cfg(all(
     not(target_os = "windows"),
     not(target_os = "ios"),
@@ -64,9 +65,6 @@ use euclid::Scale;
     not(target_env = "ohos"),
 ))]
 use gaol::sandbox::{ChildSandbox, ChildSandboxMethods};
-use gfx::font_cache_thread::FontCacheThread;
-pub use gfx::rendering_context;
-use gfx::rendering_context::RenderingContext;
 pub use gleam::gl;
 use ipc_channel::ipc::{self, IpcSender};
 use log::{error, trace, warn, Log, Metadata, Record};
@@ -94,12 +92,12 @@ use webrender_api::{
     NativeFontHandle,
 };
 use webrender_traits::{
-    CanvasToCompositorMsg, FontToCompositorMsg, ImageUpdate, WebRenderFontApi,
+    CanvasToCompositorMsg, FontToCompositorMsg, ImageUpdate, RenderingContext, WebRenderFontApi,
     WebrenderExternalImageHandlers, WebrenderExternalImageRegistry, WebrenderImageHandlerType,
 };
 pub use {
     background_hang_monitor, base, bluetooth, bluetooth_traits, canvas, canvas_traits, compositing,
-    constellation, devtools, devtools_traits, embedder_traits, euclid, gfx, ipc_channel,
+    constellation, devtools, devtools_traits, embedder_traits, euclid, fonts, ipc_channel,
     keyboard_types, layout_thread_2013, layout_thread_2020, media, net, net_traits, profile,
     profile_traits, script, script_layout_interface, script_traits, servo_config as config,
     servo_config, servo_geometry, servo_url as url, servo_url, style, style_traits, webgpu,
@@ -137,7 +135,7 @@ mod media_platform {
 
             match GStreamerBackend::init_with_plugins(
                 plugin_dir,
-                &gstreamer_plugins::GSTREAMER_PLUGINS,
+                gstreamer_plugins::GSTREAMER_PLUGINS,
             ) {
                 Ok(b) => b,
                 Err(e) => {
@@ -685,6 +683,10 @@ where
                 if let Err(e) = self.constellation_chan.send(msg) {
                     warn!("Sending navigation to constellation failed ({:?}).", e);
                 }
+                self.messages_for_embedder.push((
+                    Some(top_level_browsing_context_id),
+                    EmbedderMsg::Status(None),
+                ));
             },
 
             EmbedderEvent::Keyboard(key_event) => {

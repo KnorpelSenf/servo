@@ -2,29 +2,32 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+//! Liberally derived from the [Firefox JS implementation]
+//! (https://searchfox.org/mozilla-central/source/devtools/server/actors/root.js).
+//! Connection point for all new remote devtools interactions, providing lists of know actors
+//! that perform more specific actions (targets, addons, browser chrome, etc.)
+
 use std::net::TcpStream;
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-/// Liberally derived from the [Firefox JS implementation]
-/// (http://mxr.mozilla.org/mozilla-central/source/toolkit/devtools/server/actors/root.js).
-/// Connection point for all new remote devtools interactions, providing lists of know actors
-/// that perform more specific actions (targets, addons, browser chrome, etc.)
 use crate::actor::{Actor, ActorMessageStatus, ActorRegistry};
 use crate::actors::device::DeviceActor;
 use crate::actors::performance::PerformanceActor;
+use crate::actors::process::{ProcessActor, ProcessActorMsg};
 use crate::actors::tab::{TabDescriptorActor, TabDescriptorActorMsg};
 use crate::actors::worker::{WorkerActor, WorkerMsg};
 use crate::protocol::{ActorDescription, JsonPacketStream};
 use crate::StreamId;
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ActorTraits {
     sources: bool,
     highlightable: bool,
-    customHighlighters: bool,
-    networkMonitor: bool,
+    custom_highlighters: bool,
+    network_monitor: bool,
 }
 
 #[derive(Serialize)]
@@ -37,12 +40,13 @@ struct ListAddonsReply {
 enum AddonMsg {}
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GetRootReply {
     from: String,
     selected: u32,
-    performanceActor: String,
-    deviceActor: String,
-    preferenceActor: String,
+    performance_actor: String,
+    device_actor: String,
+    preference_actor: String,
 }
 
 #[derive(Serialize)]
@@ -59,9 +63,10 @@ struct GetTabReply {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RootActorMsg {
     from: String,
-    applicationType: String,
+    application_type: String,
     traits: ActorTraits,
 }
 
@@ -92,20 +97,21 @@ pub struct Types {
 #[derive(Serialize)]
 struct ListProcessesResponse {
     from: String,
-    processes: Vec<ProcessForm>,
+    processes: Vec<ProcessActorMsg>,
+}
+
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescriptorTraits {
+    pub(crate) watcher: bool,
+    pub(crate) supports_reload_descriptor: bool,
 }
 
 #[derive(Serialize)]
-struct ProcessForm {
-    actor: String,
-    id: u32,
-    isParent: bool,
-}
-
-#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GetProcessResponse {
     from: String,
-    form: ProcessForm,
+    process_descriptor: ProcessActorMsg,
 }
 
 pub struct RootActor {
@@ -126,7 +132,7 @@ impl Actor for RootActor {
         &self,
         registry: &ActorRegistry,
         msg_type: &str,
-        _msg: &Map<String, Value>,
+        msg: &Map<String, Value>,
         stream: &mut TcpStream,
         _id: StreamId,
     ) -> Result<ActorMessageStatus, ()> {
@@ -141,26 +147,21 @@ impl Actor for RootActor {
             },
 
             "listProcesses" => {
+                let process = registry.find::<ProcessActor>(&self.process).encodable();
                 let reply = ListProcessesResponse {
                     from: self.name(),
-                    processes: vec![ProcessForm {
-                        actor: self.process.clone(),
-                        id: 0,
-                        isParent: true,
-                    }],
+                    processes: vec![process],
                 };
                 let _ = stream.write_json_packet(&reply);
                 ActorMessageStatus::Processed
             },
 
+            // TODO: Unexpected message getTarget for process (when inspecting)
             "getProcess" => {
+                let process = registry.find::<ProcessActor>(&self.process).encodable();
                 let reply = GetProcessResponse {
                     from: self.name(),
-                    form: ProcessForm {
-                        actor: self.process.clone(),
-                        id: 0,
-                        isParent: true,
-                    },
+                    process_descriptor: process,
                 };
                 let _ = stream.write_json_packet(&reply);
                 ActorMessageStatus::Processed
@@ -170,15 +171,14 @@ impl Actor for RootActor {
                 let actor = GetRootReply {
                     from: "root".to_owned(),
                     selected: 0,
-                    performanceActor: self.performance.clone(),
-                    deviceActor: self.device.clone(),
-                    preferenceActor: self.preference.clone(),
+                    performance_actor: self.performance.clone(),
+                    device_actor: self.device.clone(),
+                    preference_actor: self.preference.clone(),
                 };
                 let _ = stream.write_json_packet(&actor);
                 ActorMessageStatus::Processed
             },
 
-            // https://docs.firefox-dev.tools/backend/protocol.html#listing-browser-tabs
             "listTabs" => {
                 let actor = ListTabsReply {
                     from: "root".to_owned(),
@@ -189,7 +189,7 @@ impl Actor for RootActor {
                         .map(|target| {
                             registry
                                 .find::<TabDescriptorActor>(target)
-                                .encodable(registry)
+                                .encodable(registry, false)
                         })
                         .collect(),
                 };
@@ -220,10 +220,18 @@ impl Actor for RootActor {
             },
 
             "getTab" => {
-                let tab = registry.find::<TabDescriptorActor>(&self.tabs[0]);
+                let Some(serde_json::Value::Number(browser_id)) = msg.get("browserId") else {
+                    return Ok(ActorMessageStatus::Ignored);
+                };
+
+                let browser_id = browser_id.as_u64().unwrap();
+                let Some(tab) = self.get_tab_msg_by_browser_id(registry, browser_id as u32) else {
+                    return Ok(ActorMessageStatus::Ignored);
+                };
+
                 let reply = GetTabReply {
                     from: self.name(),
-                    tab: tab.encodable(registry),
+                    tab,
                 };
                 let _ = stream.write_json_packet(&reply);
                 ActorMessageStatus::Processed
@@ -250,13 +258,28 @@ impl RootActor {
     pub fn encodable(&self) -> RootActorMsg {
         RootActorMsg {
             from: "root".to_owned(),
-            applicationType: "browser".to_owned(),
+            application_type: "browser".to_owned(),
             traits: ActorTraits {
                 sources: false,
                 highlightable: true,
-                customHighlighters: true,
-                networkMonitor: false,
+                custom_highlighters: true,
+                network_monitor: false,
             },
         }
+    }
+
+    fn get_tab_msg_by_browser_id(
+        &self,
+        registry: &ActorRegistry,
+        browser_id: u32,
+    ) -> Option<TabDescriptorActorMsg> {
+        self.tabs
+            .iter()
+            .map(|target| {
+                registry
+                    .find::<TabDescriptorActor>(target)
+                    .encodable(registry, true)
+            })
+            .find(|tab| tab.id() == browser_id)
     }
 }

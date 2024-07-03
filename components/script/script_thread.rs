@@ -26,8 +26,8 @@ use std::rc::Rc;
 use std::result::Result;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::{ptr, thread};
 
 use background_hang_monitor_api::{
     BackgroundHangMonitor, BackgroundHangMonitorExitSignal, HangAnnotation, MonitoredComponentId,
@@ -36,6 +36,7 @@ use background_hang_monitor_api::{
 use base::id::{
     BrowsingContextId, HistoryStateId, PipelineId, PipelineNamespace, TopLevelBrowsingContextId,
 };
+use base::Epoch;
 use bluetooth_traits::BluetoothRequest;
 use canvas_traits::webgl::WebGLPipeline;
 use chrono::{DateTime, Local};
@@ -46,8 +47,7 @@ use devtools_traits::{
 };
 use embedder_traits::EmbedderMsg;
 use euclid::default::{Point2D, Rect};
-use euclid::Vector2D;
-use gfx::font_cache_thread::FontCacheThread;
+use fonts::FontCacheThread;
 use headers::{HeaderMapExt, LastModified, ReferrerPolicy as ReferrerPolicyHeader};
 use html5ever::{local_name, namespace_url, ns};
 use hyper_serde::Serde;
@@ -69,17 +69,18 @@ use net_traits::{
     FetchMetadata, FetchResponseListener, FetchResponseMsg, Metadata, NetworkError, ReferrerPolicy,
     ResourceFetchTiming, ResourceThreads, ResourceTimingType,
 };
-use parking_lot::Mutex;
 use percent_encoding::percent_decode;
 use profile_traits::mem::{self as profile_mem, OpaqueSender, ReportsChan};
 use profile_traits::time::{self as profile_time, profile, ProfilerCategory};
-use script_layout_interface::{LayoutConfig, LayoutFactory, ReflowGoal, ScriptThreadFactory};
+use script_layout_interface::{
+    node_id_from_scroll_id, LayoutConfig, LayoutFactory, ReflowGoal, ScriptThreadFactory,
+};
 use script_traits::webdriver_msg::WebDriverScriptCommand;
 use script_traits::{
     CompositorEvent, ConstellationControlMsg, DiscardBrowsingContext, DocumentActivity,
-    EventResult, HistoryEntryReplacement, InitialScriptState, JsEvalResult, LayoutControlMsg,
-    LayoutMsg, LoadData, LoadOrigin, MediaSessionActionType, MouseButton, MouseEventType,
-    NewLayoutInfo, Painter, ProgressiveWebMetricType, ScriptMsg, ScriptToConstellationChan,
+    EventResult, HistoryEntryReplacement, InitialScriptState, JsEvalResult, LayoutMsg, LoadData,
+    LoadOrigin, MediaSessionActionType, MouseButton, MouseEventType, NewLayoutInfo, Painter,
+    ProgressiveWebMetricType, ScriptMsg, ScriptToConstellationChan, ScrollState,
     StructuredSerializedData, TimerSchedulerMsg, TouchEventType, TouchId, UntrustedNodeAddress,
     UpdatePipelineIdReason, WheelDelta, WindowSizeData, WindowSizeType,
 };
@@ -90,8 +91,7 @@ use style::dom::OpaqueNode;
 use style::thread_state::{self, ThreadState};
 use time::precise_time_ns;
 use url::Position;
-use webgpu::WebGPUMsg;
-use webrender_api::units::LayoutPixel;
+use webgpu::{WebGPUDevice, WebGPUMsg};
 use webrender_api::DocumentId;
 use webrender_traits::WebRenderScriptApi;
 
@@ -721,7 +721,7 @@ pub struct ScriptThread {
 
     /// Identity manager for WebGPU resources
     #[no_trace]
-    gpu_id_hub: Arc<Mutex<Identities>>,
+    gpu_id_hub: Arc<Identities>,
 
     /// Receiver to receive commands from optional WebGPU server.
     #[no_trace]
@@ -860,6 +860,13 @@ impl ScriptThreadFactory for ScriptThread {
 }
 
 impl ScriptThread {
+    pub fn note_rendering_opportunity(pipeline_id: PipelineId) {
+        SCRIPT_THREAD_ROOT.with(|root| {
+            let script_thread = unsafe { &*root.get().unwrap() };
+            script_thread.rendering_opportunity(pipeline_id);
+        })
+    }
+
     pub fn runtime_handle() -> ParentRuntime {
         SCRIPT_THREAD_ROOT.with(|root| {
             let script_thread = unsafe { &*root.get().unwrap() };
@@ -1413,7 +1420,7 @@ impl ScriptThread {
 
             node_ids: Default::default(),
             is_user_interacting: Cell::new(false),
-            gpu_id_hub: Arc::new(Mutex::new(Identities::new())),
+            gpu_id_hub: Arc::new(Identities::new()),
             webgpu_port: RefCell::new(None),
             inherited_secure_context: state.inherited_secure_context,
             layout_factory,
@@ -1576,7 +1583,7 @@ impl ScriptThread {
                 CompositorEvent::MouseMoveEvent(point, node_address, pressed_mouse_buttons) => {
                     self.process_mouse_move_event(
                         &document,
-                        &window,
+                        window,
                         point,
                         node_address,
                         pressed_mouse_buttons,
@@ -1693,7 +1700,17 @@ impl ScriptThread {
             // Run the animation frame callbacks.
             document.tick_all_animations();
 
-            // TODO(#31006): Implement the resize observer steps.
+            // Run the resize observer steps.
+            let _realm = enter_realm(&*document);
+            let mut depth = Default::default();
+            while document.gather_active_resize_observations_at_depth(&depth) {
+                // Note: this will reflow the doc.
+                depth = document.broadcast_active_resize_observations();
+            }
+
+            if document.has_skipped_resize_observations() {
+                document.deliver_resize_loop_error_notification();
+            }
 
             // TODO(#31870): Implement step 17: if the focused area of doc is not a focusable area,
             // then run the focusing steps for document's viewport.
@@ -1838,11 +1855,6 @@ impl ScriptThread {
                     .profile_event(ScriptThreadEventCategory::SetViewport, Some(id), || {
                         self.handle_viewport(id, rect);
                     }),
-                FromConstellation(ConstellationControlMsg::SetScrollState(id, scroll_state)) => {
-                    self.profile_event(ScriptThreadEventCategory::SetScrollState, Some(id), || {
-                        self.handle_set_scroll_state(id, &scroll_state);
-                    })
-                },
                 FromConstellation(ConstellationControlMsg::TickAllAnimations(
                     pipeline_id,
                     tick_type,
@@ -1969,6 +1981,9 @@ impl ScriptThread {
             for document in docs.iter() {
                 let _realm = enter_realm(&**document);
                 document.maybe_queue_document_completion();
+
+                // Document load is a rendering opportunity.
+                ScriptThread::note_rendering_opportunity(document.window().pipeline_id());
             }
             docs.clear();
         }
@@ -2099,7 +2114,6 @@ impl ScriptThread {
                 ExitScriptThread => None,
                 SendEvent(id, ..) => Some(id),
                 Viewport(id, ..) => Some(id),
-                SetScrollState(id, ..) => Some(id),
                 GetTitle(id) => Some(id),
                 SetDocumentActivity(id, ..) => Some(id),
                 SetThrottled(id, ..) => Some(id),
@@ -2112,7 +2126,7 @@ impl ScriptThread {
                 FocusIFrame(id, ..) => Some(id),
                 WebDriverScriptCommand(id, ..) => Some(id),
                 TickAllAnimations(id, ..) => Some(id),
-                WebFontLoaded(id) => Some(id),
+                WebFontLoaded(id, ..) => Some(id),
                 DispatchIFrameLoadEvent {
                     target: _,
                     parent: id,
@@ -2125,7 +2139,8 @@ impl ScriptThread {
                 ExitFullScreen(id, ..) => Some(id),
                 MediaSessionAction(..) => None,
                 SetWebGPUPort(..) => None,
-                ForLayoutFromConstellation(_, id) => Some(id),
+                SetScrollStates(id, ..) => Some(id),
+                SetEpochPaintTime(id, ..) => Some(id),
             },
             MixedMessage::FromDevtools(_) => None,
             MixedMessage::FromScript(ref inner_msg) => match *inner_msg {
@@ -2311,8 +2326,8 @@ impl ScriptThread {
             ConstellationControlMsg::WebDriverScriptCommand(pipeline_id, msg) => {
                 self.handle_webdriver_msg(pipeline_id, msg)
             },
-            ConstellationControlMsg::WebFontLoaded(pipeline_id) => {
-                self.handle_web_font_loaded(pipeline_id)
+            ConstellationControlMsg::WebFontLoaded(pipeline_id, success) => {
+                self.handle_web_font_loaded(pipeline_id, success)
             },
             ConstellationControlMsg::DispatchIFrameLoadEvent {
                 target: browsing_context_id,
@@ -2350,7 +2365,6 @@ impl ScriptThread {
             },
             msg @ ConstellationControlMsg::AttachLayout(..) |
             msg @ ConstellationControlMsg::Viewport(..) |
-            msg @ ConstellationControlMsg::SetScrollState(..) |
             msg @ ConstellationControlMsg::Resize(..) |
             msg @ ConstellationControlMsg::ExitFullScreen(..) |
             msg @ ConstellationControlMsg::SendEvent(..) |
@@ -2358,54 +2372,89 @@ impl ScriptThread {
             msg @ ConstellationControlMsg::ExitScriptThread => {
                 panic!("should have handled {:?} already", msg)
             },
-            ConstellationControlMsg::ForLayoutFromConstellation(msg, pipeline_id) => {
-                self.handle_layout_message_from_constellation(msg, pipeline_id)
+            ConstellationControlMsg::SetScrollStates(pipeline_id, scroll_states) => {
+                self.handle_set_scroll_states_msg(pipeline_id, scroll_states)
+            },
+            ConstellationControlMsg::SetEpochPaintTime(pipeline_id, epoch, time) => {
+                self.handle_set_epoch_paint_time(pipeline_id, epoch, time)
             },
         }
     }
 
-    fn handle_layout_message_from_constellation(
+    fn handle_set_scroll_states_msg(
         &self,
-        msg: LayoutControlMsg,
         pipeline_id: PipelineId,
+        scroll_states: Vec<ScrollState>,
     ) {
         let Some(window) = self.documents.borrow().find_window(pipeline_id) else {
-            warn!("Received layout message pipeline {pipeline_id} closed: {msg:?}.");
+            warn!("Received scroll states for closed pipeline {pipeline_id}");
             return;
         };
-        window.layout_mut().handle_constellation_message(msg);
+
+        self.profile_event(
+            ScriptThreadEventCategory::SetScrollState,
+            Some(pipeline_id),
+            || {
+                window.layout_mut().set_scroll_states(&scroll_states);
+
+                let mut scroll_offsets = HashMap::new();
+                for scroll_state in scroll_states.into_iter() {
+                    let scroll_offset = scroll_state.scroll_offset;
+                    if scroll_state.scroll_id.is_root() {
+                        window.update_viewport_for_scroll(-scroll_offset.x, -scroll_offset.y);
+                    } else if let Some(node_id) =
+                        node_id_from_scroll_id(scroll_state.scroll_id.0 as usize)
+                    {
+                        scroll_offsets.insert(OpaqueNode(node_id), -scroll_offset);
+                    }
+                }
+                window.set_scroll_offsets(scroll_offsets)
+            },
+        )
+    }
+
+    fn handle_set_epoch_paint_time(&self, pipeline_id: PipelineId, epoch: Epoch, time: u64) {
+        let Some(window) = self.documents.borrow().find_window(pipeline_id) else {
+            warn!("Received set epoch paint time message for closed pipeline {pipeline_id}.");
+            return;
+        };
+        window.layout_mut().set_epoch_paint_time(epoch, time);
     }
 
     fn handle_msg_from_webgpu_server(&self, msg: WebGPUMsg) {
         match msg {
-            WebGPUMsg::FreeAdapter(id) => self.gpu_id_hub.lock().kill_adapter_id(id),
-            WebGPUMsg::FreeDevice(id) => self.gpu_id_hub.lock().kill_device_id(id),
-            WebGPUMsg::FreeBuffer(id) => self.gpu_id_hub.lock().kill_buffer_id(id),
-            WebGPUMsg::FreePipelineLayout(id) => self.gpu_id_hub.lock().kill_pipeline_layout_id(id),
-            WebGPUMsg::FreeComputePipeline(id) => {
-                self.gpu_id_hub.lock().kill_compute_pipeline_id(id)
+            WebGPUMsg::FreeAdapter(id) => self.gpu_id_hub.kill_adapter_id(id),
+            WebGPUMsg::FreeDevice {
+                device_id,
+                pipeline_id,
+            } => {
+                self.gpu_id_hub.kill_device_id(device_id);
+                let global = self.documents.borrow().find_global(pipeline_id).unwrap();
+                global.remove_gpu_device(WebGPUDevice(device_id));
             },
-            WebGPUMsg::FreeBindGroup(id) => self.gpu_id_hub.lock().kill_bind_group_id(id),
-            WebGPUMsg::FreeBindGroupLayout(id) => {
-                self.gpu_id_hub.lock().kill_bind_group_layout_id(id)
-            },
+            WebGPUMsg::FreeBuffer(id) => self.gpu_id_hub.kill_buffer_id(id),
+            WebGPUMsg::FreePipelineLayout(id) => self.gpu_id_hub.kill_pipeline_layout_id(id),
+            WebGPUMsg::FreeComputePipeline(id) => self.gpu_id_hub.kill_compute_pipeline_id(id),
+            WebGPUMsg::FreeBindGroup(id) => self.gpu_id_hub.kill_bind_group_id(id),
+            WebGPUMsg::FreeBindGroupLayout(id) => self.gpu_id_hub.kill_bind_group_layout_id(id),
             WebGPUMsg::FreeCommandBuffer(id) => self
                 .gpu_id_hub
-                .lock()
                 .kill_command_buffer_id(id.into_command_encoder_id()),
-            WebGPUMsg::FreeSampler(id) => self.gpu_id_hub.lock().kill_sampler_id(id),
-            WebGPUMsg::FreeShaderModule(id) => self.gpu_id_hub.lock().kill_shader_module_id(id),
-            WebGPUMsg::FreeRenderBundle(id) => self.gpu_id_hub.lock().kill_render_bundle_id(id),
-            WebGPUMsg::FreeRenderPipeline(id) => self.gpu_id_hub.lock().kill_render_pipeline_id(id),
-            WebGPUMsg::FreeTexture(id) => self.gpu_id_hub.lock().kill_texture_id(id),
-            WebGPUMsg::FreeTextureView(id) => self.gpu_id_hub.lock().kill_texture_view_id(id),
+            WebGPUMsg::FreeSampler(id) => self.gpu_id_hub.kill_sampler_id(id),
+            WebGPUMsg::FreeShaderModule(id) => self.gpu_id_hub.kill_shader_module_id(id),
+            WebGPUMsg::FreeRenderBundle(id) => self.gpu_id_hub.kill_render_bundle_id(id),
+            WebGPUMsg::FreeRenderPipeline(id) => self.gpu_id_hub.kill_render_pipeline_id(id),
+            WebGPUMsg::FreeTexture(id) => self.gpu_id_hub.kill_texture_id(id),
+            WebGPUMsg::FreeTextureView(id) => self.gpu_id_hub.kill_texture_view_id(id),
             WebGPUMsg::Exit => *self.webgpu_port.borrow_mut() = None,
-            WebGPUMsg::CleanDevice {
+            WebGPUMsg::DeviceLost {
                 pipeline_id,
                 device,
+                reason,
+                msg,
             } => {
                 let global = self.documents.borrow().find_global(pipeline_id).unwrap();
-                global.remove_gpu_device(device);
+                global.gpu_device_lost(device, reason, msg);
             },
             WebGPUMsg::UncapturedError {
                 device,
@@ -2763,32 +2812,6 @@ impl ScriptThread {
             return;
         }
         warn!("Page rect message sent to nonexistent pipeline");
-    }
-
-    fn handle_set_scroll_state(
-        &self,
-        id: PipelineId,
-        scroll_states: &[(UntrustedNodeAddress, Vector2D<f32, LayoutPixel>)],
-    ) {
-        let window = match self.documents.borrow().find_window(id) {
-            Some(window) => window,
-            None => {
-                return warn!(
-                    "Set scroll state message sent to nonexistent pipeline: {:?}",
-                    id
-                );
-            },
-        };
-
-        let mut scroll_offsets = HashMap::new();
-        for &(node_address, ref scroll_offset) in scroll_states {
-            if node_address == UntrustedNodeAddress(ptr::null()) {
-                window.update_viewport_for_scroll(-scroll_offset.x, -scroll_offset.y);
-            } else {
-                scroll_offsets.insert(OpaqueNode(node_address.0 as usize), -*scroll_offset);
-            }
-        }
-        window.set_scroll_offsets(scroll_offsets)
     }
 
     fn handle_new_layout(&self, new_layout_info: NewLayoutInfo, origin: MutableOrigin) {
@@ -3274,11 +3297,21 @@ impl ScriptThread {
     }
 
     /// Handles a Web font being loaded. Does nothing if the page no longer exists.
-    fn handle_web_font_loaded(&self, pipeline_id: PipelineId) {
-        let document = self.documents.borrow().find_document(pipeline_id);
-        if let Some(document) = document {
-            self.rebuild_and_force_reflow(&document, ReflowReason::WebFontLoaded);
-        }
+    fn handle_web_font_loaded(&self, pipeline_id: PipelineId, _success: bool) {
+        let Some(document) = self.documents.borrow().find_document(pipeline_id) else {
+            warn!("Web font loaded in closed pipeline {}.", pipeline_id);
+            return;
+        };
+
+        // TODO: This should only dirty nodes that are waiting for a web font to finish loading!
+        document.dirty_all_nodes();
+        document.window().add_pending_reflow();
+
+        // This is required because the handlers added to the promise exposed at
+        // `document.fonts.ready` are run by the event loop only when it performs a microtask
+        // checkpoint. Without the call below, this never happens and the promise is 'stuck' waiting
+        // to be resolved until another event forces a microtask checkpoint.
+        self.rendering_opportunity(pipeline_id);
     }
 
     /// Handles a worklet being loaded. Does nothing if the page no longer exists.

@@ -10,15 +10,25 @@ use serde::{Deserialize, Serialize};
 use crate::gpu_error::Error;
 use crate::identity::WebGPUDevice;
 use crate::wgc::id::{
-    AdapterId, BindGroupId, BindGroupLayoutId, BufferId, CommandBufferId, ComputePipelineId,
-    DeviceId, PipelineLayoutId, QuerySetId, RenderBundleId, RenderPipelineId, SamplerId,
-    ShaderModuleId, StagingBufferId, SurfaceId, TextureId, TextureViewId,
+    AdapterId, BindGroupId, BindGroupLayoutId, BufferId, CommandBufferId, ComputePassEncoderId,
+    ComputePipelineId, DeviceId, PipelineLayoutId, QuerySetId, RenderBundleId, RenderPipelineId,
+    SamplerId, ShaderModuleId, StagingBufferId, SurfaceId, TextureId, TextureViewId,
 };
+
+/// <https://gpuweb.github.io/gpuweb/#enumdef-gpudevicelostreason>
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum DeviceLostReason {
+    Unknown,
+    Destroyed,
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum WebGPUMsg {
     FreeAdapter(AdapterId),
-    FreeDevice(DeviceId),
+    FreeDevice {
+        device_id: DeviceId,
+        pipeline_id: PipelineId,
+    },
     FreeBuffer(BufferId),
     FreePipelineLayout(PipelineLayoutId),
     FreeComputePipeline(ComputePipelineId),
@@ -34,14 +44,17 @@ pub enum WebGPUMsg {
     FreeRenderBundle(RenderBundleId),
     FreeStagingBuffer(StagingBufferId),
     FreeQuerySet(QuerySetId),
-    CleanDevice {
-        device: WebGPUDevice,
-        pipeline_id: PipelineId,
-    },
+    FreeComputePass(ComputePassEncoderId),
     UncapturedError {
         device: WebGPUDevice,
         pipeline_id: PipelineId,
         error: Error,
+    },
+    DeviceLost {
+        device: WebGPUDevice,
+        pipeline_id: PipelineId,
+        reason: DeviceLostReason,
+        msg: String,
     },
     Exit,
 }

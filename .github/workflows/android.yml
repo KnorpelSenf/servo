@@ -48,6 +48,11 @@ jobs:
         with:
           crate: taplo-cli
           locked: true
+      - name: Install cargo-deny
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-deny
+          locked: true
       - name: Bootstrap Python
         run: python3 -m pip install --upgrade pip virtualenv
       - name: Bootstrap dependencies
@@ -70,7 +75,7 @@ jobs:
         env:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          python3 ./mach build --locked --android --target ${{ matrix.arch }} --${{ inputs.profile }}
+          python3 ./mach build --use-crown --locked --android --target ${{ matrix.arch }} --${{ inputs.profile }}
           cp -r target/cargo-timings target/cargo-timings-android-${{ matrix.arch }}
       # TODO: This is disabled since APK crashes during startup.
       # See https://github.com/servo/servo/issues/31134

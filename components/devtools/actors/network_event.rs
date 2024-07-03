@@ -191,7 +191,7 @@ impl Actor for NetworkEventActor {
                 let mut headersSize = 0;
                 for (name, value) in self.request.headers.iter() {
                     let value = &value.to_str().unwrap().to_string();
-                    rawHeadersString = rawHeadersString + name.as_str() + ":" + &value + "\r\n";
+                    rawHeadersString = rawHeadersString + name.as_str() + ":" + value + "\r\n";
                     headersSize += name.as_str().len() + value.len();
                     headers.push(Header {
                         name: name.as_str().to_owned(),
@@ -346,7 +346,7 @@ impl NetworkEventActor {
     }
 
     pub fn add_request(&mut self, request: DevtoolsHttpRequest) {
-        self.request.url = request.url.as_str().to_owned();
+        request.url.as_str().clone_into(&mut self.request.url);
 
         self.request.method = request.method.clone();
         self.request.headers = request.headers.clone();
@@ -359,7 +359,7 @@ impl NetworkEventActor {
     }
 
     pub fn add_response(&mut self, response: DevtoolsHttpResponse) {
-        self.response.headers = response.headers.clone();
+        self.response.headers.clone_from(&response.headers);
         self.response.status = response.status.as_ref().map(|&(s, ref st)| {
             let status_text = String::from_utf8_lossy(st).into_owned();
             (StatusCode::from_u16(s).unwrap(), status_text)

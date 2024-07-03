@@ -31,7 +31,7 @@ use style::traversal::resolve_style;
 use style::values::generics::font::LineHeight;
 use style_traits::{ParsingMode, ToCss};
 
-use crate::fragment_tree::{Fragment, FragmentFlags, FragmentTree, Tag};
+use crate::fragment_tree::{BoxFragment, Fragment, FragmentFlags, FragmentTree, Tag};
 
 pub fn process_content_box_request(
     requested_node: OpaqueNode,
@@ -81,8 +81,8 @@ pub fn process_node_scroll_area_request(
     };
 
     Rect::new(
-        Point2D::new(rect.origin.x.px(), rect.origin.y.px()),
-        Size2D::new(rect.size.width.px(), rect.size.height.px()),
+        Point2D::new(rect.origin.x.to_f32_px(), rect.origin.y.to_f32_px()),
+        Size2D::new(rect.size.width.to_f32_px(), rect.size.height.to_f32_px()),
     )
     .round()
     .to_i32()
@@ -218,22 +218,52 @@ pub fn process_resolved_style_request<'dom>(
                 _ => return None,
             };
 
+            // https://drafts.csswg.org/cssom/#resolved-value-special-case-property-like-height
+            // > If the property applies to the element or pseudo-element and the resolved value of the
+            // > display property is not none or contents, then the resolved value is the used value.
+            // > Otherwise the resolved value is the computed value.
+            //
+            // However, all browsers ignore that for margin and padding properties, and resolve to a length
+            // even if the property doesn't apply: https://github.com/w3c/csswg-drafts/issues/10391
             match longhand_id {
-                LonghandId::Width => Some(content_rect.size.width),
-                LonghandId::Height => Some(content_rect.size.height),
-                LonghandId::MarginBottom => Some(margins.bottom.into()),
-                LonghandId::MarginTop => Some(margins.top.into()),
-                LonghandId::MarginLeft => Some(margins.left.into()),
-                LonghandId::MarginRight => Some(margins.right.into()),
-                LonghandId::PaddingBottom => Some(padding.bottom.into()),
-                LonghandId::PaddingTop => Some(padding.top.into()),
-                LonghandId::PaddingLeft => Some(padding.left.into()),
-                LonghandId::PaddingRight => Some(padding.right.into()),
+                LonghandId::Width if resolved_size_should_be_used_value(fragment) => {
+                    Some(content_rect.size.width)
+                },
+                LonghandId::Height if resolved_size_should_be_used_value(fragment) => {
+                    Some(content_rect.size.height)
+                },
+                LonghandId::MarginBottom => Some(margins.bottom),
+                LonghandId::MarginTop => Some(margins.top),
+                LonghandId::MarginLeft => Some(margins.left),
+                LonghandId::MarginRight => Some(margins.right),
+                LonghandId::PaddingBottom => Some(padding.bottom),
+                LonghandId::PaddingTop => Some(padding.top),
+                LonghandId::PaddingLeft => Some(padding.left),
+                LonghandId::PaddingRight => Some(padding.right),
                 _ => None,
             }
             .map(|value| value.to_css_string())
         })
         .unwrap_or_else(computed_style)
+}
+
+fn resolved_size_should_be_used_value(fragment: &Fragment) -> bool {
+    // https://drafts.csswg.org/css-sizing-3/#preferred-size-properties
+    // > Applies to: all elements except non-replaced inlines
+    match fragment {
+        Fragment::Box(box_fragment) => {
+            !box_fragment.style.get_box().display.is_inline_flow() ||
+                fragment.base().map_or(false, |base| {
+                    base.flags.contains(FragmentFlags::IS_REPLACED)
+                })
+        },
+        Fragment::Float(_) |
+        Fragment::Positioning(_) |
+        Fragment::AbsoluteOrFixedPositioned(_) |
+        Fragment::Image(_) |
+        Fragment::IFrame(_) => true,
+        Fragment::Text(_) => false,
+    }
 }
 
 pub fn process_resolved_style_request_for_unstyled_node<'dom>(
@@ -353,18 +383,8 @@ fn process_offset_parent_query_inner(
                 Fragment::Image(_) |
                 Fragment::IFrame(_) => unreachable!(),
             };
-            let border_box = fragment_relative_rect.translate(containing_block.origin.to_vector());
 
-            let mut border_box = Rect::new(
-                Point2D::new(
-                    Au::from_f32_px(border_box.origin.x.px()),
-                    Au::from_f32_px(border_box.origin.y.px()),
-                ),
-                Size2D::new(
-                    Au::from_f32_px(border_box.size.width.px()),
-                    Au::from_f32_px(border_box.size.height.px()),
-                ),
-            );
+            let mut border_box = fragment_relative_rect.translate(containing_block.origin.to_vector()).to_untyped();
 
             // "If any of the following holds true return null and terminate
             // this algorithm: [...] The element’s computed value of the
@@ -398,24 +418,7 @@ fn process_offset_parent_query_inner(
             // Record the paths of the nodes being traversed.
             let parent_node_address = match fragment {
                 Fragment::Box(fragment) | Fragment::Float(fragment) => {
-                    let is_eligible_parent =
-                        match (is_body_element, fragment.style.get_box().position) {
-                            // Spec says the element is eligible as `offsetParent` if any of
-                            // these are true:
-                            //  1) Is the body element
-                            //  2) Is static position *and* is a table or table cell
-                            //  3) Is not static position
-                            // TODO: Handle case 2
-                            (true, _) |
-                            (false, Position::Absolute) |
-                            (false, Position::Fixed) |
-                            (false, Position::Relative) |
-                            (false, Position::Sticky) => true,
-
-                            // Otherwise, it's not a valid parent
-                            (false, Position::Static) => false,
-                        };
-
+                    let is_eligible_parent = is_eligible_parent(fragment);
                     match base.tag {
                         Some(tag) if is_eligible_parent && !tag.is_pseudo() => Some(tag.node),
                         _ => None,
@@ -464,10 +467,7 @@ fn process_offset_parent_query_inner(
                                     .origin
                                     .to_vector() +
                                     containing_block.origin.to_vector();
-                                let padding_box_corner = Vector2D::new(
-                                    Au::from_f32_px(padding_box_corner.x.px()),
-                                    Au::from_f32_px(padding_box_corner.y.px()),
-                                );
+                                let padding_box_corner = padding_box_corner.to_untyped();
                                 Some(padding_box_corner)
                             } else {
                                 None
@@ -499,6 +499,29 @@ fn process_offset_parent_query_inner(
             .border_box
             .translate(-offset_parent_padding_box_corner),
     })
+}
+
+/// Returns whether or not the element with the given style and body element determination
+/// is eligible to be a parent element for offset* queries.
+///
+/// From <https://www.w3.org/TR/cssom-view-1/#dom-htmlelement-offsetparent>:
+/// >
+/// > Return the nearest ancestor element of the element for which at least one of the following is
+/// > true and terminate this algorithm if such an ancestor is found:
+/// >   1. The computed value of the position property is not static.
+/// >   2. It is the HTML body element.
+/// >   3. The computed value of the position property of the element is static and the ancestor is
+/// >      one of the following HTML elements: td, th, or table.
+fn is_eligible_parent(fragment: &BoxFragment) -> bool {
+    fragment
+        .base
+        .flags
+        .contains(FragmentFlags::IS_BODY_ELEMENT_OF_HTML_ELEMENT_ROOT) ||
+        fragment.style.get_box().position != Position::Static ||
+        fragment
+            .base
+            .flags
+            .contains(FragmentFlags::IS_TABLE_TH_OR_TD_ELEMENT)
 }
 
 // https://html.spec.whatwg.org/multipage/#the-innertext-idl-attribute

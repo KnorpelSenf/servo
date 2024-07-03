@@ -1,10 +1,10 @@
 [package]
 name = "canvas"
-version = "0.0.1"
-authors = ["The Servo Project Developers"]
-license = "MPL-2.0"
-edition = "2018"
-publish = false
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+publish.workspace = true
 
 [lib]
 name = "canvas"
@@ -24,7 +24,7 @@ cssparser = { workspace = true }
 euclid = { workspace = true }
 font-kit = { version = "0.13" }
 fnv = { workspace = true }
-gfx = { path = "../gfx" }
+fonts = { path = "../fonts" }
 half = "2"
 ipc-channel = { workspace = true }
 log = { workspace = true }

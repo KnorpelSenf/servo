@@ -10,7 +10,7 @@ use std::sync::Arc as StdArc;
 
 use atomic_refcell::AtomicRef;
 use base::id::{BrowsingContextId, PipelineId};
-use gfx_traits::ByteIndex;
+use fonts_traits::ByteIndex;
 use html5ever::{local_name, namespace_url, ns, LocalName, Namespace};
 use pixels::{Image, ImageMetadata};
 use range::Range;
@@ -229,6 +229,9 @@ pub trait ThreadSafeLayoutNode<'dom>: Clone + Copy + Debug + NodeInfo + PartialE
 
     /// Returns a ThreadSafeLayoutElement if this is an element, None otherwise.
     fn as_element(&self) -> Option<Self::ConcreteThreadSafeLayoutElement>;
+
+    /// Returns a ThreadSafeLayoutElement if this is an element in an HTML namespace, None otherwise.
+    fn as_html_element(&self) -> Option<Self::ConcreteThreadSafeLayoutElement>;
 
     #[inline]
     fn get_pseudo_element_type(&self) -> PseudoElementType {
